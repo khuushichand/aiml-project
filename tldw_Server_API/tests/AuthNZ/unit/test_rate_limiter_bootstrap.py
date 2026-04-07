@@ -13,6 +13,16 @@ class _StubConn:
     async def execute(self, sql, *params):
         self.queries.append(sql)
 
+    async def fetch(self, sql, *params):
+        if "information_schema.columns" in sql:
+            return [
+                {"column_name": "identifier"},
+                {"column_name": "attempt_type"},
+                {"column_name": "locked_until"},
+                {"column_name": "reason"},
+            ]
+        return []
+
 
 class _StubTransaction:
     def __init__(self, conn):

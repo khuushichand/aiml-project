@@ -28,7 +28,7 @@ class _ControlledDatetime(lockout_tracker_module.datetime):
 class _StubRepo:
     def __init__(self) -> None:
         self._attempts: dict[tuple[str, str], dict[str, object]] = {}
-        self._lockouts: dict[str, datetime] = {}
+        self._lockouts: dict[tuple[str, str], datetime] = {}
 
     async def ensure_schema(self) -> None:
         return None
@@ -57,7 +57,7 @@ class _StubRepo:
         lockout_expires = None
         if is_locked:
             lockout_expires = now + window_delta
-            self._lockouts[identifier] = lockout_expires
+            self._lockouts[key] = lockout_expires
 
         return {
             "attempt_count": attempt_count,
@@ -65,17 +65,18 @@ class _StubRepo:
             "lockout_expires": lockout_expires,
         }
 
-    async def get_active_lockout(self, *, identifier: str, now: datetime):
-        locked_until = self._lockouts.get(identifier)
+    async def get_active_lockout(self, *, identifier: str, attempt_type: str = "login", now: datetime):
+        key = (identifier, attempt_type)
+        locked_until = self._lockouts.get(key)
         if locked_until and locked_until > now:
             return locked_until
         if locked_until:
-            self._lockouts.pop(identifier, None)
+            self._lockouts.pop(key, None)
         return None
 
     async def reset_failed_attempts_and_lockout(self, *, identifier: str, attempt_type: str) -> None:
         self._attempts.pop((identifier, attempt_type), None)
-        self._lockouts.pop(identifier, None)
+        self._lockouts.pop((identifier, attempt_type), None)
 
 
 @pytest.mark.asyncio

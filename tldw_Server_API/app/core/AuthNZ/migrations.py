@@ -494,6 +494,45 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
     logger.info("Migration 011: Created enhanced authentication tables")
 
 
+def migration_084_scope_account_lockouts_by_attempt_type(conn: sqlite3.Connection) -> None:
+    """Rebuild account_lockouts so lockouts are scoped by attempt_type."""
+    logger.info("Migration 084: START scope account_lockouts by attempt_type")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_lockouts_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identifier TEXT NOT NULL,
+            attempt_type TEXT NOT NULL,
+            locked_until TIMESTAMP NOT NULL,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(identifier, attempt_type)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO account_lockouts_new
+            (identifier, attempt_type, locked_until, reason, created_at)
+        SELECT
+            identifier,
+            'login',
+            locked_until,
+            reason,
+            COALESCE(created_at, CURRENT_TIMESTAMP)
+        FROM account_lockouts
+        """
+    )
+    conn.execute("DROP TABLE IF EXISTS account_lockouts")
+    conn.execute("ALTER TABLE account_lockouts_new RENAME TO account_lockouts")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lockouts_identifier_attempt_type "
+        "ON account_lockouts(identifier, attempt_type)"
+    )
+    conn.commit()
+    logger.info("Migration 084: COMPLETE scope account_lockouts by attempt_type")
+
+
 def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
     """Create core RBAC tables: roles, permissions, mappings, and user overrides."""
     logger.info("Migration 012: START RBAC core tables")
@@ -4648,6 +4687,11 @@ def get_authnz_migrations() -> list[Migration]:
             "Create org STT settings table",
             migration_083_create_org_stt_settings,
             rollback_083_drop_org_stt_settings,
+        ),
+        Migration(
+            84,
+            "Scope account lockouts by attempt type",
+            migration_084_scope_account_lockouts_by_attempt_type,
         ),
     ]
 

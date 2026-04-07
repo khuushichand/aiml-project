@@ -1656,9 +1656,11 @@ async def setup_test_database(monkeypatch):
         """)
         await test_conn.execute("""
             CREATE TABLE IF NOT EXISTS account_lockouts (
-                identifier TEXT PRIMARY KEY,
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
                 locked_until TIMESTAMPTZ NOT NULL,
-                reason TEXT
+                reason TEXT,
+                PRIMARY KEY (identifier, attempt_type)
             )
         """)
         await test_conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON rate_limits(identifier)")

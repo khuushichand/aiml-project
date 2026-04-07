@@ -3,12 +3,14 @@ import sqlite3
 
 def test_migration_084_scopes_account_lockouts_and_maps_legacy_rows() -> None:
     from tldw_Server_API.app.core.AuthNZ.migrations import (
+        migration_001_create_users_table,
         migration_011_add_enhanced_auth_tables,
         migration_084_scope_account_lockouts_by_attempt_type,
     )
 
     conn = sqlite3.connect(":memory:")
     try:
+        migration_001_create_users_table(conn)
         migration_011_add_enhanced_auth_tables(conn)
         conn.execute(
             """
