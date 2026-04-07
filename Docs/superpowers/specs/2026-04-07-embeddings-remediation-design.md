@@ -44,7 +44,7 @@ The remediation must:
 
 1. Token-array decode failure is converted into `""` and can still produce a successful embedding response.
 2. `generate_embeddings_for_media()` conflates embedding-generation failures with post-generation storage failures and can invoke fallback model generation for storage errors.
-3. `generate_embeddings_batch()` can queue some jobs and still return HTTP 500, making retries non-idempotent.
+3. `generate_embeddings_batch()` can queue some jobs and still return HTTP 500, producing misleading failure semantics after side effects have already occurred.
 4. Endpoint-level embeddings cache identity is too coarse when backend endpoint/base URL can change behavior.
 
 ## 4. Approved Behavior Changes
@@ -53,6 +53,7 @@ The remediation must:
 
 - Token-array decode failure must return HTTP 400.
 - The request must not proceed with synthetic or provider-backed embedding creation after decode failure.
+- The validation error should remain stable and testable, using a single explicit error detail for decode-invalid token input.
 - The success response shape for valid requests remains unchanged.
 
 ### 4.2 Media Generation Failure Classification
@@ -60,6 +61,7 @@ The remediation must:
 - Fallback-model generation is allowed only for embedding-generation failures.
 - If primary embedding generation succeeds but persistence into Chroma fails, the endpoint must surface a storage failure immediately.
 - Storage failures must not be reinterpreted as provider/model failures.
+- The surfaced failure should preserve storage provenance in the returned error message or status payload so tests can distinguish it from upstream provider failure.
 
 ### 4.3 Media Batch Submission Semantics
 
@@ -67,11 +69,13 @@ The remediation must:
 - Full success remains `202 Accepted`.
 - Partial success also returns `202 Accepted`, but with a truthful body indicating partial acceptance.
 - Full failure before any enqueue continues to use true failure status codes.
+- This remediation does not promise full end-to-end retry idempotency for every client/network scenario; it fixes the misleading HTTP failure contract after partial side effects.
 
 ### 4.4 Cache Identity Semantics
 
 - Cache identity must include backend-sensitive execution context whenever request routing can differ for the same provider/model/text/dimensions tuple.
 - This includes provider endpoint/base URL identity for paths where `api_url` or equivalent override changes actual execution behavior.
+- Cache identity must not include secrets or per-request noise; normalize on stable execution-affecting backend identity only.
 - Cache hit rate is secondary to avoiding cross-backend result reuse.
 
 ## 5. API Contract Design
@@ -93,6 +97,11 @@ Recommended response shape:
 - `submitted`: count of successfully queued jobs
 - `failed_media_ids`: list of media IDs that failed to queue
 - `failure_reasons`: concise, machine-readable or at least stable reason strings
+
+Response-model rule:
+
+- Keep one response model for both full and partial acceptance.
+- `failed_media_ids` and `failure_reasons` should be present with empty-list defaults on full success so clients do not have to branch on missing keys.
 
 Compatibility rule:
 
@@ -119,14 +128,17 @@ Compatibility rule:
 Required regression coverage:
 
 - token-array decode failure returns HTTP 400 at endpoint level
+- token-array decode failure does not call downstream embedding creation
 - successful decode paths still succeed
 - storage failure after successful primary generation does not trigger fallback
+- storage failure returns a storage-classified error, not a provider-classified error
 - actual generation failure still may use fallback where intended
 - mixed batch enqueue returns explicit partial success instead of HTTP 500
 - full enqueue success still returns accepted semantics
 - cache-key identity differs when backend endpoint/base URL differs
 
 Verification should prefer focused test slices over broad integration runs unless a changed contract specifically requires broader confirmation.
+Do not require the known slow real-provider integration path to pass if the corrected contracts are already covered by focused endpoint/unit tests.
 
 ## 8. Risk Management
 
@@ -149,6 +161,6 @@ The remediation is successful when:
 
 - token decode failures cannot silently produce embeddings
 - storage failures are surfaced as storage failures
-- mixed batch enqueue results are truthful and retry-safe in API semantics
+- mixed batch enqueue results are truthful after partial side effects
 - cache identity no longer aliases backend-distinct execution paths
 - every corrected behavior has direct regression coverage
