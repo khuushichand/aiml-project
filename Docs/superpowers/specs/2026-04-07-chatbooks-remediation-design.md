@@ -62,12 +62,21 @@ Out of scope:
   - `500` only for unexpected server-side failures
 - Async continuation export is not a public feature in this pass.
   The public contract should stop advertising unsupported async continuation.
+  If a caller still submits `async_mode=true`, the route should return a caller
+  error (`400`), not `500`.
 - Sync export responses should standardize on the current persisted-job shape:
   successful sync export returns `job_id` plus `download_url`, not raw
   `file_path`.
 - Sync continuation export should match the same sync export response shape.
+  `file_path` should be removed from the live sync export contract rather than
+  kept as a parallel deprecated success field.
 - Sync import should populate `imported_items` instead of silently leaving the
   field unimplemented.
+  `imported_items` should count successfully materialized items by content type;
+  renamed imports count as imported, skipped items do not, and unsupported or
+  unrequested types should be absent rather than emitted as zero-value entries.
+  The counts should come from the import operation result itself, not from a
+  best-effort post-import database recount.
 - Remove-job semantics stay broad for safe terminal states:
   - exports: `completed`, `cancelled`, `failed`, `expired`
   - imports: `completed`, `cancelled`, `failed`
@@ -191,18 +200,26 @@ Continuation export:
 
 - Remove public async continuation support from the request/schema/endpoint
   contract unless a temporary compatibility layer is required.
-- Unsupported async continuation must not produce `500`.
+- Unsupported async continuation must return `400`, not `500`.
 
 Sync export/continuation:
 
 - Standardize successful sync export responses on persisted-job semantics:
   `success`, `message`, `job_id`, `download_url`.
 - Make `/export/continue` match the same sync response shape.
+- Remove `file_path` from the live sync export schema/OpenAPI contract rather
+  than keeping both success shapes in parallel.
 
 Sync import:
 
 - Populate `imported_items` with real counts from the sync import result.
 - Keep `warnings` as a first-class sync response field.
+- Count only successfully materialized imported items by content type.
+  Renamed items count as imports; skipped items do not. Unsupported and
+  unrequested types should be omitted from the map rather than represented by
+  zero counts.
+- Produce the counts from the import operation result itself so the response is
+  deterministic and does not depend on a follow-up database recount.
 
 Remove-job routes:
 
@@ -248,8 +265,13 @@ Regression coverage:
 
 - Add a manifest contract test that validates a real export against the updated
   canonical schema.
-- Add route/schema contract tests where practical for the OpenAPI-aligned
-  behavior.
+- Add explicit route/schema contract tests for the corrected live behaviors
+  that previously drifted from OpenAPI, at minimum:
+  - import multipart field shape versus the old `options` JSON contract
+  - sync export response shape
+  - sync import response shape including `warnings` and `imported_items`
+  - preview failure HTTP semantics
+  - absence of public async continuation support
 
 ### 5. Maintainability and Test-Structure Cleanup
 
@@ -293,7 +315,7 @@ Required failing tests first:
 - `/preview` returns `400` for invalid/unsafe archives and does not return
   `200 + error`
 - `/export/continue` no longer advertises or accepts unsupported async
-  continuation as a `500` path
+  continuation and returns `400` if `async_mode=true` is still submitted
 - sync `/export` and sync `/export/continue` return the same persisted-job
   response shape
 - sync import returns populated `imported_items`
