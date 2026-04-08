@@ -16,25 +16,25 @@
 **Goal**: Start implementation from a dedicated worktree/branch and confirm the logging-related test surface is local and reproducible.
 **Success Criteria**: The implementer is working in an isolated `codex/` branch, the virtualenv is active, and the current targeted tests run from a clean baseline.
 **Tests**: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_database_backends.py::TestDatabaseBackends::test_backend_factory_sqlite -q`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Lock The Logging Contract With Red Tests
 **Goal**: Add focused failing tests for the SQLite factory contract, media DB cache-miss logging, long-lived owner logs, and hot-path silence.
 **Success Criteria**: New tests fail against the current code for the expected reasons: SQLite factory success still logs at `INFO`, media cache-miss logs are too chatty, and scheduler logging duplicates its success line.
 **Tests**: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py -q`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Implement Factory And Owner Logging Cleanup
 **Goal**: Update the factory and owner modules to satisfy the approved logging contract without changing backend reuse semantics.
 **Success Criteria**: SQLite success logging in the factory is `DEBUG`-only, media cache-miss logs collapse to one meaningful `INFO` line, `UserDatabase` and `WorkflowsSchedulerDB` each emit one contextual `INFO` line, and hot constructors stay silent on success.
 **Tests**: The Stage 2 pytest command plus targeted existing regressions for scheduler DB paths.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Verify, Security-Check, And Record Results
 **Goal**: Re-run the targeted regression set, run Bandit on the touched scope, and update this plan with the final execution status.
 **Success Criteria**: Targeted pytest commands pass, Bandit reports no new findings on touched files, and the plan file reflects actual completion state.
 **Tests**: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py tldw_Server_API/tests/DB_Management/test_workflows_scheduler_db_paths.py -q`; `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/DB_Management/backends/factory.py tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py tldw_Server_API/app/core/DB_Management/Workflows_Scheduler_DB.py -f json -o /tmp/bandit_sqlite_backend_log_noise.json`
-**Status**: Not Started
+**Status**: Complete
 
 ## File Map
 
@@ -60,7 +60,7 @@
 **Files:**
 - Modify: `Docs/superpowers/plans/2026-04-07-sqlite-backend-log-noise-implementation-plan.md`
 
-- [ ] **Step 1: Create or switch to an isolated worktree**
+- [x] **Step 1: Create or switch to an isolated worktree**
 
 ```bash
 git worktree add ../tldw_server2-sqlite-log-noise -b codex/sqlite-backend-log-noise
@@ -68,7 +68,7 @@ git worktree add ../tldw_server2-sqlite-log-noise -b codex/sqlite-backend-log-no
 
 Expected: a new worktree exists on branch `codex/sqlite-backend-log-noise`.
 
-- [ ] **Step 2: Activate the project virtualenv in the worktree**
+- [x] **Step 2: Activate the project virtualenv in the worktree**
 
 ```bash
 source .venv/bin/activate
@@ -76,7 +76,7 @@ source .venv/bin/activate
 
 Expected: subsequent `python -m pytest` and `python -m bandit` commands use the repo venv required by `AGENTS.md`.
 
-- [ ] **Step 3: Run one existing backend smoke test from the clean baseline**
+- [x] **Step 3: Run one existing backend smoke test from the clean baseline**
 
 Run: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_database_backends.py::TestDatabaseBackends::test_backend_factory_sqlite -q`
 
@@ -88,7 +88,7 @@ Expected: PASS. This confirms the backend abstraction test surface is runnable b
 - Create: `tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/backends/factory.py`
 
-- [ ] **Step 1: Write the failing factory logging tests**
+- [x] **Step 1: Write the failing factory logging tests**
 
 ```python
 class _RecordingLogger:
@@ -117,13 +117,13 @@ def test_create_backend_logs_sqlite_success_at_debug_not_info(tmp_path, monkeypa
 
 Also add a PostgreSQL parity test by monkeypatching `_BACKEND_REGISTRY[BackendType.POSTGRESQL]` to a fake backend class and asserting non-SQLite success logging still uses `INFO`.
 
-- [ ] **Step 2: Run the new factory test file and confirm it fails**
+- [x] **Step 2: Run the new factory test file and confirm it fails**
 
 Run: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py -q`
 
 Expected: FAIL because [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py) still routes SQLite success through `logger.info(...)`.
 
-- [ ] **Step 3: Implement the minimal factory logging change**
+- [x] **Step 3: Implement the minimal factory logging change**
 
 ```python
 from pathlib import Path
@@ -146,13 +146,13 @@ else:
 
 Keep unsupported backend errors and registry behavior unchanged.
 
-- [ ] **Step 4: Re-run the factory tests and confirm they pass**
+- [x] **Step 4: Re-run the factory tests and confirm they pass**
 
 Run: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py -q`
 
 Expected: PASS. SQLite success is now `DEBUG`-only and non-SQLite success remains visible at `INFO`.
 
-- [ ] **Step 5: Commit the factory slice**
+- [x] **Step 5: Commit the factory slice**
 
 ```bash
 git add tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py \
@@ -166,7 +166,7 @@ git commit -m "refactor: quiet sqlite backend factory logs"
 - Modify: `tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py`
 - Modify: `tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py`
 
-- [ ] **Step 1: Write the failing media cache-miss logging test**
+- [x] **Step 1: Write the failing media cache-miss logging test**
 
 ```python
 def test_get_or_create_media_db_factory_logs_one_info_on_cache_miss(monkeypatch) -> None:
@@ -197,13 +197,13 @@ def test_get_or_create_media_db_factory_logs_one_info_on_cache_miss(monkeypatch)
 
 This test should intentionally reject the current three-line cache-miss `INFO` pattern.
 
-- [ ] **Step 2: Run the targeted media-factory test and confirm it fails**
+- [x] **Step 2: Run the targeted media-factory test and confirm it fails**
 
 Run: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py::test_get_or_create_media_db_factory_logs_one_info_on_cache_miss -q`
 
 Expected: FAIL because `DB_Deps.py` currently emits multiple `INFO` lines for one cache miss.
 
-- [ ] **Step 3: Implement the minimal cache-miss log consolidation**
+- [x] **Step 3: Implement the minimal cache-miss log consolidation**
 
 ```python
 if factory:
@@ -221,7 +221,7 @@ logger.info(
 
 Remove the redundant preamble/success `INFO` lines, keep cache hits and concurrent reuse at `DEBUG`, and preserve test-mode warning logs as-is.
 
-- [ ] **Step 4: Re-run the targeted media-factory test and the existing cache test**
+- [x] **Step 4: Re-run the targeted media-factory test and the existing cache test**
 
 Run:
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py::test_get_or_create_media_db_factory_logs_one_info_on_cache_miss -q`
@@ -229,7 +229,7 @@ Run:
 
 Expected: PASS. Cache miss emits one contextual `INFO` line; cache hit behavior still reuses one factory.
 
-- [ ] **Step 5: Commit the media cache-miss slice**
+- [x] **Step 5: Commit the media cache-miss slice**
 
 ```bash
 git add tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py \
@@ -244,7 +244,7 @@ git commit -m "refactor: consolidate media db init logs"
 - Modify: `tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py`
 - Modify: `tldw_Server_API/app/core/DB_Management/Workflows_Scheduler_DB.py`
 
-- [ ] **Step 1: Write the failing owner logging tests**
+- [x] **Step 1: Write the failing owner logging tests**
 
 ```python
 def test_user_database_logs_one_contextual_sqlite_init_line(tmp_path, monkeypatch):
@@ -291,13 +291,13 @@ def test_workflows_scheduler_logs_one_sqlite_init_line(monkeypatch, tmp_path):
         db.backend.get_pool().close_all()
 ```
 
-- [ ] **Step 2: Run the owner logging test file and confirm it fails**
+- [x] **Step 2: Run the owner logging test file and confirm it fails**
 
 Run: `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py -q`
 
 Expected: FAIL because `UserDatabase` lacks target context and `WorkflowsSchedulerDB` currently emits duplicate SQLite-path `INFO` logs.
 
-- [ ] **Step 3: Implement the minimal owner logging cleanup**
+- [x] **Step 3: Implement the minimal owner logging cleanup**
 
 ```python
 def _describe_backend_target(self) -> str:
@@ -317,7 +317,7 @@ logger.info(
 
 For `WorkflowsSchedulerDB`, keep one contextual constructor-time `INFO` line for the effective SQLite path and remove the duplicate `INFO` emission from `_ensure_schema()`. Do not add any new success `INFO` log to `CollectionsDatabase`.
 
-- [ ] **Step 4: Re-run owner logging tests and the existing scheduler path regression**
+- [x] **Step 4: Re-run owner logging tests and the existing scheduler path regression**
 
 Run:
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py -q`
@@ -325,7 +325,7 @@ Run:
 
 Expected: PASS. `UserDatabase` and `WorkflowsSchedulerDB` each emit one contextual success line; `CollectionsDatabase.for_user(...)` stays silent on success.
 
-- [ ] **Step 5: Commit the owner logging slice**
+- [x] **Step 5: Commit the owner logging slice**
 
 ```bash
 git add tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py \
@@ -339,7 +339,7 @@ git commit -m "refactor: tighten db owner initialization logs"
 **Files:**
 - Modify: `Docs/superpowers/plans/2026-04-07-sqlite-backend-log-noise-implementation-plan.md`
 
-- [ ] **Step 1: Run the focused regression suite for the touched contract**
+- [x] **Step 1: Run the focused regression suite for the touched contract**
 
 Run:
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py -q`
@@ -349,13 +349,13 @@ Run:
 
 Expected: PASS for all four commands.
 
-- [ ] **Step 2: Run Bandit on the touched implementation files**
+- [x] **Step 2: Run Bandit on the touched implementation files**
 
 Run: `source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/DB_Management/backends/factory.py tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py tldw_Server_API/app/core/DB_Management/Workflows_Scheduler_DB.py -f json -o /tmp/bandit_sqlite_backend_log_noise.json`
 
 Expected: Bandit completes successfully and reports no new findings in the touched scope.
 
-- [ ] **Step 3: Update stage statuses and execution notes in this plan**
+- [x] **Step 3: Update stage statuses and execution notes in this plan**
 
 ```markdown
 **Status**: Complete
@@ -363,3 +363,27 @@ Expected: Bandit completes successfully and reports no new findings in the touch
 ```
 
 Expected: the plan file reflects real completion state rather than remaining as all unchecked defaults.
+
+## Execution Notes
+
+**Status**: Complete
+**Worktree**: `/Users/macbook-dev/Documents/GitHub/tldw_server2/.worktrees/sqlite-backend-log-noise`
+**Branch**: `codex/sqlite-backend-log-noise`
+
+**Commits**:
+- `dceb86acb` `refactor: quiet sqlite backend factory logs`
+- `2365b8366` `refactor: consolidate media db init logs`
+- `f6153eccb` `fix: clarify media db cache-miss postgres target log`
+- `fef27f57d` `refactor: tighten db owner initialization logs`
+- `2979d3f70` `fix: tighten db owner log targets`
+
+**Verification**:
+- `python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_factory_logging.py -q` -> `2 passed`
+- `python -m pytest -q tldw_Server_API/tests/DB_Management/test_media_db_request_scope_isolation.py -q` -> `16 passed`
+- `python -m pytest -q tldw_Server_API/tests/DB_Management/test_sqlite_owner_logging.py -q` -> `6 passed`
+- `python -m pytest -q tldw_Server_API/tests/DB_Management/test_workflows_scheduler_db_paths.py -q` -> `1 passed`
+- `python -m bandit -r tldw_Server_API/app/core/DB_Management/backends/factory.py tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py tldw_Server_API/app/core/DB_Management/UserDatabase_v2.py tldw_Server_API/app/core/DB_Management/Workflows_Scheduler_DB.py -f json -o /tmp/bandit_sqlite_backend_log_noise.json` -> `results 0`, `errors 0`
+
+**Review Notes**:
+- Task 3 required a fix-and-rereview loop so shared PostgreSQL media-factory logging no longer reported `target=:memory:` and the regression test pinned the exact log line.
+- Task 4 required a follow-up fix after spec review so owner logs do not expose PostgreSQL credentials and scheduler success logging only emits after successful initialization.
