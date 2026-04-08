@@ -230,13 +230,6 @@ policies:
     requests: { rpm: 6000, burst: 1.2 }
     scopes: [user, api_key]
 
-  # Lightweight extension/web handoff resolves source and workspace state
-  # before the hosted app finishes auth/subscription routing, so these routes
-  # must still permit IP-scoped requests.
-  media.video_lite.access:
-    requests: { rpm: 6000, burst: 1.2 }
-    scopes: [user, api_key, ip]
-
   # Chatbooks import/export endpoints (legacy ingress compat → RG).
   # Covers `/api/v1/chatbooks/*` used for conversation backup/restore and bulk
   # user-data transfer (export/import). Limits are intentionally conservative
@@ -406,9 +399,6 @@ route_map:
     "/api/v1/media/process-*": media.default
     "/api/v1/media/mediawiki/*": media.default
     "/api/v1/media/*/reprocess": media.default
-    "/api/v1/media/video-lite/source": media.video_lite.access
-    "/api/v1/media/video-lite/workspace/*/summary-refresh": media.video_lite.access
-    "/api/v1/media/video-lite/workspace/*": media.video_lite.access
     "/api/v1/media*": media.access
     "/api/v1/watchlists/*": watchlists.default
     "/api/v1/watchlists*": watchlists.default

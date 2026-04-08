@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Any
 
 from loguru import logger
@@ -29,11 +28,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
-from tldw_Server_API.app.services.video_lite_service import (
-    normalize_video_lite_source_key,
-    prepare_video_lite_summary_generation,
-    run_video_lite_summary_generation,
-)
 
 _MEDIA_DOMAIN = "media_ingest"
 _MEDIA_JOB_TYPE = "media_ingest_item"
@@ -151,71 +145,6 @@ def _cleanup_temp_dir(temp_dir: str | None) -> None:
         return
     with contextlib.suppress(Exception):
         shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def _is_video_lite_ingest_payload(payload: dict[str, Any]) -> bool:
-    batch_id = str(payload.get("batch_id") or "").strip()
-    media_type = str(payload.get("media_type") or "").strip().lower()
-    source_kind = str(payload.get("source_kind") or "").strip().lower()
-    source = str(payload.get("source") or "").strip()
-    return (
-        batch_id.startswith("video-lite:")
-        and media_type == "video"
-        and source_kind == "url"
-        and bool(source)
-    )
-
-
-async def _run_video_lite_summary_task(
-    *,
-    source_key: str,
-    source_url: str,
-    user_id: str,
-) -> None:
-    try:
-        await run_video_lite_summary_generation(
-            source_key=source_key,
-            source_url=source_url,
-            current_user=SimpleNamespace(id=int(user_id)),
-        )
-    except Exception as exc:
-        logger.warning(
-            "Video-lite summary background task failed for {} (user={}): {}",
-            source_key,
-            user_id,
-            exc,
-        )
-
-
-async def _maybe_schedule_video_lite_summary_generation(
-    *,
-    payload: dict[str, Any],
-    user_id: str,
-) -> bool:
-    if not _is_video_lite_ingest_payload(payload):
-        return False
-
-    source_url = str(payload.get("source") or "").strip()
-    if not source_url:
-        return False
-
-    source_key = normalize_video_lite_source_key(source_url)
-    should_run = await prepare_video_lite_summary_generation(
-        source_key=source_key,
-        source_url=source_url,
-        current_user=SimpleNamespace(id=int(user_id)),
-    )
-    if not should_run:
-        return False
-
-    asyncio.create_task(
-        _run_video_lite_summary_task(
-            source_key=source_key,
-            source_url=source_url,
-            user_id=user_id,
-        )
-    )
-    return True
 
 
 def _build_form_data(payload: dict[str, Any]) -> AddMediaForm:
@@ -405,12 +334,6 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                     db=db,
                     form_data=form_data,
                 )
-            )
-
-        if result_item.get("status") == "Success":
-            await _maybe_schedule_video_lite_summary_generation(
-                payload=payload,
-                user_id=user_id,
             )
 
         progress.percent = 100.0
