@@ -2,7 +2,7 @@
 
 ## Summary
 
-This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, receive eagerly generated summaries, and chat against transcript content without entering the full `tldw` product surface.
+This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, review summaries generated during first ingest or explicitly re-requested in the full app, and chat against transcript content without entering the full `tldw` product surface.
 
 The product should ship as a browser extension plus a reduced hosted web experience backed by the existing `tldw-hosted` / `tldw_server` platform. The extension is the discovery and launch surface. The hosted web app is the primary workspace.
 
@@ -18,7 +18,7 @@ V1 should also treat auth and subscription gating, lightweight upgrade flow, and
   - `Transcript`
   - `Summary`
   - `Chat`
-- Generate the default summary eagerly as part of backend workspace readiness rather than as a client-triggered action.
+- Generate or reuse the default summary during first ingest, and require an explicit full-app re-request for later regeneration rather than triggering summary work from the lightweight workspace.
 - Reuse the existing `tldw` backend for ingestion, transcript retrieval, summarization, and chat.
 - Keep the store-facing extension and hosted app in a separate private project so the product is not directly packaged as part of the open-source monorepo.
 - Reuse the existing app through an upstream sync plus private patch-overlay model rather than rebuilding the frontend from scratch.
@@ -232,7 +232,7 @@ V1 should compose existing capabilities rather than invent a separate open-sourc
 - submit URL for ingest
 - query existing ingest status
 - resolve the transcript-backed media record
-- generate and cache the default transcript summary once transcript readiness is reached
+- persist and expose the transcript summary produced during first ingest, plus any later full-app re-request result
 - route chat and summary calls against that record
 - return one canonical workspace answer for the launcher and hosted workspace
 - derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
@@ -275,10 +275,10 @@ The recommended contract shape is:
   - optional `chat_preview` only if the hosted page wants presentational empty-state copy; it is not a separate chat API surface
   - `entitlement`
 
-Because V1 now prefers eager summary generation, summary lifecycle belongs to the backend rather than the hosted page. New source flows should normally move through:
+Summary lifecycle belongs to the backend ingestion flow rather than the hosted page. New source flows should normally move through:
 
 - media `processing`
-- media `ready` plus summary `processing`
+- media `ready` plus summary `processing` when first-ingest summarization is still running
 - media `ready` plus summary `ready`
 
 `summary_state` should be explicit. The useful V1 states are:
@@ -291,9 +291,9 @@ Because V1 now prefers eager summary generation, summary lifecycle belongs to th
 
 The hosted page should open once transcript-ready, even if `summary_state` is still `processing`. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
 
-V1 should not expose a client-triggered summary creation, regeneration, or retry control in the lightweight product. The hosted page should render backend workspace state only. Any summary retry behavior remains a backend concern.
+V1 should not expose a client-triggered summary creation, regeneration, or retry control in the lightweight product. The hosted page should render backend workspace state only. Any summary retry behavior should happen through the full app, not the lightweight workspace.
 
-Summary generation should not happen inline on workspace reads. Transcript readiness should enqueue at most one background summary job per normalized source or transcript hash, protected by a dedupe key or equivalent lock. `GET /video-lite/workspace/...` should stay read-only and report `summary_state` without spawning duplicate summarization work during polling.
+Summary generation should not happen inline on source resolution or workspace reads. First-ingest processing may enqueue at most one background summary job per normalized source or transcript hash, protected by a dedupe key or equivalent lock. `GET /video-lite/workspace/...` should stay read-only and report `summary_state` without spawning duplicate summarization work during polling.
 
 ## User Flow
 
@@ -305,7 +305,7 @@ The primary user flow is:
 4. If the user is signed in but unsubscribed, the extension routes them into the branded lightweight upgrade wrapper.
 5. If the user is signed in and subscribed, the extension triggers ingest when needed and shows shallow progress feedback.
 6. Once transcript-ready, the user is routed into the hosted lightweight workspace.
-7. The backend generates the default summary as part of the same workspace lifecycle.
+7. The backend surfaces the first-ingest summary state for that record without starting new summary work from the lightweight surface.
 8. The user reads the transcript, reviews the ready or in-progress summary, and asks questions grounded in the transcript.
 
 The hosted experience may also accept direct pasted URLs for sources beyond YouTube, but extension auto-detection in V1 should stay focused on YouTube pages.
@@ -394,7 +394,7 @@ The main data flow should be:
 1. Extension or hosted lightweight mode submits a URL.
 2. Backend creates or reuses the media-processing record.
 3. Ingestion and transcription run to readiness.
-4. Once transcript-ready, the backend generates or reuses the default summary for that record.
+4. Once transcript-ready, the backend exposes the first-ingest summary state already associated with that record, or `not_requested` when no summary has been persisted yet.
 5. Hosted app polls or subscribes for workspace state.
 6. Transcript, summary, and chat all bind to the same underlying transcript-backed media record.
 
@@ -511,7 +511,7 @@ Implementation should verify the following flows:
 - ingest handoff from extension to hosted lightweight mode
 - ingest status transitions and ready-state rendering
 - launcher action behavior across all source states
-- eager summary generation once transcript-ready
+- first-ingest summary persistence and reuse, without lightweight auto-regeneration
 - transcript, summary, and chat behavior on transcript-backed media
 - server-side auth and subscription enforcement across signed-out, unsubscribed, and subscribed states
 - login routing and upgrade gating before protected actions
