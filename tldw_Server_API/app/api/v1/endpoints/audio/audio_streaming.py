@@ -19,6 +19,12 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import resolve_org_id_for_principal
+from tldw_Server_API.app.core.Billing.enforcement import (
+    LimitCategory,
+    enforcement_enabled,
+    get_billing_enforcer,
+)
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
     get_chacha_db_for_user_id,
@@ -874,6 +880,41 @@ async def websocket_transcribe(
     ):
         return
 
+    # Billing: check transcription minutes quota before streaming begins
+    _ws_billing_org_id: int | None = None
+    if enforcement_enabled():
+        try:
+            _ws_principal = get_websocket_auth_principal(websocket)
+            if _ws_principal is not None:
+                _ws_billing_org_id = await resolve_org_id_for_principal(_ws_principal)
+                if _ws_billing_org_id is not None:
+                    _enforcer = get_billing_enforcer()
+                    _result = await _enforcer.check_limit(
+                        _ws_billing_org_id,
+                        LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                        requested_units=1,
+                    )
+                    if _result.should_block:
+                        await _outer_stream.send_json({
+                            "type": "error",
+                            "code": "billing_limit_exceeded",
+                            "message": _result.message or "Transcription minutes quota exceeded. Please upgrade your plan.",
+                            "category": "transcription_minutes_month",
+                            "current": _result.current,
+                            "limit": _result.limit,
+                            "upgrade_url": "/billing/plans",
+                        })
+                        await websocket.close(code=_policy_close_code(), reason="billing_limit_exceeded")
+                        return
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as _billing_err:
+            logger.debug(f"WS billing pre-check failed (fail-open): {_billing_err}")
+
+    stt_metrics_provider = "other"
+    stt_metrics_model = "other"
+    stt_request_status = "ok"
+    stt_session_close_reason = "client_disconnect"
+    stt_session_started = False
+
     try:
         # Default configuration prefers explicit streaming model selection from
         # [STT-Settings].default_streaming_transcription_model.
@@ -1183,6 +1224,17 @@ async def websocket_transcribe(
                         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
                         raise _QuotaExceeded("daily_minutes") from None
+            # Billing: update in-memory usage cache for org-level enforcement
+            if _ws_billing_org_id is not None:
+                try:
+                    _enforcer = get_billing_enforcer()
+                    _enforcer.apply_usage_delta(
+                        _ws_billing_org_id,
+                        LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                        max(1, int(minutes_chunk + 0.5)),
+                    )
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                    pass  # fail-open
 
         async def _on_heartbeat() -> None:
             """

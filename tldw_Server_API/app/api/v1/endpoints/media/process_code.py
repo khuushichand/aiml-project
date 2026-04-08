@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
@@ -42,7 +44,11 @@ router = APIRouter()
     "/process-code",
     summary="Process code files (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
-    dependencies=[Depends(guard_storage_quota)],
+    dependencies=[
+        Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
 )
 async def process_code_endpoint(
     db: Any = Depends(get_media_db_for_user),  # Parity with legacy signature; unused

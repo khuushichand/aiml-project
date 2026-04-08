@@ -16,7 +16,18 @@ from loguru import logger
 import soundfile as sf
 from starlette import status
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    check_rate_limit,
+    get_auth_principal,
+    get_db_transaction,
+    require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import get_billing_org_id, require_within_limit
+from tldw_Server_API.app.core.Billing.enforcement import (
+    LimitCategory,
+    enforcement_enabled,
+    get_billing_enforcer,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
@@ -407,11 +418,16 @@ def _dictation_error_detail(
 @router.post(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {"description": "Billing limit exceeded. Upgrade plan to continue."},
+    },
     dependencies=[
         Depends(check_rate_limit),
         Depends(
             require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         ),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
 async def create_transcription(
@@ -453,6 +469,9 @@ async def create_transcription(
     seg_embeddings_provider: Optional[str] = Form(default=None, description="Embeddings provider override for TreeSeg"),
     seg_embeddings_model: Optional[str] = Form(default=None, description="Embeddings model override for TreeSeg"),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
+    billing_org_id: int | None = Depends(get_billing_org_id),
 ):
     """
     Transcribes audio into the input language.
@@ -969,6 +988,17 @@ async def create_transcription(
                 e,
                 rid,
             )
+        # Billing: record actual transcription minutes to org-level enforcement
+        if enforcement_enabled() and billing_org_id is not None and minutes_est > 0:
+            try:
+                import math as _math
+                get_billing_enforcer().apply_usage_delta(
+                    billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    max(1, int(_math.ceil(minutes_est))),
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # fail-open
 
         timed_segments = _normalize_timed_segments(segments_for_timing)
 
@@ -1159,9 +1189,14 @@ async def create_transcription(
 @router.post(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {"description": "Billing limit exceeded. Upgrade plan to continue."},
+    },
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call")),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
 async def create_translation(

@@ -133,6 +133,49 @@ async def _resolve_org_id(
     return None
 
 
+async def get_billing_org_id(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: int | None = Query(None, description="Organization ID"),
+) -> int | None:
+    """
+    Resolve the billing org ID without enforcing any limit.
+
+    Returns None when enforcement is disabled, the user has no org,
+    or single-user mode is active.  Intended for handler bodies that
+    need an org_id to create a ``LimitEnforcer`` context manager.
+    """
+    if not enforcement_enabled():
+        return None
+    try:
+        resolved = await _resolve_org_id(principal, org_id, x_tldw_org_id)
+    except HTTPException:
+        if _allow_orgless_billing_access():
+            return None
+        raise
+    return resolved
+
+
+async def resolve_org_id_for_principal(principal: AuthPrincipal) -> int | None:
+    """
+    Resolve the billing org ID from an ``AuthPrincipal`` without FastAPI DI.
+
+    Useful in WebSocket handlers where ``Depends()`` is unavailable.
+    Returns None when enforcement is disabled or org context is absent.
+    """
+    if not enforcement_enabled():
+        return None
+    try:
+        return await _resolve_org_id(principal, None, None)
+    except HTTPException:
+        if _allow_orgless_billing_access():
+            return None
+        raise
+    except Exception as exc:
+        logger.debug(f"resolve_org_id_for_principal failed: {exc}")
+        return None
+
+
 def require_within_limit(category: LimitCategory, units: int = 1):
     """
     Dependency factory that enforces a billing limit.
