@@ -83,8 +83,8 @@ The existing media-ingest worker already returns `result.media_id` in completed 
 The existing media detail response already exposes the core hosted workspace fields the private app needs:
 
 - transcript text via `content.text`
-- summary via `processing.analysis`
 - source URL via `source.url`
+- stable per-user summary storage via `processing.safe_metadata`, which should carry a reserved `video_lite` summary payload for this product
 
 ## Recommended Approach
 
@@ -142,6 +142,18 @@ The public backend surface used by this product should remain:
 
 The product should not add public `video-lite` source-state, workspace, or summary-refresh endpoints.
 
+## Same-User Idempotency
+
+Repeated submits for the same normalized source must not create duplicate media rows for the same user.
+
+Rules:
+
+- if the same user already has an active media record for the same normalized source and that record already has a transcript, the ingest path should resolve to that existing `media_id`
+- the backend may still create a normal ingest job for user-facing consistency, but the job should complete quickly and return the existing `media_id`
+- `Ingest`, `Open transcript`, and `Quick chat` must all converge on that same-user idempotent behavior
+
+This is separate from cross-user dedupe. Cross-user dedupe is an internal compute optimization. Same-user idempotency is a user-facing correctness rule.
+
 ## Dedupe Boundary
 
 Dedupe should be an internal compute and artifact optimization behind the existing ingest-job worker path.
@@ -152,6 +164,12 @@ What may be reused internally:
 - downloaded media artifacts
 - canonical transcript artifacts
 - other non-user-owned processing artifacts that are safe to reuse internally
+
+V1 should scope reuse conservatively:
+
+- prefer reuse for sources with stable canonical identity, such as normalized YouTube video IDs
+- for mutable or weakly identified sources, only reuse artifacts when a freshness or canonical-source fingerprint check passes
+- if freshness cannot be established cheaply, fall back to the normal ingest path
 
 What must remain per-user:
 
@@ -166,6 +184,11 @@ Operationally:
   - run normal download and transcription
   - persist transcript into the user’s record
   - generate first summary for that user
+- on same-user repeat ingest with an existing active transcript-backed record:
+  - skip duplicate media-row creation
+  - return the existing `media_id`
+  - do not re-transcribe
+  - do not regenerate summary unless the existing record is missing its dedicated summary artifact
 - on dedupe hit:
   - skip download and transcription work
   - materialize transcript into that user’s record
@@ -187,10 +210,17 @@ The hosted flow should be:
 7. Hosted app loads `GET /api/v1/media/{media_id}`.
 8. Workspace renders:
    - transcript from `content.text`
-   - summary from `processing.analysis`
+   - summary from the dedicated `processing.safe_metadata.video_lite.summary` value
    - chat entry using the existing media/chat flows
 
 If the completed job result does not include `media_id`, the hosted app should treat that as failure.
+
+For V1, ingest job completion should mean:
+
+- transcript persistence is finished
+- the initial summary attempt has also finished
+
+That keeps the lightweight hosted flow simple. The Summary tab should not need a long-lived “summary still generating” state after job completion. If summary generation fails, the backend should persist a terminal summary status for that user and the hosted app should render that failure or unavailable state.
 
 ## Launcher Behavior
 
@@ -223,7 +253,17 @@ Rules:
 - dedupe hits should still generate the user’s summary automatically after the transcript is materialized into that user’s record
 - later regeneration should happen through existing full-app behavior, not a lightweight product-specific API
 
-The hosted workspace should render whatever summary is present in existing media detail fields rather than expecting a separate summary-state contract.
+The lightweight product must not treat generic `processing.analysis` as its canonical summary field. That field represents the last analysis or summary generated in the broader app and can be overwritten by unrelated later actions.
+
+Instead, V1 should reserve a stable summary slot inside existing per-user media metadata, exposed through the existing detail response. The recommended shape is:
+
+- `processing.safe_metadata.video_lite.summary`
+- optional companion fields such as:
+  - `processing.safe_metadata.video_lite.summary_status`
+  - `processing.safe_metadata.video_lite.summary_generated_at`
+  - `processing.safe_metadata.video_lite.summary_source`
+
+The hosted Summary tab should read that reserved summary payload only.
 
 ## Error Handling
 
@@ -236,7 +276,7 @@ The product should handle these states explicitly:
 - completed job missing `media_id`
 - media detail fetch failed
 - transcript unavailable after ingest failure
-- summary not yet populated despite completed transcript ingest
+- summary unavailable or failed after job completion
 
 The lightweight experience should remain intentionally small and avoid exposing low-level backend controls.
 
@@ -254,10 +294,12 @@ Verification should cover:
 
 - private hosted intake submitting existing ingest jobs correctly
 - dedupe-hit worker behavior still returning a normal completed job with `result.media_id`
+- same-user repeated ingest resolving to the existing `media_id` instead of creating duplicate rows
 - per-user transcript persistence after dedupe
 - per-user first summary generation after dedupe
 - hosted workspace rendering transcript from `GET /api/v1/media/{media_id}`
-- hosted workspace rendering summary from existing processing fields
+- hosted workspace rendering summary from the reserved `processing.safe_metadata.video_lite.summary` field
+- an integration path that submits a real ingest job, observes completed status, and then fetches the resulting media detail successfully
 - extension handoff into hosted ingest and workspace flow
 - paid-only gating through existing login and subscription surfaces
 
