@@ -8604,6 +8604,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                                 self._migrate_from_v38_to_v39(conn)
                             elif fallback_version == 39:
                                 self._migrate_from_v39_to_v40(conn)
+                            elif fallback_version == 40:
+                                self._migrate_from_v40_to_v41(conn)
+                            elif fallback_version == 41:
+                                self._migrate_from_v41_to_v42(conn)
+                            elif fallback_version == 42:
+                                self._migrate_from_v42_to_v43(conn)
+                            elif fallback_version == 43:
+                                self._migrate_from_v43_to_v44(conn)
                             else:
                                 raise SchemaError(  # noqa: TRY003, TRY301
                                     f"Migration path undefined for '{self._SCHEMA_NAME}' from version {current_initial_version} to {target_version}. "

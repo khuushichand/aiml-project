@@ -43,6 +43,9 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    resolve_trusted_database_path,
+)
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     begin_immediate_if_needed,
     configure_sqlite_connection,
@@ -110,7 +113,12 @@ class TopicMonitoringDB:
             )
             logger.error(msg)
             raise RuntimeError(msg)
-        self.db_path = str(path_obj)
+        self.db_path = str(
+            resolve_trusted_database_path(
+                db_path,
+                label="topic monitoring db",
+            )
+        )
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._ensure_schema()
