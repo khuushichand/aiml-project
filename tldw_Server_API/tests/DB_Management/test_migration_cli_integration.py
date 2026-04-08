@@ -87,8 +87,22 @@ def test_migrate_threads_create_backup_flag(monkeypatch):
             }
 
     monkeypatch.setattr(migrate_db_cli, "DatabaseMigrator", _FakeMigrator)
+    monkeypatch.setattr(migrate_db_cli, "get_default_db_path", lambda: placeholder_db_path)
+    monkeypatch.setattr(
+        migrate_db_cli.sys,
+        "argv",
+        [
+            "migrate_db.py",
+            "--db-path",
+            placeholder_db_path,
+            "migrate",
+            "--version",
+            "5",
+            "--no-backup",
+        ],
+    )
 
-    migrate_db_cli.migrate(placeholder_db_path, target_version=5, create_backup=False)
+    migrate_db_cli.main()
 
     expected = {
         "db_path": placeholder_db_path,

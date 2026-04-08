@@ -79,7 +79,7 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - The findings below were checked against the frozen baseline with `git show ec30354a2:...`; the Slice 1 issues recorded here are present in the baseline, not introduced only by the current dirty tree.
 - The focused pytest run did not complete cleanly because `tldw_Server_API/tests/Evaluations/test_evaluations_unified.py` currently errors during fixture setup in `Evaluations_DB` A/B-test store initialization due trusted-path rejection for temp DB files. That failure is outside the Slice 1 endpoint/auth surface and is recorded as verification context, not as a Slice 1 finding.
 ### Control and Data Flow Notes
-- Router surface: the Slice 1 router is `APIRouter(prefix="/evaluations", tags=["evaluations"])` in `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py`, then mounted under `/api/v1` by the main app. Slice 1 directly owns `/health`, `/metrics`, `/rate-limits`, `/geval`, `/rag`, `/response-quality`, `/propositions`, `/batch`, `/ocr`, `/ocr-pdf`, `/history`, the admin idempotency cleanup route, and the top-level router inclusions for CRUD, datasets, benchmarks, recipes, synthetic, webhooks, RAG pipeline, and embeddings A/B test surfaces.
+- Router surface: the Slice 1 router is `APIRouter(prefix="/evaluations", tags=["evaluations"])` in `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py`, then mounted under `/api/v1` by the main app. Slice 1 directly owns `/health`, `/metrics`, `/rate-limits`, `/geval`, `/rag`, `/response-quality`, `/propositions`, `/batch`, `/ocr`, `/ocr-pdf`, `/history`, and the admin idempotency cleanup route. It also reviews the inclusion/auth surface for the nested CRUD, datasets, benchmarks, recipes, synthetic, webhooks, RAG pipeline, and embeddings A/B routers, but not the downstream business logic for those routers, which is deferred to later slices.
 - Current-user resolution is split across two helpers in `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py`: `verify_api_key()` authenticates and returns a string context (`test_user`, `user_<id>`, or in single-user mode the raw API token), while `get_eval_request_user()` independently re-resolves the `User` object from request headers and bearer token. Several routes depend on both helpers at once.
 - Permission and role checks are layered rather than centralized. `require_eval_permissions()` reads `current_user.roles` and `current_user.permissions` from `get_eval_request_user()`, while heavy-eval admin gating uses `AuthPrincipal` claims via `_get_admin_principal_if_needed()` plus `enforce_heavy_evaluations_admin()`. The `/history` route mixes both systems in one handler by comparing requested user ids against `current_user` and then consulting `principal.roles`/`principal.permissions` for cross-user access.
 - Heavy-eval admin gating is currently attached to `/admin/idempotency/cleanup` through `Depends(_get_admin_principal_if_needed)` plus an in-handler `enforce_heavy_evaluations_admin(principal)` call. The helper is disabled entirely when `EVALS_HEAVY_ADMIN_ONLY` is false, so the dependency path and the enforcement path both branch on the same env flag.
@@ -117,12 +117,37 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Recommended tests: Add header-level assertions for one RG-backed allow response and one legacy-cost-only allow response, verifying that success responses do not advertise `X-RateLimit-PerMinute-Remaining: 0` unless the request is actually exhausted.
    Verification note: Baseline inspection shows `_apply_rate_limit_headers()` only gets a concrete per-minute remaining value from `meta`, while the success metadata returned by `check_rate_limit()` does not populate that field.
 ### Verification Run
+- `git show ec30354a2:tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py | sed -n '90,280p'`
+  `git show ec30354a2:tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py | sed -n '150,240p'`
+  `git show ec30354a2:tldw_Server_API/app/core/Evaluations/user_rate_limiter.py | sed -n '298,360p'`
+  `git show ec30354a2:tldw_Server_API/app/core/Evaluations/user_rate_limiter.py | sed -n '838,870p'`
+  Result: baseline verification for the recorded Slice 1 findings. These baseline snapshots matched the current-tree guard paths relevant to the findings: single-user auth still returns the raw token, the multi-user `TEST_MODE` shortcut is still present, and the success-path limiter metadata still omits a concrete per-minute remaining value.
 - `source .venv/bin/activate && rg -n "except Exception|_is_test_mode|pytest|TEST|fallback|record_byok_missing_credentials|HTTPException|require_eval_permissions|check_evaluation_rate_limit" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py tldw_Server_API/app/core/Evaluations/user_rate_limiter.py`
   Result: identified the Slice 1 guard-heavy branches for manual review, including pytest/test-mode bypasses, BYOK credential checks, the diagnostics-only route limiter shim, and broad exception handling in auth/header paths.
 - `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_unified.py tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/AuthNZ/integration/test_evaluations_permissions_claims.py tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py`
   Result: mixed signal. `test_evaluations_stage1_route_and_error_regressions.py`, `test_evaluations_auth_runtime_guards.py`, and `test_evaluations_permissions_claims.py` passed; two invariant tests skipped; `test_evaluations_unified.py` errored repeatedly during fixture setup before endpoint assertions ran because `Evaluations_DB` initialization now rejects temporary embeddings A/B test DB paths outside trusted roots (`InvalidStoragePathError("invalid_path")` from `db_path_utils.resolve_trusted_database_path`). This is useful environmental/baseline context but is outside the Slice 1 auth/API findings recorded above.
-- `source .venv/bin/activate && python - <<'PY' ... PY`
-  Result: manual auth-branch probe confirmed two concrete Slice 1 behaviors: multi-user `TEST_MODE` returned `verify_api_key= test_user` but `get_eval_request_user` still failed with `401 Invalid API key`, and single-user `verify_api_key` returned the raw API key string (`single_user_verify_api_key= primary-key-123456`).
+- `source .venv/bin/activate && python - <<'PY'`
+  `import asyncio, os`
+  `from starlette.requests import Request`
+  `from fastapi import HTTPException`
+  `from fastapi.security import HTTPAuthorizationCredentials`
+  `from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth`
+  `from tldw_Server_API.app.core.AuthNZ.settings import reset_settings`
+  `def mkreq(headers):`
+  `    return Request({'type':'http','method':'GET','path':'/api/v1/evaluations/geval','headers':headers,'client':('127.0.0.1',1234),'scheme':'http','query_string':b'','server':('testserver',80)})`
+  `async def main():`
+  `    os.environ['AUTH_MODE']='multi_user'; os.environ['TEST_MODE']='true'; os.environ['PYTEST_CURRENT_TEST']='manual::evals'; os.environ['SINGLE_USER_API_KEY']='primary-key-123456'; reset_settings()`
+  `    req=mkreq([(b'authorization', b'Bearer primary-key-123456')])`
+  `    creds=HTTPAuthorizationCredentials(scheme='Bearer', credentials='primary-key-123456')`
+  `    user_ctx=await eval_auth.verify_api_key(credentials=creds, x_api_key=None, request=req); print('verify_api_key=', user_ctx)`
+  `    try: await eval_auth.get_eval_request_user(req, _user_ctx=user_ctx, api_key=None, token='primary-key-123456', legacy_token_header=None)`
+  `    except HTTPException as exc: print('get_eval_request_user_http_exception=', exc.status_code, exc.detail)`
+  `    os.environ['AUTH_MODE']='single_user'; os.environ['TEST_MODE']='false'; reset_settings()`
+  `    req2=mkreq([(b'x-api-key', b'primary-key-123456')])`
+  `    single_ctx=await eval_auth.verify_api_key(credentials=None, x_api_key='primary-key-123456', request=req2); print('single_user_verify_api_key=', single_ctx)`
+  `asyncio.run(main())`
+  `PY`
+  Result: this reproducible manual auth-branch probe confirmed two concrete Slice 1 behaviors: multi-user `TEST_MODE` returned `verify_api_key= test_user` but `get_eval_request_user` still failed with `401 Invalid API key`, and single-user `verify_api_key` returned the raw API key string (`single_user_verify_api_key= primary-key-123456`).
 ### Slice Status
 - reviewed
 
