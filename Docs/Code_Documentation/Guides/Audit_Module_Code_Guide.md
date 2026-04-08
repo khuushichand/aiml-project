@@ -85,6 +85,14 @@ Shared audit DB schema versioning uses SQLite `PRAGMA user_version` (currently `
 
 Note: a legacy migration file exists for evaluation DB instrumentation (`tldw_Server_API/app/core/DB_Management/migrations_v6_audit_logging.py`). The unified audit DB schema is created by `UnifiedAuditService._init_database()` and is separate from that migration path.
 
+## Sharing Audit
+
+- Source of truth: Sharing audit events now persist in unified audit through `tldw_Server_API/app/core/Sharing/unified_share_audit.py`.
+- Service boundary: `tldw_Server_API/app/core/Sharing/share_audit_service.py` remains the Sharing-facing API, but its default path writes and reads through the unified Sharing audit boundary instead of `share_audit_log`.
+- Storage rule: even when general audit storage mode is `per_user`, Sharing audit still uses the shared audit DB so `GET /api/v1/sharing/admin/audit` remains a practical cross-user query surface.
+- Compatibility surface: `GET /api/v1/sharing/admin/audit` is the required operator-facing endpoint for Sharing audit history. Generic `GET /api/v1/audit/*` surfaces may include Sharing naturally in shared mode, but they are not required to aggregate Sharing events in `per_user` mode.
+- Historical backfill: `tldw_Server_API/app/core/Sharing/share_audit_unified_migration.py` migrates legacy `share_audit_log` rows idempotently, preserves historical timestamps, and reserves legacy integer ids as the compatibility ids returned by the Sharing admin audit API.
+
 ## Configuration
 
 Environment and settings (read from `app.core.config.settings` and env):

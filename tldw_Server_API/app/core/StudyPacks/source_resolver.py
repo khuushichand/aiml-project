@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_latest_transcription,
     get_media_by_id,
@@ -179,12 +182,21 @@ class StudySourceResolver:
         chunk_index = locator.get("chunk_index")
         if chunk_index is not None:
             chunk_index = _parse_non_negative_int(chunk_index, "chunk_index")
-            chunks = get_unvectorized_chunks_in_range(
-                self.media_db,
-                media_id,
-                chunk_index,
-                chunk_index,
-            )
+            try:
+                chunks = get_unvectorized_chunks_in_range(
+                    self.media_db,
+                    media_id,
+                    chunk_index,
+                    chunk_index,
+                )
+            except DatabaseError as exc:
+                logger.debug(
+                    "Chunk lookup failed for study source media {} chunk {}: {}",
+                    media_id,
+                    chunk_index,
+                    exc,
+                )
+                chunks = []
             evidence_parts = [
                 _clean_text(chunk.get("chunk_text"))
                 for chunk in chunks

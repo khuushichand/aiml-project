@@ -72,7 +72,12 @@ async def save_web_clip(
     await _check_rate_limit(rate_limiter=rate_limiter, current_user=current_user, scope="web_clipper.save")
     service = WebClipperService(db=db, user_id=current_user.id)
     try:
-        return await asyncio.to_thread(service.save_clip, payload)
+        result = await asyncio.to_thread(service.save_clip, payload)
+        if result.status == "failed":
+            detail = result.warnings[0] if result.warnings else "Canonical note save failed."
+            logger.error("Web clipper canonical save failed for clip_id {}: {}", payload.clip_id, detail)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+        return result
     except InputError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ConflictError as exc:

@@ -195,6 +195,10 @@ class Settings(BaseSettings):
         default=None,
         description="Optional secondary HS secret for dual-validation during rotations"
     )
+    JWT_SECONDARY_PRIVATE_KEY: Optional[str] = Field(
+        default=None,
+        description="Optional secondary private key (RS/ES) for legacy secret derivation during rotations"
+    )
     JWT_SECONDARY_PUBLIC_KEY: Optional[str] = Field(
         default=None,
         description="Optional secondary public key (RS/ES) for dual-validation during rotations"

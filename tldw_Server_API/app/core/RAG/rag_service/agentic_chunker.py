@@ -30,6 +30,7 @@ from typing import Any, Literal
 import numpy as np
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
 from tldw_Server_API.app.core.LLM_Calls.structured_output import (
     StructuredOutputOptions,
     parse_structured_output,
@@ -489,6 +490,8 @@ class AgenticToolbox:
                         res = db.lookup_section_by_heading(int(str(mid_raw)), heading)
                         if isinstance(res, tuple):
                             return (int(res[0]), int(res[1]))
+            except DatabaseError:
+                pass
             except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
         if self.cfg.enable_section_index and doc.id in self._sections:

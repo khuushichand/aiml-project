@@ -2,9 +2,17 @@ import os
 import json
 from pathlib import Path
 
+from tenacity import Future, RetryError
+
 import tldw_Server_API.app.core.Monitoring.notification_service as notification_service
 from tldw_Server_API.app.core.Monitoring.notification_service import NotificationService
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
+
+
+def _retry_error(message: str) -> RetryError:
+    attempt = Future(3)
+    attempt.set_exception(RuntimeError(message))
+    return RetryError(attempt)
 
 
 def test_notification_threshold_and_file_sink(tmp_path, monkeypatch):
@@ -174,3 +182,82 @@ def test_notification_send_webhook_invokes_fetch(monkeypatch):
 
     assert calls["url"] == "https://example.com/hook"
     assert calls["method"] == "POST"
+
+
+def test_send_webhook_safe_swallows_retry_exhaustion(monkeypatch):
+    svc = NotificationService()
+    monkeypatch.setattr(
+        svc,
+        "_send_webhook",
+        lambda payload: (_ for _ in ()).throw(_retry_error("webhook boom")),
+    )
+
+    svc._send_webhook_safe({"event": "test"})
+
+
+def test_send_email_safe_swallows_retry_exhaustion(monkeypatch):
+    svc = NotificationService()
+    alert = TopicAlert(
+        user_id="u1",
+        scope_type="user",
+        scope_id="u1",
+        source="chat.input",
+        watchlist_id="watch-1",
+        rule_category="system",
+        rule_severity="critical",
+        pattern="cpu high",
+        text_snippet="CPU at 95%",
+    )
+    monkeypatch.setattr(
+        svc,
+        "_send_email",
+        lambda payload: (_ for _ in ()).throw(_retry_error("email boom")),
+    )
+
+    svc._send_email_safe(alert)
+
+
+def test_notify_generic_only_schedules_webhook_path(monkeypatch, tmp_path):
+    svc = NotificationService()
+    svc.enabled = True
+    svc.min_severity = "info"
+    svc.file_path = str(tmp_path / "notifications.jsonl")
+    svc.webhook_url = "https://example.com/hook"
+    svc.email_to = "alerts@example.com"
+    svc.smtp_host = "smtp.example.com"
+    svc.email_from = "sender@example.com"
+
+    targets: list[object] = []
+
+    class _FakeThread:
+        def __init__(self, *, target=None, args=(), daemon=None):  # noqa: ANN001, ANN002
+            _ = (args, daemon)
+            targets.append(target)
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(notification_service.threading, "Thread", _FakeThread)
+
+    result = svc.notify_generic({"type": "guardian_alert", "severity": "warning", "user_id": "u1"})
+
+    assert result == "logged"
+    assert svc._send_webhook_safe in targets
+    assert svc._send_email_safe not in targets
+
+
+def test_flush_digest_returns_count_without_dispatch(monkeypatch):
+    svc = NotificationService()
+    svc.enabled = True
+    svc.min_severity = "info"
+    svc.digest_mode = "hourly"
+    svc.notify_or_batch({"type": "guardian_alert", "severity": "info", "user_id": "u1"})
+    svc.notify_or_batch({"type": "guardian_alert", "severity": "info", "user_id": "u1"})
+    monkeypatch.setattr(
+        svc,
+        "notify_generic",
+        lambda payload: (_ for _ in ()).throw(AssertionError("flush_digest must not dispatch")),
+    )
+
+    assert svc.flush_digest("u1") == 2
+    assert svc.get_pending_digest_count("u1") == 0

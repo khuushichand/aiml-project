@@ -150,6 +150,48 @@ async def test_extract_content_string_response():
 
 
 @pytest.mark.asyncio
+async def test_handles_list_message_content_fragments():
+    from tldw_Server_API.app.core.Writing.manuscript_analysis import analyze_pacing
+
+    with patch(
+        f"{MODULE}.perform_chat_api_call_async",
+        new_callable=AsyncMock,
+        return_value={
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": '{"pacing": 0.4, '},
+                            {"type": "text", "text": '"tension": 0.2, '},
+                            {
+                                "type": "text",
+                                "text": '"assessment": "Strong", "beats": []}',
+                            },
+                        ]
+                    }
+                }
+            ]
+        },
+    ):
+        result = await analyze_pacing("Text")
+        assert result["pacing"] == 0.4
+        assert result["tension"] == 0.2
+        assert result["assessment"] == "Strong"
+
+
+def test_extract_content_dict_message_content_block():
+    from tldw_Server_API.app.core.Writing.manuscript_analysis import _extract_content
+
+    response = {
+        "choices": [
+            {"message": {"content": {"type": "text", "text": '{"pacing": 0.9}'}}}
+        ]
+    }
+
+    assert _extract_content(response) == '{"pacing": 0.9}'
+
+
+@pytest.mark.asyncio
 async def test_strip_markdown_fences_no_fences():
     from tldw_Server_API.app.core.Writing.manuscript_analysis import _strip_markdown_fences
 

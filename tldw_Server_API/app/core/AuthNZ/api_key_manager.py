@@ -124,7 +124,7 @@ def normalize_scope(scope: Optional[Union[str, list[str]]]) -> set[str]:
 
     Examples:
         >>> normalize_scope(None)
-        {'read'}
+        set()
         >>> normalize_scope("write")
         {'write'}
         >>> normalize_scope(["read", "write"])
@@ -133,7 +133,7 @@ def normalize_scope(scope: Optional[Union[str, list[str]]]) -> set[str]:
         {'read', 'admin'}
     """
     if scope is None:
-        return {"read"}
+        return set()
 
     if isinstance(scope, str):
         scope_str = scope.strip()
@@ -151,7 +151,7 @@ def normalize_scope(scope: Optional[Union[str, list[str]]]) -> set[str]:
     if isinstance(scope, (list, tuple)):
         return {s.strip().lower() for s in scope if isinstance(s, str) and s.strip()}
 
-    return {"read"}
+    return set()
 
 
 def has_scope(key_scopes: set[str], required_scope: str) -> bool:

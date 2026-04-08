@@ -534,6 +534,14 @@ class TopicMonitoringService:
             ) or {}
             self._enabled = self._resolve_enabled(monitoring_cfg)
             self._max_scan_chars = self._resolve_max_scan_chars()
+            self._dedup_window_seconds = self._coerce_int(
+                os.getenv("TOPIC_MONITOR_DEDUP_SECONDS", monitoring_cfg.get("dedup_seconds", 300)),
+                300,
+            )
+            self._simhash_distance = self._coerce_int(
+                os.getenv("TOPIC_MONITOR_SIMHASH_DISTANCE", monitoring_cfg.get("simhash_distance", 3)),
+                3,
+            )
             self._dedupe_state = {}
             self._dedupe_stream_last_seen = {}
             self._dedupe_last_cleanup = 0.0

@@ -52,7 +52,7 @@ _ALLOWED_ATTACHMENT_MEDIA_TYPES: frozenset[str] = frozenset({
     "application/json",
 })
 _FULL_EXTRACT_SPILLOVER_THRESHOLD = 20_000
-_TRUNCATION_MARKER = "Truncated. Full extract attached."
+_TRUNCATION_MARKER = "Truncated. Full extract preserved in clip metadata."
 _ENRICHMENT_SECTION_START = "<!-- web-clipper-enrichment:start -->"
 _ENRICHMENT_SECTION_END = "<!-- web-clipper-enrichment:end -->"
 
@@ -161,7 +161,7 @@ class WebClipperService:
                     note_summary=note_summary,
                     note_content=note_content,
                 )
-            except CharactersRAGDBError as exc:
+            except (CharactersRAGDBError, ConflictError, InputError) as exc:
                 warnings.append(f"Workspace placement failed: {exc}")
 
         status = self._derive_save_status(
@@ -355,9 +355,9 @@ class WebClipperService:
 
     def _select_primary_body(self, request: WebClipperSaveRequest) -> str:
         for candidate in (
-            request.content.full_extract,
             request.content.visible_body,
             request.content.selected_text,
+            request.content.full_extract,
         ):
             text = str(candidate or "").strip()
             if text:
@@ -460,13 +460,18 @@ class WebClipperService:
     def _visible_body_from_note(self, note: dict[str, Any]) -> str:
         content = str(note.get("content") or "")
         without_machine = self._strip_machine_section(content)
-        source_prefix = "Source:"
         parts = [part.strip() for part in without_machine.split("\n\n") if part.strip()]
-        filtered_parts = [part for part in parts if not part.startswith(source_prefix)]
-        if len(filtered_parts) >= 2:
-            return "\n\n".join(filtered_parts[1:]).strip()
-        if filtered_parts:
-            return filtered_parts[-1]
+        source_index = next(
+            (index for index, part in enumerate(parts) if part.startswith("Source:")),
+            None,
+        )
+        if source_index is not None:
+            body_parts = parts[source_index + 1:]
+            if body_parts:
+                return "\n\n".join(body_parts).strip()
+            return ""
+        if parts:
+            return "\n\n".join(parts).strip()
         return ""
 
     def _request_from_clip_state(
@@ -506,22 +511,52 @@ class WebClipperService:
         return None
 
     def _sync_keywords(self, note_id: str, keywords: list[str], warnings: list[str]) -> None:
+        normalized_keywords: list[str] = []
+        seen_keywords: set[str] = set()
         for keyword in keywords:
             text = str(keyword or "").strip()
             if not text:
                 continue
+            if text in seen_keywords:
+                continue
+            seen_keywords.add(text)
+            normalized_keywords.append(text)
+
+        existing_keywords = self.db.get_keywords_for_note(note_id)
+        existing_ids_by_text = {
+            str(row["keyword"]): int(row["id"])
+            for row in existing_keywords
+        }
+        desired_keyword_ids: set[int] = set()
+
+        for text in normalized_keywords:
             try:
-                existing_keyword = self.db.get_keyword_by_text(text)
-                if existing_keyword is not None:
-                    keyword_id = int(existing_keyword["id"])
+                if text in existing_ids_by_text:
+                    keyword_id = existing_ids_by_text[text]
                 else:
-                    keyword_id = self.db.add_keyword(text)
-                    if keyword_id is None:
-                        warnings.append(f"Keyword '{text}' could not be created.")
-                        continue
-                self.db.link_note_to_keyword(note_id, keyword_id)
+                    existing_keyword = self.db.get_keyword_by_text(text)
+                    if existing_keyword is not None:
+                        keyword_id = int(existing_keyword["id"])
+                    else:
+                        keyword_id = self.db.add_keyword(text)
+                        if keyword_id is None:
+                            warnings.append(f"Keyword '{text}' could not be created.")
+                            continue
+                desired_keyword_ids.add(keyword_id)
+                if keyword_id not in existing_ids_by_text.values():
+                    self.db.link_note_to_keyword(note_id, keyword_id)
             except CharactersRAGDBError as exc:
                 warnings.append(f"Keyword '{text}' could not be linked: {exc}")
+
+        for existing_keyword in existing_keywords:
+            keyword_id = int(existing_keyword["id"])
+            if keyword_id in desired_keyword_ids:
+                continue
+            keyword_text = str(existing_keyword["keyword"])
+            try:
+                self.db.unlink_note_from_keyword(note_id, keyword_id)
+            except CharactersRAGDBError as exc:
+                warnings.append(f"Keyword '{keyword_text}' could not be removed: {exc}")
 
     def _sync_note_folder(self, note_id: str, folder_id: int | None, warnings: list[str]) -> None:
         if folder_id is None:
@@ -633,10 +668,20 @@ class WebClipperService:
         existing_rows = self.db.list_note_clipper_workspace_placements(request.clip_id)
         for row in existing_rows:
             if str(row.get("workspace_id")) == request.workspace.workspace_id:
+                workspace_note_id = row.get("workspace_note_id")
+                if workspace_note_id is None:
+                    raise CharactersRAGDBError("Workspace placement is missing a workspace note id.")  # noqa: TRY003
+                self._sync_workspace_note(
+                    workspace_id=request.workspace.workspace_id,
+                    workspace_note_id=int(workspace_note_id),
+                    title=note_summary.title,
+                    content=note_content,
+                    keywords=request.note.keywords,
+                )
                 self.db.upsert_note_clipper_workspace_placement(
                     clip_id=request.clip_id,
                     workspace_id=request.workspace.workspace_id,
-                    workspace_note_id=row.get("workspace_note_id"),
+                    workspace_note_id=workspace_note_id,
                     source_note_id=request.clip_id,
                     source_note_version=note_summary.version,
                 )
@@ -666,6 +711,44 @@ class WebClipperService:
             source_note_version=note_summary.version,
         )
         return self._placement_response_from_row(placement_row)
+
+    def _sync_workspace_note(
+        self,
+        *,
+        workspace_id: str,
+        workspace_note_id: int,
+        title: str,
+        content: str,
+        keywords: list[str],
+    ) -> None:
+        workspace_note = self.db.execute_query(
+            "SELECT * FROM workspace_notes WHERE workspace_id = ? AND id = ? AND deleted = 0",
+            (workspace_id, workspace_note_id),
+        ).fetchone()
+        if workspace_note is None:
+            raise ConflictError(
+                f"Workspace note '{workspace_note_id}' not found.",
+                entity="workspace_notes",
+                entity_id=str(workspace_note_id),
+            )
+
+        desired_keywords_json = json.dumps(keywords)
+        updates: dict[str, Any] = {}
+        if str(workspace_note["title"] or "") != title:
+            updates["title"] = title
+        if str(workspace_note["content"] or "") != content:
+            updates["content"] = content
+        if str(workspace_note["keywords_json"] or "[]") != desired_keywords_json:
+            updates["keywords_json"] = desired_keywords_json
+        if not updates:
+            return
+
+        self.db.update_workspace_note(
+            workspace_id,
+            workspace_note_id,
+            updates,
+            expected_version=int(workspace_note["version"]),
+        )
 
     def _derive_save_status(
         self,

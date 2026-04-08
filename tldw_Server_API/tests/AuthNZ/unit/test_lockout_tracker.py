@@ -14,7 +14,7 @@ class _StubRepo:
 
     def __init__(self) -> None:
         self._attempts: dict[tuple[str, str], dict[str, object]] = {}
-        self._lockouts: dict[str, datetime] = {}
+        self._lockouts: dict[tuple[str, str], datetime] = {}
 
     async def ensure_schema(self) -> None:
         return None
@@ -43,7 +43,7 @@ class _StubRepo:
         lockout_expires = None
         if is_locked:
             lockout_expires = now + window_delta
-            self._lockouts[identifier] = lockout_expires
+            self._lockouts[key] = lockout_expires
 
         return {
             "attempt_count": attempt_count,
@@ -51,17 +51,18 @@ class _StubRepo:
             "lockout_expires": lockout_expires,
         }
 
-    async def get_active_lockout(self, *, identifier: str, now: datetime):
-        locked_until = self._lockouts.get(identifier)
+    async def get_active_lockout(self, *, identifier: str, attempt_type: str = "login", now: datetime):
+        key = (identifier, attempt_type)
+        locked_until = self._lockouts.get(key)
         if locked_until and locked_until > now:
             return locked_until
         if locked_until:
-            self._lockouts.pop(identifier, None)
+            self._lockouts.pop(key, None)
         return None
 
     async def reset_failed_attempts_and_lockout(self, *, identifier: str, attempt_type: str) -> None:
         self._attempts.pop((identifier, attempt_type), None)
-        self._lockouts.pop(identifier, None)
+        self._lockouts.pop((identifier, attempt_type), None)
 
 
 def _make_tracker(settings=None) -> LockoutTracker:
@@ -93,9 +94,42 @@ async def test_lockout_triggers_after_threshold():
 
 
 @pytest.mark.asyncio
-async def test_check_lockout_returns_true_when_locked():
+async def test_check_lockout_is_scoped_by_attempt_type():
+    tracker = _make_tracker()
+    identifier = "user:alice"
+
+    for _ in range(3):
+        await tracker.record_failed_attempt(identifier, attempt_type="login")
+
+    login_locked, _ = await tracker.check_lockout(identifier, attempt_type="login")
+    reset_locked, _ = await tracker.check_lockout(identifier, attempt_type="password_reset")
+
+    assert login_locked is True
+    assert reset_locked is False
+
+
+@pytest.mark.asyncio
+async def test_reset_failed_attempts_only_clears_matching_attempt_type():
     tracker = _make_tracker()
     identifier = "user:bob"
+
+    for _ in range(3):
+        await tracker.record_failed_attempt(identifier, attempt_type="login")
+        await tracker.record_failed_attempt(identifier, attempt_type="password_reset")
+
+    await tracker.reset_failed_attempts(identifier, attempt_type="login")
+
+    login_locked, _ = await tracker.check_lockout(identifier, attempt_type="login")
+    reset_locked, _ = await tracker.check_lockout(identifier, attempt_type="password_reset")
+
+    assert login_locked is False
+    assert reset_locked is True
+
+
+@pytest.mark.asyncio
+async def test_check_lockout_returns_true_when_locked():
+    tracker = _make_tracker()
+    identifier = "user:charlie"
 
     for _ in range(3):
         await tracker.record_failed_attempt(identifier)
@@ -108,7 +142,7 @@ async def test_check_lockout_returns_true_when_locked():
 @pytest.mark.asyncio
 async def test_reset_clears_lockout():
     tracker = _make_tracker()
-    identifier = "user:charlie"
+    identifier = "user:dave"
 
     for _ in range(3):
         await tracker.record_failed_attempt(identifier)
@@ -124,7 +158,7 @@ async def test_reset_clears_lockout():
 @pytest.mark.asyncio
 async def test_no_lockout_below_threshold():
     tracker = _make_tracker()
-    identifier = "user:dave"
+    identifier = "user:erin"
 
     result = await tracker.record_failed_attempt(identifier)
     assert result["is_locked"] is False
