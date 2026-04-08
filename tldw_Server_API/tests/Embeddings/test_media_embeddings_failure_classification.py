@@ -1,0 +1,99 @@
+import pytest
+
+from tldw_Server_API.app.api.v1.endpoints import embeddings_v5_production_enhanced, media_embeddings
+
+
+@pytest.mark.asyncio
+async def test_storage_failure_after_successful_primary_generation_returns_storage_error_and_skips_fallback(monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def fake_create_embeddings_batch_async(*, texts, provider, model_id, metadata):
+        calls.append((provider, model_id))
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    class FakeChromaDBManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            self.user_id = user_id
+            self.user_embedding_config = user_embedding_config
+
+        def store_in_chroma(self, *args, **kwargs):
+            raise RuntimeError("chroma write failed")
+
+    monkeypatch.setattr(
+        embeddings_v5_production_enhanced,
+        "create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+    monkeypatch.setattr(media_embeddings, "chunk_media_content", lambda *_args, **_kwargs: [{"text": "hello", "index": 0, "start": 0, "end": 5}])
+    monkeypatch.setattr(media_embeddings, "ChromaDBManager", FakeChromaDBManager)
+    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})  # nosec B108
+
+    result = await media_embeddings.generate_embeddings_for_media(
+        media_id=9,
+        media_content={
+            "media_item": {"title": "Doc", "author": "Author", "metadata": {}},
+            "content": {"content": "hello"},
+        },
+        embedding_model="primary-model",
+        embedding_provider="primary-provider",
+        chunk_size=1000,
+        chunk_overlap=200,
+        user_id="tenant-1",
+    )
+
+    assert result["status"] == "error"
+    assert "storage" in result["message"].lower() or "storage" in result["error"].lower()
+    assert "chroma" in result["message"].lower() or "chroma" in result["error"].lower()
+    assert calls == [("primary-provider", "primary-model")]
+
+
+@pytest.mark.asyncio
+async def test_generation_failure_can_fall_back_and_succeed(monkeypatch):
+    calls: list[tuple[str, str]] = []
+    stores: list[str] = []
+
+    async def fake_create_embeddings_batch_async(*, texts, provider, model_id, metadata):
+        calls.append((provider, model_id))
+        if provider == "primary-provider":
+            raise RuntimeError("primary provider failed")
+        return [[0.4, 0.5, 0.6] for _ in texts]
+
+    class FakeChromaDBManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            self.user_id = user_id
+            self.user_embedding_config = user_embedding_config
+
+        def store_in_chroma(self, *, collection_name, texts, embeddings, ids, metadatas, embedding_model_id_for_dim_check=None):
+            stores.append(embedding_model_id_for_dim_check)
+
+    monkeypatch.setattr(
+        embeddings_v5_production_enhanced,
+        "create_embeddings_batch_async",
+        fake_create_embeddings_batch_async,
+        raising=True,
+    )
+    monkeypatch.setattr(media_embeddings, "chunk_media_content", lambda *_args, **_kwargs: [{"text": "hello", "index": 0, "start": 0, "end": 5}])
+    monkeypatch.setattr(media_embeddings, "ChromaDBManager", FakeChromaDBManager)
+    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})  # nosec B108
+
+    result = await media_embeddings.generate_embeddings_for_media(
+        media_id=10,
+        media_content={
+            "media_item": {"title": "Doc", "author": "Author", "metadata": {}},
+            "content": {"content": "hello"},
+        },
+        embedding_model="primary-model",
+        embedding_provider="primary-provider",
+        chunk_size=1000,
+        chunk_overlap=200,
+        user_id="tenant-2",
+    )
+
+    assert result["status"] == "success"
+    assert result["embedding_count"] == 1
+    assert calls == [
+        ("primary-provider", "primary-model"),
+        ("huggingface", media_embeddings.FALLBACK_EMBEDDING_MODEL),
+    ]
+    assert stores == [media_embeddings.FALLBACK_EMBEDDING_MODEL]

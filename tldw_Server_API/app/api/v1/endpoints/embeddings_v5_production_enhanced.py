@@ -27,6 +27,7 @@ from datetime import datetime
 from enum import Enum
 from fnmatch import fnmatch
 from functools import lru_cache
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any
 
 import numpy as np
@@ -1200,13 +1201,39 @@ def count_tokens(text: str, model_name: str) -> int:
         logger.warning(f"Token counting failed: {e}, estimating")
         return len(text) // 4
 
-def get_cache_key(text: str, provider: str, model: str, dimensions: int | None = None) -> str:
+def get_cache_key(
+    text: str,
+    provider: str,
+    model: str,
+    dimensions: int | None = None,
+    backend_identity: str | None = None,
+) -> str:
     """Generate cache key for embedding"""
     key_parts = [text, provider, model]
     if dimensions:
         key_parts.append(str(dimensions))
+    if backend_identity:
+        key_parts.append(backend_identity)
     key_string = "|".join(key_parts)
     return hashlib.sha256(key_string.encode()).hexdigest()
+
+
+def _normalize_cache_backend_identity(config: dict[str, Any], provider: str) -> str | None:
+    """Derive stable backend identity for cache partitioning."""
+    if provider != "local_api":
+        return None
+
+    api_url = str(config.get("api_url") or "").strip()
+    if not api_url:
+        return None
+
+    parsed = urlsplit(api_url)
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname
+        if parsed.port is not None:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
+    return api_url.rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -1291,9 +1318,7 @@ def tokens_to_texts(
                 len(arr),
                 exc,
             )
-            # Fall back to an empty string to preserve request shape; the raw
-            # token counts are still used for limits/usage accounting.
-            texts.append("")
+            raise ValueError("Invalid token array input") from exc
         return texts, total_tokens, token_counts
 
     # Batch of token arrays
@@ -1313,7 +1338,7 @@ def tokens_to_texts(
                     len(arr),
                     exc,
                 )
-                texts.append("")
+                raise ValueError("Invalid token array input") from exc
         return texts, total_tokens, token_counts
 
     raise ValueError("Invalid token array input")
@@ -2004,9 +2029,40 @@ async def create_embeddings_batch_async(
     uncached_texts = []
     uncached_indices = []
 
+    try:
+        provider_enum = EmbeddingProvider(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown provider: {provider}"
+        ) from None
+
+    try:
+        _validate_dimensions_request(provider, model_id or "", dimensions)
+        config = build_provider_config(
+            provider_enum,
+            model_id,
+            api_key,
+            api_url,
+            dimensions,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    backend_identity = _normalize_cache_backend_identity(config, provider)
+
     # Check cache
     for i, text in enumerate(texts):
-        cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
+        cache_key = get_cache_key(
+            text,
+            provider,
+            model_id or "default",
+            dimensions,
+            backend_identity=backend_identity,
+        )
         cached = await embedding_cache.get(cache_key)
 
         if cached:
@@ -2020,29 +2076,6 @@ async def create_embeddings_batch_async(
 
     # Process uncached texts
     if uncached_texts:
-        try:
-            provider_enum = EmbeddingProvider(provider)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unknown provider: {provider}"
-            ) from None
-
-        try:
-            _validate_dimensions_request(provider, model_id or "", dimensions)
-            config = build_provider_config(
-                provider_enum,
-                model_id,
-                api_key,
-                api_url,
-                dimensions
-            )
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc),
-            ) from exc
-
         # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
         if (
@@ -2121,7 +2154,13 @@ async def create_embeddings_batch_async(
             embedding = all_new_embeddings[i]
             embeddings[idx] = embedding
 
-            cache_key = get_cache_key(text, provider, model_id or "default", dimensions)
+            cache_key = get_cache_key(
+                text,
+                provider,
+                model_id or "default",
+                dimensions,
+                backend_identity=backend_identity,
+            )
             await embedding_cache.set(cache_key, embedding)
 
     return embeddings
