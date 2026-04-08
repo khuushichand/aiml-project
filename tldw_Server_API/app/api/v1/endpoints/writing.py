@@ -1636,59 +1636,53 @@ async def import_writing_snapshot(
             for session_item in payload.snapshot.sessions:
                 session_name = session_item.name.strip()
                 session_id = session_item.id.strip() if isinstance(session_item.id, str) and session_item.id.strip() else None
-                try:
+                if session_id:
+                    existing = db.get_writing_session(session_id, include_deleted=True)
+                    if existing:
+                        if bool(existing.get("deleted")):
+                            _restore_soft_deleted_writing_session(
+                                conn,
+                                db,
+                                session_id=session_id,
+                                name=session_name,
+                                payload=session_item.payload,
+                                schema_version=int(session_item.schema_version),
+                                version_parent_id=session_item.version_parent_id,
+                            )
+                        else:
+                            db.update_writing_session(
+                                session_id,
+                                {
+                                    "name": session_name,
+                                    "payload": session_item.payload,
+                                    "schema_version": int(session_item.schema_version),
+                                    "version_parent_id": session_item.version_parent_id,
+                                },
+                                int(existing.get("version") or 1),
+                            )
+                    else:
+                        db.add_writing_session(
+                            name=session_name,
+                            payload=session_item.payload,
+                            schema_version=int(session_item.schema_version),
+                            session_id=session_id,
+                            version_parent_id=session_item.version_parent_id,
+                        )
+                else:
                     db.add_writing_session(
                         name=session_name,
                         payload=session_item.payload,
                         schema_version=int(session_item.schema_version),
-                        session_id=session_id,
                         version_parent_id=session_item.version_parent_id,
                     )
-                except ConflictError:
-                    if not session_id:
-                        raise
-                    existing = db.get_writing_session(session_id, include_deleted=True)
-                    if not existing:
-                        raise
-                    if bool(existing.get("deleted")):
-                        _restore_soft_deleted_writing_session(
-                            conn,
-                            db,
-                            session_id=session_id,
-                            name=session_name,
-                            payload=session_item.payload,
-                            schema_version=int(session_item.schema_version),
-                            version_parent_id=session_item.version_parent_id,
-                        )
-                    else:
-                        db.update_writing_session(
-                            session_id,
-                            {
-                                "name": session_name,
-                                "payload": session_item.payload,
-                                "schema_version": int(session_item.schema_version),
-                                "version_parent_id": session_item.version_parent_id,
-                            },
-                            int(existing.get("version") or 1),
-                        )
                 imported_sessions += 1
 
             for template_item in payload.snapshot.templates:
                 template_name = template_item.name.strip()
                 if not template_name:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Template name cannot be empty")
-                try:
-                    db.add_writing_template(
-                        name=template_name,
-                        payload=template_item.payload,
-                        schema_version=int(template_item.schema_version),
-                        version_parent_id=template_item.version_parent_id,
-                        is_default=bool(template_item.is_default),
-                    )
-                except ConflictError:
-                    existing = db.get_writing_template_by_name(template_name)
-                    if not existing:
-                        raise
+                existing_template = db.get_writing_template_by_name(template_name)
+                if existing_template:
                     db.update_writing_template(
                         template_name,
                         {
@@ -1697,7 +1691,15 @@ async def import_writing_snapshot(
                             "version_parent_id": template_item.version_parent_id,
                             "is_default": bool(template_item.is_default),
                         },
-                        int(existing.get("version") or 1),
+                        int(existing_template.get("version") or 1),
+                    )
+                else:
+                    db.add_writing_template(
+                        name=template_name,
+                        payload=template_item.payload,
+                        schema_version=int(template_item.schema_version),
+                        version_parent_id=template_item.version_parent_id,
+                        is_default=bool(template_item.is_default),
                     )
                 imported_templates += 1
 
@@ -1705,20 +1707,8 @@ async def import_writing_snapshot(
                 theme_name = theme_item.name.strip()
                 if not theme_name:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Theme name cannot be empty")
-                try:
-                    db.add_writing_theme(
-                        name=theme_name,
-                        class_name=theme_item.class_name,
-                        css=theme_item.css,
-                        schema_version=int(theme_item.schema_version),
-                        version_parent_id=theme_item.version_parent_id,
-                        is_default=bool(theme_item.is_default),
-                        order_index=int(theme_item.order),
-                    )
-                except ConflictError:
-                    existing = db.get_writing_theme_by_name(theme_name)
-                    if not existing:
-                        raise
+                existing_theme = db.get_writing_theme_by_name(theme_name)
+                if existing_theme:
                     db.update_writing_theme(
                         theme_name,
                         {
@@ -1729,7 +1719,17 @@ async def import_writing_snapshot(
                             "is_default": bool(theme_item.is_default),
                             "order_index": int(theme_item.order),
                         },
-                        int(existing.get("version") or 1),
+                        int(existing_theme.get("version") or 1),
+                    )
+                else:
+                    db.add_writing_theme(
+                        name=theme_name,
+                        class_name=theme_item.class_name,
+                        css=theme_item.css,
+                        schema_version=int(theme_item.schema_version),
+                        version_parent_id=theme_item.version_parent_id,
+                        is_default=bool(theme_item.is_default),
+                        order_index=int(theme_item.order),
                     )
                 imported_themes += 1
 
