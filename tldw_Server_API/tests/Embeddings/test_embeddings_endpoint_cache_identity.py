@@ -7,11 +7,11 @@ class RecordingCache:
         self.get_keys: list[str] = []
         self.set_keys: list[str] = []
 
-    async def get(self, key):
+    async def get(self, key: str) -> object | None:
         self.get_keys.append(key)
         return self.data.get(key)
 
-    async def set(self, key, value):
+    async def set(self, key: str, value: object) -> None:
         self.set_keys.append(key)
         self.data[key] = value
 
