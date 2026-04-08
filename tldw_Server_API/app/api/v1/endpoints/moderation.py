@@ -435,6 +435,9 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
     service = base_service
     user_id = _normalize_optional_identifier(payload.user_id)
 
+    supervised_engine = None
+    guardian_chat_type = "regular"
+    guardian_dep_uid = None
     if payload.apply_guardian_overlay:
         if user_id is None:
             raise HTTPException(
@@ -447,13 +450,15 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="dependent_user_id must match user_id for live-chat guardian simulation",
             )
-        chat_type = _normalize_chat_type(payload.chat_type)
+        guardian_chat_type = _normalize_chat_type(payload.chat_type)
         runtime = bootstrap_guardian_moderation_runtime(
             user_id=user_id,
             dependent_user_id=dependent_user_id,
-            chat_type=chat_type,
+            chat_type=guardian_chat_type,
         )
+        guardian_dep_uid = runtime.dependent_user_id
         if runtime.supervised_engine is not None:
+            supervised_engine = runtime.supervised_engine
             service = GuardianModerationProxy(
                 base_service,
                 runtime.supervised_engine,
@@ -463,11 +468,41 @@ async def test_moderation(payload: ModerationTestRequest) -> ModerationTestRespo
 
     effective_policy = service.get_effective_policy(user_id)
     result = service.evaluate_text(payload.text, effective_policy, payload.phase)
+
+    action = result.action
+    category = result.category
+
+    # When guardian overlay is active, run a direct supervised-engine pass
+    # so notify-only rules are preserved (the proxy coerces notify→warn).
+    if supervised_engine is not None and guardian_dep_uid is not None:
+        supervised_result = supervised_engine.check_text(
+            payload.text,
+            guardian_dep_uid,
+            phase=payload.phase,
+            chat_type=guardian_chat_type,
+        )
+        if supervised_result.action == "notify" and action == "pass":
+            # The base pipeline saw nothing actionable but the supervised
+            # engine matched a notify-only rule — surface it.
+            action = "notify"
+            category = supervised_result.matched_category or category
+        elif supervised_result.action == "notify" and action == "warn":
+            # The proxy coerced notify→warn; restore the original action
+            # when the base policy itself didn't produce the warn.
+            base_result = base_service.evaluate_text(
+                payload.text,
+                base_service.get_effective_policy(user_id),
+                payload.phase,
+            )
+            if base_result.action == "pass":
+                action = "notify"
+                category = supervised_result.matched_category or category
+
     return ModerationTestResponse(
-        flagged=result.action != "pass",
-        action=result.action,
+        flagged=action != "pass",
+        action=action,
         sample=result.sample,
         redacted_text=result.redacted_text,
         effective=effective_policy.to_dict(),
-        category=result.category,
+        category=category,
     )

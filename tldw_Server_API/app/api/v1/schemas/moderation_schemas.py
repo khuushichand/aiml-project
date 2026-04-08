@@ -150,7 +150,7 @@ class ModerationTestRequest(BaseModel):
 
 class ModerationTestResponse(BaseModel):
     flagged: bool
-    action: Literal['block', 'redact', 'warn', 'pass']
+    action: Literal['block', 'redact', 'warn', 'notify', 'pass']
     sample: Optional[str] = None
     redacted_text: Optional[str] = None
     effective: dict[str, Any]
