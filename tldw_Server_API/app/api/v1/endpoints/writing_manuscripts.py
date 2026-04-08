@@ -166,6 +166,26 @@ def _get_helper(db: CharactersRAGDB) -> ManuscriptDBHelper:
     return ManuscriptDBHelper(db)
 
 
+def _field_present(payload: Any, field_name: str) -> bool:
+    """Return True when a field was explicitly included in the request payload."""
+    return field_name in payload.model_fields_set
+
+
+def _require_non_empty_text(value: str | None, label: str) -> str:
+    """Normalize required text fields and reject null/blank values."""
+    if value is None:
+        raise ValueError(f"{label} cannot be null")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{label} cannot be empty")
+    return normalized
+
+
+def _normalize_mapping_field(value: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize nullable mapping fields for storage."""
+    return {} if value is None else value
+
+
 # ===================================================================
 # Projects
 # ===================================================================
@@ -210,16 +230,21 @@ async def create_project(
 ) -> ManuscriptProjectResponse:
     """Create a new manuscript project."""
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         project_id = helper.create_project(
-            title=payload.title.strip(),
+            title=title,
             subtitle=payload.subtitle,
             author=payload.author,
             genre=payload.genre,
             status=payload.status,
             synopsis=payload.synopsis,
             target_word_count=payload.target_word_count,
-            settings=payload.settings,
+            settings=_normalize_mapping_field(payload.settings),
             project_id=payload.id,
         )
         project = helper.get_project(project_id)
@@ -269,22 +294,25 @@ async def update_project(
 ) -> ManuscriptProjectResponse:
     """Update a manuscript project with optimistic locking."""
     update_data: dict[str, Any] = {}
-    if payload.title is not None:
-        update_data["title"] = payload.title.strip()
-    if payload.subtitle is not None:
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "subtitle"):
         update_data["subtitle"] = payload.subtitle
-    if payload.author is not None:
+    if _field_present(payload, "author"):
         update_data["author"] = payload.author
-    if payload.genre is not None:
+    if _field_present(payload, "genre"):
         update_data["genre"] = payload.genre
-    if payload.status is not None:
+    if _field_present(payload, "status") and payload.status is not None:
         update_data["status"] = payload.status
-    if payload.synopsis is not None:
+    if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
-    if payload.target_word_count is not None:
+    if _field_present(payload, "target_word_count"):
         update_data["target_word_count"] = payload.target_word_count
-    if payload.settings is not None:
-        update_data["settings"] = payload.settings
+    if _field_present(payload, "settings"):
+        update_data["settings"] = _normalize_mapping_field(payload.settings)
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -550,11 +578,14 @@ async def update_part(
 ) -> ManuscriptPartResponse:
     """Update a manuscript part with optimistic locking."""
     update_data: dict[str, Any] = {}
-    if payload.title is not None:
-        update_data["title"] = payload.title.strip()
-    if payload.sort_order is not None:
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
         update_data["sort_order"] = payload.sort_order
-    if payload.synopsis is not None:
+    if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
     if not update_data:
         raise HTTPException(
@@ -615,10 +646,15 @@ async def create_chapter(
 ) -> ManuscriptChapterResponse:
     """Create a new chapter within a project."""
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         chapter_id = helper.create_chapter(
             project_id=project_id,
-            title=payload.title.strip(),
+            title=title,
             part_id=payload.part_id,
             sort_order=payload.sort_order,
             synopsis=payload.synopsis,
@@ -693,15 +729,18 @@ async def update_chapter(
 ) -> ManuscriptChapterResponse:
     """Update a manuscript chapter with optimistic locking."""
     update_data: dict[str, Any] = {}
-    if payload.title is not None:
-        update_data["title"] = payload.title.strip()
-    if payload.part_id is not None:
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "part_id"):
         update_data["part_id"] = payload.part_id
-    if payload.sort_order is not None:
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
         update_data["sort_order"] = payload.sort_order
-    if payload.synopsis is not None:
+    if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
-    if payload.status is not None:
+    if _field_present(payload, "status") and payload.status is not None:
         update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
@@ -860,20 +899,25 @@ async def update_scene(
     ``content_json`` before storage.
     """
     update_data: dict[str, Any] = {}
-    if payload.title is not None:
-        update_data["title"] = payload.title.strip()
-    if payload.content is not None:
-        update_data["content_json"] = json.dumps(payload.content)
-    elif payload.content_plain is not None:
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "content"):
+        update_data["content_json"] = (
+            json.dumps(payload.content) if payload.content is not None else None
+        )
+    elif _field_present(payload, "content_plain"):
         # Plain-text-only edit: clear stale rich content so they don't diverge
         update_data["content_json"] = None
-    if payload.content_plain is not None:
+    if _field_present(payload, "content_plain"):
         update_data["content_plain"] = payload.content_plain
-    if payload.synopsis is not None:
+    if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
-    if payload.sort_order is not None:
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
         update_data["sort_order"] = payload.sort_order
-    if payload.status is not None:
+    if _field_present(payload, "status") and payload.status is not None:
         update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
