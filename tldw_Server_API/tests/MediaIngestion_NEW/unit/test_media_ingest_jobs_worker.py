@@ -307,3 +307,158 @@ async def test_media_ingest_schedule_embeddings_retries_conflict_without_marking
     assert captured["processed"] == (db, 73)
     assert captured["kwargs"]["user_id"] == "22"
     assert db.errors == []
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_worker_schedules_video_lite_summary_after_success(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("JOBS_DB_URL", raising=False)
+
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    class _DummyDB:
+        def __init__(self, path: str):
+            self.db_path_str = path
+            self.client_id = "media_ingest_test"
+
+        def close_connection(self):
+            return None
+
+    def _fake_create_db(_user_id: str):
+        return _DummyDB(str(tmp_path / "media.db"))
+
+    async def _fake_process_batch_media(**_kwargs):
+        return [
+            {
+                "status": "Success",
+                "db_id": 123,
+                "media_uuid": "media-uuid-123",
+                "warnings": None,
+            }
+        ]
+
+    captured: dict[str, object] = {}
+
+    async def _fake_prepare_video_lite_summary_generation(**kwargs):
+        captured["prepare"] = dict(kwargs)
+        return True
+
+    def _fake_create_task(coro):
+        captured["task_created"] = True
+        coro.close()
+        return None
+
+    monkeypatch.setattr(worker, "_create_db", _fake_create_db, raising=True)
+    monkeypatch.setattr(worker, "process_batch_media", _fake_process_batch_media, raising=True)
+    monkeypatch.setattr(worker, "prepare_chunking_options_dict", lambda _form: None, raising=True)
+    monkeypatch.setattr(
+        worker,
+        "prepare_video_lite_summary_generation",
+        _fake_prepare_video_lite_summary_generation,
+        raising=True,
+    )
+    monkeypatch.setattr(worker.asyncio, "create_task", _fake_create_task, raising=True)
+
+    jm = JobManager()
+    payload = {
+        "batch_id": "video-lite:1:youtube:abc123",
+        "media_type": "video",
+        "source": "https://www.youtube.com/watch?v=abc123",
+        "source_kind": "url",
+        "input_ref": "https://www.youtube.com/watch?v=abc123",
+        "options": {"media_type": "video", "perform_analysis": True},
+    }
+    row = jm.create_job(
+        domain="media_ingest",
+        queue="low",
+        job_type="media_ingest_item",
+        payload=payload,
+        owner_user_id="1",
+    )
+
+    job = jm.get_job(int(row.get("id")))
+    progress = worker._ProgressState()
+    result = await worker._handle_job(job, jm, progress)
+
+    assert result.get("status") == "Success"
+    assert captured["prepare"]["source_key"] == "youtube:abc123"
+    assert captured["prepare"]["source_url"] == "https://www.youtube.com/watch?v=abc123"
+    assert getattr(captured["prepare"]["current_user"], "id") == 1
+    assert captured["task_created"] is True
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_worker_skips_video_lite_summary_when_prepare_returns_false(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("JOBS_DB_URL", raising=False)
+
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    class _DummyDB:
+        def __init__(self, path: str):
+            self.db_path_str = path
+            self.client_id = "media_ingest_test"
+
+        def close_connection(self):
+            return None
+
+    def _fake_create_db(_user_id: str):
+        return _DummyDB(str(tmp_path / "media.db"))
+
+    async def _fake_process_batch_media(**_kwargs):
+        return [
+            {
+                "status": "Success",
+                "db_id": 321,
+                "media_uuid": "media-uuid-321",
+                "warnings": None,
+            }
+        ]
+
+    captured: dict[str, object] = {"task_created": False}
+
+    async def _fake_prepare_video_lite_summary_generation(**kwargs):
+        captured["prepare"] = dict(kwargs)
+        return False
+
+    def _fake_create_task(_coro):
+        captured["task_created"] = True
+        raise AssertionError("summary task should not be created when prepare returns false")
+
+    monkeypatch.setattr(worker, "_create_db", _fake_create_db, raising=True)
+    monkeypatch.setattr(worker, "process_batch_media", _fake_process_batch_media, raising=True)
+    monkeypatch.setattr(worker, "prepare_chunking_options_dict", lambda _form: None, raising=True)
+    monkeypatch.setattr(
+        worker,
+        "prepare_video_lite_summary_generation",
+        _fake_prepare_video_lite_summary_generation,
+        raising=True,
+    )
+    monkeypatch.setattr(worker.asyncio, "create_task", _fake_create_task, raising=True)
+
+    jm = JobManager()
+    payload = {
+        "batch_id": "video-lite:1:youtube:abc123",
+        "media_type": "video",
+        "source": "https://www.youtube.com/watch?v=abc123",
+        "source_kind": "url",
+        "input_ref": "https://www.youtube.com/watch?v=abc123",
+        "options": {"media_type": "video", "perform_analysis": True},
+    }
+    row = jm.create_job(
+        domain="media_ingest",
+        queue="low",
+        job_type="media_ingest_item",
+        payload=payload,
+        owner_user_id="1",
+    )
+
+    job = jm.get_job(int(row.get("id")))
+    progress = worker._ProgressState()
+    result = await worker._handle_job(job, jm, progress)
+
+    assert result.get("status") == "Success"
+    assert getattr(captured["prepare"]["current_user"], "id") == 1
+    assert captured["task_created"] is False

@@ -112,6 +112,7 @@ _MEDIA_ENDPOINT_MODULES: tuple[str, ...] = (
     "process_web_scraping",
     "process_mediawiki",
     "reprocess",
+    "video_lite",
     "transcription_models",
     "navigation",
     "document_outline",
