@@ -97,32 +97,6 @@ const firstNonEmptyString = (...vals: any[]): string => {
   return ''
 }
 
-const normalizeVideoLiteSourceKey = (value: string): string => {
-  const rawValue = String(value || '').trim()
-  if (!rawValue) return ''
-  if (rawValue.startsWith('youtube:')) return rawValue
-
-  try {
-    const parsed = new URL(rawValue)
-    const host = parsed.hostname.toLowerCase()
-    const path = parsed.pathname.replace(/^\/+|\/+$/g, '')
-
-    if (host === 'youtu.be' && path) {
-      const [videoId] = path.split('/', 1)
-      return videoId ? `youtube:${videoId}` : rawValue
-    }
-
-    if ((host === 'youtube.com' || host.endsWith('.youtube.com')) && parsed.pathname === '/watch') {
-      const videoId = parsed.searchParams.get('v')?.trim() || ''
-      return videoId ? `youtube:${videoId}` : rawValue
-    }
-  } catch {
-    return rawValue
-  }
-
-  return rawValue
-}
-
 const toExportFileStem = (selectedMedia: MediaResultItem): string => {
   const fromTitle = String(selectedMedia.title || '')
     .trim()
@@ -346,31 +320,6 @@ export function useContentViewerModals(deps: UseContentViewerModalsDeps) {
     mediaDetail?.url,
     selectedMedia?.raw?.url
   ])
-
-  const sourceUrlForVideoLiteSummary = useMemo(
-    () =>
-      firstNonEmptyString(
-        selectedMedia?.raw?.url,
-        mediaDetail?.url,
-        mediaDetail?.source_url,
-        mediaDetail?.sourceUrl
-      ),
-    [
-      mediaDetail?.sourceUrl,
-      mediaDetail?.source_url,
-      mediaDetail?.url,
-      selectedMedia?.raw?.url
-    ]
-  )
-
-  const videoLiteSummarySourceKey = useMemo(
-    () => normalizeVideoLiteSourceKey(sourceUrlForVideoLiteSummary),
-    [sourceUrlForVideoLiteSummary]
-  )
-
-  const canRefreshVideoLiteSummary = Boolean(
-    !isNote && sourceUrlForVideoLiteSummary && videoLiteSummarySourceKey
-  )
 
   const canScheduleSourceRefresh = !isNote && sourceUrlForScheduling.length > 0
 
@@ -896,60 +845,6 @@ export function useContentViewerModals(deps: UseContentViewerModalsDeps) {
     }
   }, [isNote, onRefreshMedia, selectedMediaId, t])
 
-  const handleRefreshVideoLiteSummary = useCallback(async () => {
-    if (!canRefreshVideoLiteSummary) return
-
-    const query = new URLSearchParams({
-      source_url: sourceUrlForVideoLiteSummary
-    })
-
-    try {
-      await bgRequest({
-        path:
-          `/api/v1/media/video-lite/workspace/${encodeURIComponent(videoLiteSummarySourceKey)}/summary-refresh?${query.toString()}` as any,
-        method: 'POST' as any
-      })
-      message.success(
-        t('review:mediaPage.summaryRefreshQueued', {
-          defaultValue: 'Summary refresh started.'
-        })
-      )
-      if (onRefreshMedia) {
-        onRefreshMedia()
-      }
-    } catch (error) {
-      console.error('Failed to refresh video-lite summary:', error)
-      const statusCode = getErrorStatusCode(error)
-      if (statusCode === 409) {
-        message.warning(
-          t('review:mediaPage.summaryRefreshConflict', {
-            defaultValue: 'Transcript not ready yet.'
-          })
-        )
-        return
-      }
-      if (statusCode === 403) {
-        message.error(
-          t('review:mediaPage.summaryRefreshForbidden', {
-            defaultValue: 'An active subscription is required to refresh summaries.'
-          })
-        )
-        return
-      }
-      message.error(
-        t('review:mediaPage.summaryRefreshFailed', {
-          defaultValue: 'Unable to refresh the summary. Please try again.'
-        })
-      )
-    }
-  }, [
-    canRefreshVideoLiteSummary,
-    onRefreshMedia,
-    sourceUrlForVideoLiteSummary,
-    t,
-    videoLiteSummarySourceKey
-  ])
-
   // Schedule source refresh
   const handleScheduleSourceRefresh = useCallback(async () => {
     if (!selectedMedia || selectedMedia.kind === 'note' || !sourceUrlForScheduling) return
@@ -1170,10 +1065,6 @@ export function useContentViewerModals(deps: UseContentViewerModalsDeps) {
     handleScheduleSourceRefresh,
     sourceUrlForScheduling,
     canScheduleSourceRefresh,
-    sourceUrlForVideoLiteSummary,
-    videoLiteSummarySourceKey,
-    canRefreshVideoLiteSummary,
-    handleRefreshVideoLiteSummary,
     // Metadata
     metadataDetailsExpanded,
     setMetadataDetailsExpanded,

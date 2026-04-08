@@ -148,9 +148,7 @@ export interface UseContentMetadataDeps {
   modals: {
     handleExportMedia: () => void
     handleReprocessMedia: () => Promise<void>
-    handleRefreshVideoLiteSummary: () => Promise<void>
     canScheduleSourceRefresh: boolean
-    canRefreshVideoLiteSummary: boolean
     setScheduleRefreshModalOpen: (v: boolean) => void
     setAnalysisModalOpen: (v: boolean) => void
   }
@@ -520,20 +518,6 @@ export function useContentMetadata(deps: UseContentMetadataDeps) {
           void modals.handleReprocessMedia()
         }
       },
-      ...(modals.canRefreshVideoLiteSummary
-        ? [
-            {
-              key: 'refresh-video-lite-summary',
-              label: t('review:mediaPage.refreshVideoLiteSummary', {
-                defaultValue: 'Re-request summary'
-              }),
-              icon: <Sparkles className="w-4 h-4" />,
-              onClick: () => {
-                void modals.handleRefreshVideoLiteSummary()
-              }
-            }
-          ]
-        : []),
       ...(modals.canScheduleSourceRefresh
         ? [
             {
