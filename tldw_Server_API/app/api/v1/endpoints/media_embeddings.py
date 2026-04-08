@@ -797,10 +797,9 @@ async def generate_embeddings_batch(
     for media_id in media_ids:
         media_item = get_media_by_id(db, media_id)
         if not media_item:
-            raise HTTPException(
-                status_code=http_status.HTTP_404_NOT_FOUND,
-                detail=f"Media item {media_id} not found"
-            )
+            failed_media_ids.append(int(media_id))
+            failure_reasons.append(f"media_id={media_id}: not found")
+            continue
         job_id: Optional[str] = None
         try:
             job_row = adapter.create_job(
