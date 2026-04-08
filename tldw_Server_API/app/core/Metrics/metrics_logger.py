@@ -33,6 +33,15 @@ def _bridge_to_registry(metric_name, metric_type, value, labels=None):
     """Best-effort bridge from log-based metrics to the in-process registry."""
     try:
         registry = get_metrics_registry()
+        try:
+            normalized_labels = registry._normalize_labels(labels, reject_collisions=True)  # noqa: SLF001
+        except ValueError as exc:
+            logger.warning(
+                "metrics_logger: rejecting {} due to conflicting normalized labels: {}",
+                metric_name,
+                exc,
+            )
+            return
         normalized_name = registry.normalize_metric_name(metric_name)
         if normalized_name not in registry.metrics:
             registry.register_metric(
@@ -40,22 +49,40 @@ def _bridge_to_registry(metric_name, metric_type, value, labels=None):
                     name=normalized_name,
                     type=metric_type,
                     description=f"Auto-bridged metric for {metric_name}",
-                    labels=list((labels or {}).keys()),
-                )
+                    labels=list(normalized_labels.keys()),
+                ),
+                persistent=False,
             )
         if metric_type == MetricType.COUNTER:
-            registry.increment(metric_name, value, labels)
+            registry.increment(metric_name, value, normalized_labels)
         elif metric_type == MetricType.HISTOGRAM:
-            registry.observe(metric_name, value, labels)
+            registry.observe(metric_name, value, normalized_labels)
         elif metric_type == MetricType.GAUGE:
-            registry.set_gauge(metric_name, value, labels)
+            registry.set_gauge(metric_name, value, normalized_labels)
         else:
-            registry.record(metric_name, value, labels)
+            registry.record(metric_name, value, normalized_labels)
     except Exception as exc:
         logger.debug("metrics_logger: registry bridge failed: {err}", err=exc)
 
 
+def _labels_are_registry_safe(metric_name, labels) -> bool:
+    """Reject conflicting normalized labels before any log-backed metric emission."""
+    registry = get_metrics_registry()
+    try:
+        registry._normalize_labels(labels, reject_collisions=True)  # noqa: SLF001
+    except ValueError as exc:
+        logger.warning(
+            "metrics_logger: rejecting {} due to conflicting normalized labels: {}",
+            metric_name,
+            exc,
+        )
+        return False
+    return True
+
+
 def log_counter(metric_name, labels=None, value=1):
+    if not _labels_are_registry_safe(metric_name, labels):
+        return
     log_entry = {
         "event": metric_name,
         "type": "counter",
@@ -68,6 +95,8 @@ def log_counter(metric_name, labels=None, value=1):
 
 
 def log_histogram(metric_name, value, labels=None):
+    if not _labels_are_registry_safe(metric_name, labels):
+        return
     log_entry = {
         "event": metric_name,
         "type": "histogram",
@@ -87,6 +116,8 @@ def log_gauge(metric_name, value, labels=None):
     semantics more clearly. Downstream exporters can map these to Prometheus
     Gauges or equivalent.
     """
+    if not _labels_are_registry_safe(metric_name, labels):
+        return
     log_entry = {
         "event": metric_name,
         "type": "gauge",

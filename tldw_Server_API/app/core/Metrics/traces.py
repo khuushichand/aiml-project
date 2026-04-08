@@ -121,7 +121,9 @@ class TracingManager:
             name,
             kind=kind,
             attributes=attributes,
-            links=links
+            links=links,
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
             span_id: Optional[str] = None
             try:
@@ -172,7 +174,9 @@ class TracingManager:
             name,
             kind=kind,
             attributes=attributes,
-            links=links
+            links=links,
+            record_exception=False,
+            set_status_on_exception=False,
         ) as span:
             span_id: Optional[str] = None
             try:
@@ -404,10 +408,7 @@ def trace_operation(
 
                         return result
 
-                    except Exception as e:
-                        if span:
-                            span.record_exception(e)
-                            span.set_status(Status(StatusCode.ERROR, str(e)))
+                    except Exception:
                         raise
 
             return async_wrapper
@@ -441,10 +442,7 @@ def trace_operation(
 
                         return result
 
-                    except Exception as e:
-                        if span:
-                            span.record_exception(e)
-                            span.set_status(Status(StatusCode.ERROR, str(e)))
+                    except Exception:
                         raise
 
             return sync_wrapper
@@ -463,25 +461,30 @@ def trace_method(
     Similar to trace_operation but includes class name in span name.
     """
     def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            span_name = name or f"{self.__class__.__name__}.{func.__name__}"
+        if asyncio.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def async_wrapper(self, *args, **kwargs):
+                span_name = name or f"{self.__class__.__name__}.{func.__name__}"
+                manager = get_tracing_manager()
+                span_attributes = dict(attributes) if attributes else {}
+                span_attributes["class"] = self.__class__.__name__
+                span_attributes["method"] = func.__name__
+                async with manager.async_span(span_name, kind=kind, attributes=span_attributes):
+                    return await func(self, *args, **kwargs)
 
+            return async_wrapper
+
+        @functools.wraps(func)
+        def sync_wrapper(self, *args, **kwargs):
+            span_name = name or f"{self.__class__.__name__}.{func.__name__}"
             manager = get_tracing_manager()
             span_attributes = dict(attributes) if attributes else {}
             span_attributes["class"] = self.__class__.__name__
             span_attributes["method"] = func.__name__
+            with manager.span(span_name, kind=kind, attributes=span_attributes):
+                return func(self, *args, **kwargs)
 
-            if asyncio.iscoroutinefunction(func):
-                async def async_execution():
-                    async with manager.async_span(span_name, kind=kind, attributes=span_attributes):
-                        return await func(self, *args, **kwargs)
-                return async_execution()
-            else:
-                with manager.span(span_name, kind=kind, attributes=span_attributes):
-                    return func(self, *args, **kwargs)
-
-        return wrapper
+        return sync_wrapper
 
     return decorator
 

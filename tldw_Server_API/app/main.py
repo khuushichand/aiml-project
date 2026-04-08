@@ -6004,29 +6004,9 @@ async def root():
 
 # Metrics endpoint for Prometheus scraping (registered conditionally below)
 async def metrics():
-    """Prometheus metrics endpoint.
+    from tldw_Server_API.app.api.v1.endpoints.metrics import build_prometheus_metrics_response
 
-    Exposes both the internal registry (JSON-backed) and the default
-    prometheus_client REGISTRY used by embeddings/orchestrator code paths.
-    """
-    from fastapi.responses import PlainTextResponse
-
-    try:
-        from prometheus_client import REGISTRY as PC_REGISTRY
-        from prometheus_client import generate_latest as pc_generate_latest
-    except _IMPORT_EXCEPTIONS:
-        PC_REGISTRY = None
-        pc_generate_latest = None
-
-    registry = get_metrics_registry()
-    combined = registry.export_prometheus_format() or ""
-    try:
-        if pc_generate_latest and PC_REGISTRY:
-            combined = (combined + "\n" + pc_generate_latest(PC_REGISTRY).decode("utf-8")).strip() + "\n"
-    except _REQUEST_GUARD_EXCEPTIONS:
-        # If prometheus_client is unavailable, ignore
-        pass
-    return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
+    return await build_prometheus_metrics_response()
 
 
 # OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
