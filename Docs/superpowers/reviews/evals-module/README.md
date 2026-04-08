@@ -470,10 +470,12 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 6: Benchmark, Dataset, and Synthetic Evaluation Surfaces
 ### Files Reviewed
+- `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py`
 - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py`
 - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py`
 - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_synthetic.py`
 - `tldw_Server_API/app/api/v1/schemas/synthetic_eval_schemas.py`
+- `tldw_Server_API/app/core/Evaluations/evaluation_manager.py`
 - `tldw_Server_API/app/core/Evaluations/benchmark_registry.py`
 - `tldw_Server_API/app/core/Evaluations/benchmark_loaders.py`
 - `tldw_Server_API/app/core/Evaluations/benchmark_utils.py`
@@ -485,7 +487,7 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - The benchmark surface is split between registry metadata, benchmark-specific loaders, and the `run_benchmark` endpoint, so a mismatch in any one of those layers can leave a listed benchmark unrunnable.
 - The synthetic surface is a thin router over `SyntheticEvalWorkflowService`; the real behavior lives in the service, repository, and structured-generation helpers.
 ### Control and Data Flow Notes
-- `run_benchmark()` resolves a registry entry and evaluator, then loads data through `load_benchmark_dataset(benchmark_name, limit=request.limit)` before filtering categories, scoring batches, and optionally persisting the summary.
+- `run_benchmark()` resolves a registry entry and evaluator, builds an `EvaluationManager` through `_get_evaluation_manager_for_user()`, then loads data through `load_benchmark_dataset(benchmark_name, limit=request.limit)` before filtering categories, scoring batches, and optionally persisting the summary.
 - `get_dataset()` is the only dataset route that calls `svc.db.get_dataset(...)` directly; create/list/delete stay on the unified service abstraction.
 - Synthetic generation, queue listing, review, and promotion all flow through `SyntheticEvalWorkflowService`, which delegates persistence to `SyntheticEvalRepository` and uses `build_dataset_snapshot_ref()` when promoting approved drafts into a dataset.
 ### Findings
@@ -502,6 +504,15 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Confidence: High
    Priority: Near-term
    Applicability: Mixed
+   Why it matters: the benchmark router assumes every authenticated user id can be coerced to `int`, but the shared `User` model explicitly allows `id: int | str`. When `current_user.id` is a tenant-style string, `_get_evaluation_manager_for_user()` falls into the exception path and constructs `EvaluationManager()` with no `user_id`, which then defaults to `DatabasePaths.get_single_user_id()`. That means benchmark runs for string-id users can read or persist against the default user's evaluations DB instead of a user-specific store.
+   File references: `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py:234`, `tldw_Server_API/app/core/AuthNZ/User_DB_Handling.py:236`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py:30`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py:33`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py:35`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:36`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:38`
+   Recommended fix: stop coercing the benchmark route's user id to `int` manually. Either use `current_user.id_str` and a manager/service that accepts string ids, or reject unsupported id types at the auth boundary instead of silently falling back to the default DB.
+   Recommended tests: add a benchmark route test that injects a `User(id='tenant-user', ...)` and asserts the route binds persistence to that user scope instead of the default single-user DB.
+   Verification note: a direct stubbed probe of `_get_evaluation_manager_for_user()` recorded `[{},{'user_id': 42}]` for `current_user.id='tenant-user'` and `current_user.id=42`, confirming that string ids take the empty-kwargs fallback path.
+3. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Mixed
    Why it matters: the dataset read route bypasses the unified evaluation service and calls `svc.db.get_dataset(...)` with `include_samples`, `sample_limit`, and `sample_offset` kwargs directly. In the focused permissions test, the fake DB only implemented `get_dataset(dataset_id, created_by)`, so the route raised a `TypeError` and returned a 500 instead of the expected 200. That makes the read path brittle against alternate DB adapters and existing test doubles.
    File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py:152`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py:163`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:95`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:118`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:160`
    Recommended fix: add a service-level dataset read helper and call that from the route, or make the route use the same compatibility layer as create/list/delete so DB adapter signatures are normalized in one place.
@@ -512,6 +523,23 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 ### Verification Run
 - `source .venv/bin/activate && rg -n "registry|loader|dataset|permission|synthetic|generate|review|job|yaml|config" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_synthetic.py tldw_Server_API/app/core/Evaluations/benchmark_registry.py tldw_Server_API/app/core/Evaluations/synthetic_eval_service.py`
   Result: confirmed the benchmark registry/loader split, the dataset route's direct DB call, and the synthetic service delegation path.
+- `source .venv/bin/activate && python - <<'PY'`
+  `from types import SimpleNamespace`
+  `import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_benchmarks as mod`
+  `calls = []`
+  `class StubManager:`
+  `    def __init__(self, *args, **kwargs):`
+  `        calls.append(kwargs)`
+  `orig = mod.EvaluationManager`
+  `mod.EvaluationManager = StubManager`
+  `try:`
+  `    mod._get_evaluation_manager_for_user(SimpleNamespace(id='tenant-user'))`
+  `    mod._get_evaluation_manager_for_user(SimpleNamespace(id=42))`
+  `finally:`
+  `    mod.EvaluationManager = orig`
+  `print(calls)`
+  `PY`
+  Result: the helper invoked `EvaluationManager()` with no kwargs for a string user id and `EvaluationManager(user_id=42)` for an integer id, confirming the silent fallback.
 - `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_synthetic_eval_api.py tldw_Server_API/tests/Evaluations/test_synthetic_eval_service.py tldw_Server_API/tests/Evaluations/unit/test_evals_cli_benchmark_commands.py`
   Result: `27 passed, 1 failed`; the failing case was `test_dataset_routes_require_read_vs_manage_permissions`, which hit the direct DB signature mismatch on `get_dataset()`.
 - `source .venv/bin/activate && python - <<'PY'`
