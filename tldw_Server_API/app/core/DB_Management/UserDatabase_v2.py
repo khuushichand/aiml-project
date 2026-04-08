@@ -114,7 +114,30 @@ class UserDatabase:
         # Initialize schema if needed
         self._initialize_schema()
 
-        logger.info(f"UserDatabase initialized with {self.backend.backend_type.value} backend for client {client_id}")
+        logger.info(
+            "UserDatabase initialized backend={} target={} client_id={}",
+            self.backend.backend_type.value,
+            self._describe_backend_target(),
+            self.client_id,
+        )
+
+    def _describe_backend_target(self) -> str:
+        config = self.backend.config
+        if self.backend.backend_type == BackendType.SQLITE:
+            raw_path = (config.sqlite_path or "").strip()
+            if not raw_path:
+                return "<sqlite-default>"
+            if raw_path == ":memory:":
+                return raw_path
+            if raw_path.startswith("file:"):
+                return raw_path
+            return str(Path(raw_path).resolve())
+        if self.backend.backend_type == BackendType.POSTGRESQL:
+            host = config.pg_host or "localhost"
+            port = config.pg_port or 5432
+            database = config.pg_database or "<postgres>"
+            return f"{host}:{port}/{database}"
+        return "<unknown>"
 
     def _initialize_schema(self):
         """Initialize database schema if needed."""

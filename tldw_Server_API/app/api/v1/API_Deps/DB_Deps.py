@@ -164,7 +164,6 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
         return factory
 
     # --- Factory Not Cached: Create New One ---
-    logger.info(f"No cached MediaDbFactory found for user_id: {user_id}. Initializing.")
     with _user_db_lock:
         factory = _media_db_factories.get(user_id)
         if factory:
@@ -183,7 +182,7 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
         try:
             if use_shared_backend:
                 db_path = Path(":memory:")
-                logger.info(f"Initializing MediaDbFactory for user {user_id} using shared Postgres backend")
+                init_target = "shared_postgresql"
                 factory = MediaDbFactory(
                     db_path=str(db_path),
                     client_id=str(current_user.id),
@@ -191,14 +190,19 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
                 )
             else:
                 db_path = _get_db_path_for_user(user_id)
-                logger.info(f"Initializing MediaDbFactory for user {user_id} at path: {db_path}")
+                init_target = str(db_path)
                 factory = MediaDbFactory.for_sqlite_path(
                     db_path=str(db_path),
                     client_id=str(current_user.id),
                 )
 
+            logger.info(
+                "Initializing MediaDbFactory user_id={} backend={} target={}",
+                user_id,
+                "postgresql" if use_shared_backend else "sqlite",
+                init_target,
+            )
             _media_db_factories[user_id] = factory
-            logger.info(f"MediaDbFactory created and cached successfully for user {user_id}")
             try:
                 if is_test_mode():
                     logger.warning(
