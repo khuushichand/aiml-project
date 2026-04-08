@@ -432,7 +432,10 @@ def test_writing_snapshot_import_replace_rolls_back_on_restore_failure(
     assert {item["name"] for item in themes} == {"Keep Theme"}
 
 
-def test_writing_snapshot_import_rejects_blank_session_name(client_with_writing_db: TestClient):
+def test_writing_snapshot_import_rejects_blank_session_name(
+    client_with_writing_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
     client = client_with_writing_db
     assert (
         client.post(
@@ -455,6 +458,25 @@ def test_writing_snapshot_import_rejects_blank_session_name(client_with_writing_
         ).status_code
         == 201
     )
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    soft_delete_calls: list[tuple[str, str]] = []
+
+    def track_soft_delete_session(self, session_id, expected_version):
+        soft_delete_calls.append(("session", str(session_id)))
+        raise AssertionError("replace-mode session soft-delete should not run for blank import")
+
+    def track_soft_delete_template(self, name, expected_version):
+        soft_delete_calls.append(("template", str(name)))
+        raise AssertionError("replace-mode template soft-delete should not run for blank import")
+
+    def track_soft_delete_theme(self, name, expected_version):
+        soft_delete_calls.append(("theme", str(name)))
+        raise AssertionError("replace-mode theme soft-delete should not run for blank import")
+
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_session", track_soft_delete_session)
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_template", track_soft_delete_template)
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_theme", track_soft_delete_theme)
 
     resp = client.post(
         "/api/v1/writing/snapshot/import",
@@ -470,6 +492,7 @@ def test_writing_snapshot_import_rejects_blank_session_name(client_with_writing_
 
     assert resp.status_code == 400, resp.text
     assert "session name" in resp.json()["detail"].lower()
+    assert soft_delete_calls == []
     sessions = client.get("/api/v1/writing/sessions").json()["sessions"]
     templates = client.get("/api/v1/writing/templates").json()["templates"]
     themes = client.get("/api/v1/writing/themes").json()["themes"]
@@ -597,6 +620,7 @@ def test_get_wordcloud_returns_failed_result(client_with_writing_db: TestClient,
     fetched = get_resp.json()
     assert fetched["id"] == payload["id"]
     assert fetched["status"] == "failed"
+    assert fetched["cached"] is False
     assert fetched["error"] == "wordcloud failed"
     assert fetched["result"] is None
 
