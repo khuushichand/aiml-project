@@ -240,6 +240,7 @@ def test_restart_cycle_stays_aligned_with_sdk_globals():
         capture_output=True,
         text=True,
         env=env,
+        timeout=30,
     )
 
     assert result.returncode == 0, (  # nosec B101

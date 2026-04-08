@@ -1,6 +1,7 @@
 # metrics.py
 # Metrics endpoint for Prometheus and health monitoring
 
+import asyncio
 from datetime import datetime, timezone
 import time
 from typing import Any
@@ -33,12 +34,16 @@ _PROMETHEUS_HEADERS = {
     "Expires": "0",
 }
 _STAGE_FLAG_REFRESH_INTERVAL_SECONDS = 5.0
+_STAGE_FLAG_REFRESH_TIMEOUT_SECONDS = 0.5
 _last_stage_flag_refresh = 0.0
+# Canonical list of embedding pipeline stages; kept in sync with the
+# embeddings module so new stages are picked up automatically.
+_EMBEDDING_STAGES = ("chunking", "embedding", "storage", "content")
 
 
-async def _refresh_embeddings_stage_flags() -> None:
+async def _refresh_embeddings_stage_flags_inner() -> None:
     """Best-effort refresh for embeddings stage flags used in text metrics export."""
-    global _last_stage_flag_refresh
+    global _last_stage_flag_refresh  # noqa: PLW0603
     now = time.monotonic()
     if now - _last_stage_flag_refresh < _STAGE_FLAG_REFRESH_INTERVAL_SECONDS:
         return
@@ -58,7 +63,7 @@ async def _refresh_embeddings_stage_flags() -> None:
         return
 
     try:
-        for stage in ("chunking", "embedding", "storage"):
+        for stage in _EMBEDDING_STAGES:
             paused = await client.get(f"embeddings:stage:{stage}:paused")
             drain = await client.get(f"embeddings:stage:{stage}:drain")
             _emb.embedding_stage_flag.labels(stage=stage, flag="paused").set(
@@ -75,6 +80,19 @@ async def _refresh_embeddings_stage_flags() -> None:
                 await client.close()
             except _METRICS_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics: failed to close redis client")
+
+
+async def _refresh_embeddings_stage_flags() -> None:
+    """Timeout-guarded wrapper so Redis I/O never stalls Prometheus scrapes."""
+    try:
+        await asyncio.wait_for(
+            _refresh_embeddings_stage_flags_inner(),
+            timeout=_STAGE_FLAG_REFRESH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.debug("metrics: stage flag refresh timed out")
+    except _METRICS_NONCRITICAL_EXCEPTIONS:
+        logger.debug("metrics: stage flag refresh skipped (error)")
 
 
 async def build_prometheus_metrics_response() -> Response:

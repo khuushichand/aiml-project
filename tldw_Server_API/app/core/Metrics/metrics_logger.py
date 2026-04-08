@@ -29,19 +29,28 @@ def _utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp with a single Z suffix."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-def _bridge_to_registry(metric_name, metric_type, value, labels=None):
-    """Best-effort bridge from log-based metrics to the in-process registry."""
+def _normalize_labels_once(metric_name, labels):
+    """Normalize labels once and return them, or None if they collide."""
     try:
         registry = get_metrics_registry()
-        try:
-            normalized_labels = registry._normalize_labels(labels, reject_collisions=True)  # noqa: SLF001
-        except ValueError as exc:
-            logger.warning(
-                "metrics_logger: rejecting {} due to conflicting normalized labels: {}",
-                metric_name,
-                exc,
-            )
-            return
+        return registry.normalize_labels(labels, reject_collisions=True)
+    except ValueError as exc:
+        logger.warning(
+            "metrics_logger: rejecting {} due to conflicting normalized labels: {}",
+            metric_name,
+            exc,
+        )
+        return None
+
+
+def _bridge_to_registry(metric_name, metric_type, value, normalized_labels):
+    """Best-effort bridge from log-based metrics to the in-process registry.
+
+    Expects *already-normalized* labels so the recording hot path can skip
+    redundant normalization.
+    """
+    try:
+        registry = get_metrics_registry()
         normalized_name = registry.normalize_metric_name(metric_name)
         if normalized_name not in registry.metrics:
             registry.register_metric(
@@ -54,58 +63,45 @@ def _bridge_to_registry(metric_name, metric_type, value, labels=None):
                 persistent=False,
             )
         if metric_type == MetricType.COUNTER:
-            registry.increment(metric_name, value, normalized_labels)
+            registry.record(metric_name, value, normalized_labels, _normalized=True)
         elif metric_type == MetricType.HISTOGRAM:
-            registry.observe(metric_name, value, normalized_labels)
+            registry.record(metric_name, value, normalized_labels, _normalized=True)
         elif metric_type == MetricType.GAUGE:
-            registry.set_gauge(metric_name, value, normalized_labels)
+            registry.record(metric_name, value, normalized_labels, _normalized=True)
         else:
-            registry.record(metric_name, value, normalized_labels)
+            registry.record(metric_name, value, normalized_labels, _normalized=True)
     except Exception as exc:
         logger.debug("metrics_logger: registry bridge failed: {err}", err=exc)
 
 
-def _labels_are_registry_safe(metric_name, labels) -> bool:
-    """Reject conflicting normalized labels before any log-backed metric emission."""
-    registry = get_metrics_registry()
-    try:
-        registry._normalize_labels(labels, reject_collisions=True)  # noqa: SLF001
-    except ValueError as exc:
-        logger.warning(
-            "metrics_logger: rejecting {} due to conflicting normalized labels: {}",
-            metric_name,
-            exc,
-        )
-        return False
-    return True
-
-
 def log_counter(metric_name, labels=None, value=1):
-    if not _labels_are_registry_safe(metric_name, labels):
+    normalized = _normalize_labels_once(metric_name, labels)
+    if normalized is None:
         return
     log_entry = {
         "event": metric_name,
         "type": "counter",
         "value": value,
-        "labels": labels or {},
+        "labels": normalized,
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
-    _bridge_to_registry(metric_name, MetricType.COUNTER, value, labels)
+    _bridge_to_registry(metric_name, MetricType.COUNTER, value, normalized)
 
 
 def log_histogram(metric_name, value, labels=None):
-    if not _labels_are_registry_safe(metric_name, labels):
+    normalized = _normalize_labels_once(metric_name, labels)
+    if normalized is None:
         return
     log_entry = {
         "event": metric_name,
         "type": "histogram",
         "value": value,
-        "labels": labels or {},
+        "labels": normalized,
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
-    _bridge_to_registry(metric_name, MetricType.HISTOGRAM, value, labels)
+    _bridge_to_registry(metric_name, MetricType.HISTOGRAM, value, normalized)
 
 
 def log_gauge(metric_name, value, labels=None):
@@ -116,17 +112,18 @@ def log_gauge(metric_name, value, labels=None):
     semantics more clearly. Downstream exporters can map these to Prometheus
     Gauges or equivalent.
     """
-    if not _labels_are_registry_safe(metric_name, labels):
+    normalized = _normalize_labels_once(metric_name, labels)
+    if normalized is None:
         return
     log_entry = {
         "event": metric_name,
         "type": "gauge",
         "value": value,
-        "labels": labels or {},
+        "labels": normalized,
         "timestamp": _utc_timestamp(),
     }
     logger.bind(**log_entry).info("metric")
-    _bridge_to_registry(metric_name, MetricType.GAUGE, value, labels)
+    _bridge_to_registry(metric_name, MetricType.GAUGE, value, normalized)
 
 
 def timeit(func):

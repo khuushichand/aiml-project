@@ -103,12 +103,19 @@ class MetricsRegistry:
             "circuit_breaker_timeouts_total",
         }
 
-        # Initialize with telemetry manager
-        self.telemetry = get_telemetry_manager()
-        self.meter = self.telemetry.get_meter("tldw_server.metrics")
-
         # Register standard metrics
         self._register_standard_metrics()
+
+    @property
+    def telemetry(self):
+        """Always return the *current* global telemetry manager so that a
+        shutdown/re-init cycle is picked up automatically."""
+        return get_telemetry_manager()
+
+    @property
+    def meter(self):
+        """Return a meter from the current telemetry manager."""
+        return self.telemetry.get_meter("tldw_server.metrics")
 
     @classmethod
     def _normalize_metric_name(cls, name: str) -> str:
@@ -162,12 +169,15 @@ class MetricsRegistry:
             if normalized_key in normalized and normalized[normalized_key] != normalized_value:
                 if reject_collisions:
                     raise ValueError(
-                        "Conflicting labels normalize to the same key "
-                        f"{normalized_key!r}: {normalized[normalized_key]!r} vs {normalized_value!r}"
+                        f"Conflicting labels normalize to the same key {normalized_key!r}"
                     )
                 logger.debug(f"Label key collision after normalization: {key} -> {normalized_key}")
             normalized[normalized_key] = normalized_value
         return normalized
+
+    # Public alias so external modules (e.g. metrics_logger) need not reach
+    # into a private method.
+    normalize_labels = _normalize_labels
 
     @classmethod
     def _normalize_label_key(cls, labels: dict[str, Any]) -> tuple[tuple[str, str], ...]:
@@ -1840,6 +1850,7 @@ class MetricsRegistry:
         value: float,
         labels: Optional[dict[str, str]] = None,
         _emit_legacy_alias: bool = True,
+        _normalized: bool = False,
     ):
         """
         Record a metric value.
@@ -1848,14 +1859,16 @@ class MetricsRegistry:
             metric_name: Name of the metric
             value: Value to record
             labels: Optional labels/dimensions
+            _normalized: If True, skip label normalization (caller already normalized).
         """
         original_name = metric_name
         metric_name = self._normalize_metric_name(metric_name)
-        try:
-            labels = self._normalize_labels(labels, reject_collisions=True)
-        except ValueError as exc:
-            logger.warning("Rejecting metric {} due to conflicting normalized labels: {}", original_name, exc)
-            return
+        if not _normalized:
+            try:
+                labels = self._normalize_labels(labels, reject_collisions=True)
+            except ValueError as exc:
+                logger.warning("Rejecting metric {} due to conflicting normalized labels: {}", original_name, exc)
+                return
         instrument = None
         callbacks: list[Callable] = []
 

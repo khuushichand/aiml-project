@@ -87,11 +87,20 @@ class TracingManager:
 
     def __init__(self):
         """Initialize the tracing manager."""
-        self.telemetry = get_telemetry_manager()
-        self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
         # Local baggage store when OpenTelemetry baggage is unavailable
         self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default=None)
+
+    @property
+    def telemetry(self):
+        """Always return the *current* global telemetry manager so that a
+        shutdown/re-init cycle is picked up automatically."""
+        return get_telemetry_manager()
+
+    @property
+    def tracer(self):
+        """Return a tracer from the current telemetry manager."""
+        return self.telemetry.get_tracer("tldw_server.tracing")
 
     @contextmanager
     def span(
@@ -397,19 +406,15 @@ def trace_operation(
                         logger.debug(f"trace_operation arg serialization failed: error={e}")
 
                 async with manager.async_span(span_name, kind=kind, attributes=span_attributes) as span:
-                    try:
-                        result = await func(*args, **kwargs)
+                    result = await func(*args, **kwargs)
 
-                        if record_result and span:
-                            try:
-                                span.set_attribute("result", json.dumps(str(result)[:1000]))
-                            except Exception as e:
-                                logger.debug(f"trace_operation result serialization failed: error={e}")
+                    if record_result and span:
+                        try:
+                            span.set_attribute("result", json.dumps(str(result)[:1000]))
+                        except Exception as e:
+                            logger.debug(f"trace_operation result serialization failed: error={e}")
 
-                        return result
-
-                    except Exception:
-                        raise
+                    return result
 
             return async_wrapper
 
@@ -431,19 +436,15 @@ def trace_operation(
                         logger.debug(f"trace_operation arg serialization failed: error={e}")
 
                 with manager.span(span_name, kind=kind, attributes=span_attributes) as span:
-                    try:
-                        result = func(*args, **kwargs)
+                    result = func(*args, **kwargs)
 
-                        if record_result and span:
-                            try:
-                                span.set_attribute("result", json.dumps(str(result)[:1000]))
-                            except Exception as e:
-                                logger.debug(f"trace_operation result serialization failed: error={e}")
+                    if record_result and span:
+                        try:
+                            span.set_attribute("result", json.dumps(str(result)[:1000]))
+                        except Exception as e:
+                            logger.debug(f"trace_operation result serialization failed: error={e}")
 
-                        return result
-
-                    except Exception:
-                        raise
+                    return result
 
             return sync_wrapper
 
