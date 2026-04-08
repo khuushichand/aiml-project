@@ -118,7 +118,7 @@ def _persist_completed_sync_export_job(
     user_id: str,
     chatbook_name: str,
     output_path: str | Path,
-) -> tuple[str, str, Path, int | None]:
+) -> tuple[str, str, Path, int]:
     """Persist a sync export result as a completed job for job-backed downloads."""
     job_id = str(uuid4())
     file_path = Path(output_path).resolve()
@@ -821,11 +821,17 @@ async def preview_chatbook(
         ver_str = getattr(manifest.version, 'value', str(manifest.version))
         if ver_str == "1.0":
             ver_str = "1.0.0"
+        try:
+            schema_version = SchemaChatbookVersion(ver_str)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported chatbook version: {ver_str}"
+            ) from None
         metadata_payload = dict(manifest.metadata or {})
         if manifest.binary_limits:
             metadata_payload.setdefault("binary_limits", manifest.binary_limits)
         manifest_response = ChatbookManifestResponse(
-            version=SchemaChatbookVersion(ver_str),
+            version=schema_version,
             name=manifest.name,
             description=manifest.description,
             author=manifest.author,

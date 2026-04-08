@@ -2396,6 +2396,16 @@ async def test_legacy_migration_populated_rows_preserves_chain_hash_binding(tmp_
     assert row is not None
     assert row[0] == 1
 
+    # Verify that the post-migration row has a valid chain_hash
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        new_row = conn.execute(
+            "SELECT chain_hash FROM audit_events WHERE action = ? LIMIT 1",
+            ("post_migration_read",),
+        ).fetchone()
+    assert new_row is not None
+    assert new_row["chain_hash"], "post-migration audit row is missing chain_hash"
+
 
 @pytest.mark.asyncio
 async def test_failed_flush_does_not_advance_chain_state(tmp_path, monkeypatch):

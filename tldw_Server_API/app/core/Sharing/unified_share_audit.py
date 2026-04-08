@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -62,10 +63,19 @@ def _visible_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 class UnifiedShareAuditWriter:
     """Write Sharing events into unified audit and project them back compatibly."""
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | None = None,
+        service: UnifiedAuditService | None = None,
+    ) -> None:
         resolved = Path(db_path) if db_path else DatabasePaths.get_shared_audit_db_path()
         self.db_path = str(resolved)
-        self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+        if service is not None:
+            self._service = service
+            self._owns_service = False
+        else:
+            self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+            self._owns_service = True
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -79,7 +89,8 @@ class UnifiedShareAuditWriter:
     async def stop(self) -> None:
         if not self._initialized:
             return
-        await self._service.stop()
+        if self._owns_service:
+            await self._service.stop()
         self._initialized = False
 
     async def _ensure_compatibility_state(self) -> None:
@@ -112,23 +123,19 @@ class UnifiedShareAuditWriter:
         return int(row["int_value"]) if row is not None else 0
 
     async def _max_existing_compatibility_id(self) -> int:
+        query = f"""
+            SELECT MAX(COALESCE(
+                CAST(json_extract(metadata, '$.compatibility_id') AS INTEGER),
+                CAST(json_extract(metadata, '$.legacy_share_audit_id') AS INTEGER),
+                0
+            )) AS max_id
+            FROM audit_events
+            WHERE {_SHARE_EVENT_FILTER_SQL}
+        """
         async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                f"SELECT metadata FROM audit_events WHERE {_SHARE_EVENT_FILTER_SQL}"
-            ) as cur:
-                rows = await cur.fetchall()
-
-        max_id = 0
-        for row in rows:
-            metadata = _load_metadata(row["metadata"])
-            compatibility_id = _coerce_int(
-                metadata.get("compatibility_id")
-                or metadata.get("legacy_share_audit_id")
-            )
-            if compatibility_id is not None:
-                max_id = max(max_id, compatibility_id)
-        return max_id
+            async with db.execute(query) as cur:
+                row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     async def _sync_compatibility_floor(self) -> None:
         floor = max(
@@ -246,8 +253,11 @@ class UnifiedShareAuditWriter:
         conditions = [_SHARE_EVENT_FILTER_SQL]
         params: list[Any] = []
         if owner_user_id is not None:
-            conditions.append("tenant_user_id = ?")
-            params.append(str(owner_user_id))
+            conditions.append(
+                "(tenant_user_id = ? OR json_extract(metadata, '$.owner_user_id') = ?)"
+            )
+            owner_str = str(owner_user_id)
+            params.extend([owner_str, owner_user_id])
         if resource_type is not None:
             conditions.append("resource_type = ?")
             params.append(resource_type)
@@ -269,7 +279,7 @@ class UnifiedShareAuditWriter:
                 metadata
             FROM audit_events
             WHERE {' AND '.join(conditions)}
-            ORDER BY timestamp DESC, event_id DESC
+            ORDER BY timestamp DESC, rowid DESC
             LIMIT ? OFFSET ?
         """
 
@@ -278,22 +288,37 @@ class UnifiedShareAuditWriter:
             async with db.execute(query, tuple(params)) as cur:
                 rows = await cur.fetchall()
 
-        return [self._project_row(dict(row)) for row in rows]
+        projected: list[dict[str, Any]] = []
+        for row in rows:
+            result = self._project_row(dict(row))
+            if result is not None:
+                projected.append(result)
+        return projected
 
-    def _project_row(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _project_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
         metadata = _load_metadata(row.get("metadata"))
         compatibility_id = _coerce_int(
             metadata.get("compatibility_id")
             or metadata.get("legacy_share_audit_id")
         )
         if compatibility_id is None:
-            raise ValueError("Sharing audit row is missing a compatibility id")
+            logger.warning(
+                "Skipping sharing audit row without compatibility_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
 
         owner_user_id = _coerce_int(row.get("tenant_user_id"))
         if owner_user_id is None:
             owner_user_id = _coerce_int(metadata.get("owner_user_id"))
         if owner_user_id is None:
-            raise ValueError("Sharing audit row is missing an owner_user_id")
+            logger.warning(
+                "Skipping sharing audit row without owner_user_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
 
         actor_user_id = _coerce_int(metadata.get("actor_user_id"))
         if actor_user_id is None:

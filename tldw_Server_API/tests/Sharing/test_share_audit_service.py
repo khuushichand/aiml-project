@@ -97,11 +97,12 @@ async def test_log_with_ip_and_user_agent(audit_service):
 
 
 @pytest.mark.asyncio
-async def test_share_audit_service_uses_unified_writer_when_provided(repo, tmp_path):
+async def test_share_audit_service_uses_unified_writer_when_provided(tmp_path):
     from tldw_Server_API.app.core.Sharing.unified_share_audit import UnifiedShareAuditWriter
 
     writer = UnifiedShareAuditWriter(db_path=str(tmp_path / "audit_shared.db"))
-    service = ShareAuditService(repo, writer=writer)
+    # Pass no repo so the service *must* use the writer
+    service = ShareAuditService(writer=writer)
 
     try:
         await service.log(

@@ -30,7 +30,12 @@ def make_chatbook_manifest(**overrides):
     return manifest
 
 
-def build_chatbook_archive_bytes(*, members=None, manifest=None, compression=zipfile.ZIP_STORED) -> bytes:
+def build_chatbook_archive_bytes(
+    *,
+    members: list[tuple[str | zipfile.ZipInfo, str | bytes]] | None = None,
+    manifest: dict | None = None,
+    compression: int = zipfile.ZIP_STORED,
+) -> bytes:
     zip_buffer = io.BytesIO()
     archive_members = members or []
     manifest_payload = manifest or make_chatbook_manifest()

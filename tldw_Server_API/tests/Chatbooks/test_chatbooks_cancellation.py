@@ -18,9 +18,9 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 
 
 @pytest.fixture()
-def client(tmp_path_factory):
+def client(tmp_path_factory, monkeypatch):
     """Provide a TestClient with deterministic chatbooks job state."""
-    os.environ["TEST_MODE"] = "true"
+    monkeypatch.setenv("TEST_MODE", "true")
     tmp_dir = tmp_path_factory.mktemp("chatbooks_cancel")
 
     class _DummyCursor:

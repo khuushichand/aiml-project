@@ -12,9 +12,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGD
 
 
 @pytest.fixture
-def manifest_contract_service(tmp_path):
-    os.environ["PYTEST_CURRENT_TEST"] = "test"
-    os.environ["USER_DB_BASE_DIR"] = str(tmp_path)
+def manifest_contract_service(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
 
     db_path = tmp_path / "manifest_contract.db"
     db = CharactersRAGDB(db_path=str(db_path), client_id="manifest-contract")

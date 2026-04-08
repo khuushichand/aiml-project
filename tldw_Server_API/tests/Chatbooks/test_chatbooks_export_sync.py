@@ -84,9 +84,10 @@ class FakeDB:
 
 
 @pytest.fixture()
-def client_override(tmp_path):
+def client_override(tmp_path, monkeypatch):
     # Ensure test mode to avoid global rate limiter
-    os.environ["TEST_MODE"] = "true"
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
 
     async def override_user():
         return User(id=1, username="tester", email="t@e.com", is_active=True)

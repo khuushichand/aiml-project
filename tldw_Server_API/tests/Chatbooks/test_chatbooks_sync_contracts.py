@@ -197,6 +197,7 @@ def test_sync_import_endpoint_propagates_wrapper_result(
 
 @pytest.mark.unit
 def test_sync_import_service_counts_renamed_items_as_imported(tmp_path, monkeypatch):
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
     service = ChatbookService(user_id="sync-user", db=_ImportDB())
     archive_path = _make_import_archive(service.import_dir, note_title="Conflicting Title")
 
@@ -220,6 +221,7 @@ def test_sync_import_service_counts_renamed_items_as_imported(tmp_path, monkeypa
 
 @pytest.mark.unit
 def test_sync_import_service_skipped_conflicts_do_not_increment_imported_items(tmp_path, monkeypatch):
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path))
     service = ChatbookService(user_id="sync-user", db=_ImportDB())
     archive_path = _make_import_archive(service.import_dir, note_title="Existing Title")
 

@@ -28,6 +28,7 @@ import shutil
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -2112,9 +2113,9 @@ class ChatbookService:
 
             def _run_import_for_type(
                 content_type: ContentType,
-                import_fn,
-                *args,
-                **kwargs,
+                import_fn: Callable[..., Any],
+                *args: Any,
+                **kwargs: Any,
             ) -> None:
                 before_successful = import_status.successful_items
                 import_fn(*args, **kwargs)
@@ -2949,10 +2950,11 @@ class ChatbookService:
                         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             continue
 
-                        # Check if any job references this file
+                        # Check if any job references this file (by absolute path or token)
+                        token_ref = self._build_import_file_token(entry.resolve())
                         cursor = self.db.execute_query(
-                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND chatbook_path = ? LIMIT 1",
-                            (self.user_id, str(entry)),
+                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND (chatbook_path = ? OR chatbook_path = ?) LIMIT 1",
+                            (self.user_id, str(entry), token_ref),
                         )
                         refs = self._fetch_results(cursor)
                         if not refs:
