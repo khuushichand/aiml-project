@@ -6,7 +6,8 @@ from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
     UserDatabase,
     UserDatabaseError,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 
 
 class _Result:
@@ -38,6 +39,41 @@ def test_initialize_schema_raises_when_required_schema_apply_fails(monkeypatch):
 
     with pytest.raises(UserDatabaseError, match="schema initialization"):
         db._initialize_schema()
+
+
+def test_ensure_core_columns_handles_real_legacy_sqlite_uuid_migration(tmp_path):
+    db_path = tmp_path / "users.db"
+    backend = DatabaseBackendFactory.create_backend(
+        DatabaseConfig(
+            backend_type=BackendType.SQLITE,
+            sqlite_path=str(db_path),
+        )
+    )
+    backend.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT)"
+    )
+    backend.execute(
+        "INSERT INTO users (username) VALUES (?)",
+        ("legacy-user",),
+    )
+    backend.execute("CREATE TABLE roles (id INTEGER PRIMARY KEY)")
+    backend.execute("CREATE TABLE registration_codes (id INTEGER PRIMARY KEY)")
+
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = backend
+
+    db._ensure_core_columns()
+
+    user_columns = {
+        row["name"] if isinstance(row, dict) else row[1]
+        for row in backend.execute("PRAGMA table_info(users)").rows
+    }
+    if "uuid" not in user_columns:
+        pytest.fail("expected users.uuid column to be added for legacy SQLite bootstrap")
+
+    uuid_value = backend.execute("SELECT uuid FROM users WHERE username = ?", ("legacy-user",)).rows[0]["uuid"]
+    if not uuid_value:
+        pytest.fail("expected legacy SQLite user rows to receive a UUID backfill")
 
 
 def test_ensure_core_columns_raises_when_required_column_add_fails():

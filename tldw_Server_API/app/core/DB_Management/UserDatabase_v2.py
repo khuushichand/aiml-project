@@ -1232,7 +1232,7 @@ class UserDatabase:
                 column_names = {row['name'] if isinstance(row, dict) else row[1] for row in result.rows}
                 if 'uuid' not in column_names:
                     user_step = "users.uuid"
-                    self.backend.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                    self.backend.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
                 if 'metadata' not in column_names:
                     user_step = "users.metadata"
                     self.backend.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
@@ -1257,6 +1257,8 @@ class UserDatabase:
                     WHERE uuid IS NULL OR uuid = ''
                     """
                 )
+                user_step = "users.uuid unique index"
+                self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)")
                 user_step = "users.failed_login_attempts backfill"
                 self.backend.execute(
                     "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"
