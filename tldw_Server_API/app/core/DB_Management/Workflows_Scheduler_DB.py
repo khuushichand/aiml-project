@@ -202,19 +202,22 @@ class WorkflowsSchedulerDB:
                     logger.error(f"WorkflowsSchedulerDB: failed to create directory {sqlite_path.parent}: {e}")
                     raise
                 cfg.sqlite_path = str(sqlite_path)
-                logger.info(f"WorkflowsSchedulerDB using SQLite path: {cfg.sqlite_path}")
 
             self.backend = DatabaseBackendFactory.create_backend(cfg)
         self._ensure_schema()
+        sqlite_target = self._sqlite_target_for_logging()
+        if sqlite_target is not None:
+            logger.info("WorkflowsSchedulerDB using SQLite path: {}", sqlite_target)
+
+    def _sqlite_target_for_logging(self) -> str | None:
+        cfg = getattr(self.backend, "config", None)
+        backend_type = getattr(cfg, "backend_type", None)
+        sqlite_path = getattr(cfg, "sqlite_path", None)
+        if backend_type != BackendType.SQLITE or not sqlite_path:
+            return None
+        return str(Path(sqlite_path).resolve())
 
     def _ensure_schema(self) -> None:
-        try:
-            cfg = getattr(self.backend, "config", None)
-            spath = getattr(cfg, "sqlite_path", None)
-            if spath:
-                logger.info(f"WorkflowsSchedulerDB using SQLite path: {spath}")
-        except Exception as sqlite_path_log_error:
-            logger.debug("Failed to log workflows scheduler sqlite path", exc_info=sqlite_path_log_error)
         with self.backend.transaction() as conn:
             backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
             schema = SCHED_POSTGRES_SCHEMA if backend_type == BackendType.POSTGRESQL else SCHED_SQLITE_SCHEMA

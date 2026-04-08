@@ -6,6 +6,7 @@ database backend instances based on configuration.
 """
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -36,6 +37,15 @@ if POSTGRESQL_AVAILABLE:
 _backend_instances: dict[str, DatabaseBackend] = {}
 
 
+def _describe_sqlite_target(config: DatabaseConfig) -> str:
+    raw_path = (config.sqlite_path or "").strip()
+    if raw_path == ":memory:":
+        return ":memory:"
+    if raw_path.lower().startswith("file:"):
+        return raw_path
+    return str(Path(raw_path).resolve()) if raw_path else "<default>"
+
+
 class DatabaseBackendFactory:
     """Factory for creating database backend instances."""
 
@@ -59,7 +69,10 @@ class DatabaseBackendFactory:
             raise DatabaseError(f"Unsupported backend type: {backend_type}")
 
         backend_class = _BACKEND_REGISTRY[backend_type]
-        logger.info(f"Creating {backend_type.value} backend")
+        if backend_type == BackendType.SQLITE:
+            logger.debug("Creating sqlite backend for {}", _describe_sqlite_target(config))
+        else:
+            logger.info("Creating {} backend", backend_type.value)
 
         return backend_class(config)
 

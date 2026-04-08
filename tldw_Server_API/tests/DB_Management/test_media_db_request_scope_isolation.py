@@ -12,6 +12,31 @@ from tldw_Server_API.app.core.DB_Management.media_db.runtime import session as m
 from tldw_Server_API.app.core.DB_Management.media_db.runtime import validation as media_db_validation
 
 
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.info_calls: list[str] = []
+        self.warning_calls: list[str] = []
+        self.debug_calls: list[str] = []
+
+    def info(self, message, *args, **kwargs) -> None:
+        try:
+            self.info_calls.append(message.format(*args))
+        except Exception:
+            self.info_calls.append(str(message))
+
+    def warning(self, message, *args, **kwargs) -> None:
+        try:
+            self.warning_calls.append(message.format(*args))
+        except Exception:
+            self.warning_calls.append(str(message))
+
+    def debug(self, message, *args, **kwargs) -> None:
+        try:
+            self.debug_calls.append(message.format(*args))
+        except Exception:
+            self.debug_calls.append(str(message))
+
+
 def test_factory_returns_distinct_sessions_for_distinct_scopes() -> None:
     factory = MediaDbFactory.for_sqlite_path(":memory:", client_id="scope-test")
 
@@ -81,6 +106,33 @@ def test_for_sqlite_path_provisions_shared_backend_for_request_scopes(monkeypatc
     ]
     assert (first.org_id, first.team_id) == (10, 20)
     assert (second.org_id, second.team_id) == (11, 21)
+
+
+def test_get_or_create_media_db_factory_logs_one_info_on_cache_miss(monkeypatch) -> None:
+    recorder = _RecordingLogger()
+    monkeypatch.setattr(deps, "logger", recorder, raising=True)
+    monkeypatch.setattr(deps, "_media_db_factories", {}, raising=False)
+    monkeypatch.setattr(deps, "_get_db_path_for_user", lambda user_id: Path(f"/tmp/{user_id}.db"), raising=True)
+    monkeypatch.setattr(deps, "get_content_backend_instance", lambda: None, raising=True)
+
+    class FakeFactory:
+        pass
+
+    monkeypatch.setattr(
+        deps.MediaDbFactory,
+        "for_sqlite_path",
+        classmethod(lambda cls, db_path, client_id: FakeFactory()),
+        raising=True,
+    )
+
+    first = deps._get_or_create_media_db_factory(_make_user())
+    second = deps._get_or_create_media_db_factory(_make_user())
+
+    assert first is second
+    expected_target = str(Path("/tmp/1.db").resolve())
+    assert recorder.info_calls == [
+        f"Initializing MediaDbFactory user_id=1 backend=sqlite target={expected_target}"
+    ]
 
 
 def _make_user(user_id: int = 1) -> User:
