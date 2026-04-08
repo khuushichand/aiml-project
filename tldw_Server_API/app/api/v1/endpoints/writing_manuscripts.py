@@ -2137,7 +2137,7 @@ def _validate_analysis_overrides(
                 detail=f"Unknown model override '{normalized_model}' for provider '{provider_key}'",
             )
 
-    return normalized_provider, normalized_model
+    return provider_key, normalized_model
 
 
 @router.post(
@@ -2292,10 +2292,17 @@ async def analyze_plot_holes_endpoint(
     project_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Detect plot holes and inconsistencies across an entire project."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         proj = helper.get_project(project_id)
         if not proj:
@@ -2308,12 +2315,12 @@ async def analyze_plot_holes_endpoint(
 
         result = await _analyze_plot_holes(
             combined_text, char_summary, world_summary,
-            provider=payload.provider, model=payload.model,
+            provider=provider_override, model=model_override,
         )
 
         aid = helper.create_analysis(
             project_id, "project", project_id, "plot_holes",
-            result, provider=payload.provider, model=payload.model,
+            result, provider=provider_override, model=model_override,
         )
         analysis = helper.get_analysis(aid)
         return [ManuscriptAnalysisResponse(**analysis)] if analysis else []
@@ -2331,10 +2338,17 @@ async def analyze_consistency_endpoint(
     project_id: str,
     payload: ManuscriptAnalysisRequest,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
+    current_user: User = Depends(get_request_user),
     _: None = Depends(rbac_rate_limit("writing.manuscripts.analyze")),
 ) -> list[ManuscriptAnalysisResponse]:
     """Check character and world-building consistency across an entire project."""
     try:
+        await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.manuscripts.analyze")
+        provider_override, model_override = _validate_analysis_overrides(
+            provider=payload.provider,
+            model=payload.model,
+        )
         helper = _get_helper(db)
         proj = helper.get_project(project_id)
         if not proj:
@@ -2347,13 +2361,13 @@ async def analyze_consistency_endpoint(
 
         result = await _analyze_consistency(
             combined_text, char_summary, world_summary,
-            provider=payload.provider, model=payload.model,
+            provider=provider_override, model=model_override,
         )
         score = result.get("overall_score") if isinstance(result.get("overall_score"), (int, float)) else None
 
         aid = helper.create_analysis(
             project_id, "project", project_id, "consistency",
-            result, score=score, provider=payload.provider, model=payload.model,
+            result, score=score, provider=provider_override, model=model_override,
         )
         analysis = helper.get_analysis(aid)
         return [ManuscriptAnalysisResponse(**analysis)] if analysis else []

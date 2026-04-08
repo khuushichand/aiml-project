@@ -157,13 +157,68 @@ def _extract_content(response: Any) -> str:
     """Extract text content from various LLM response formats."""
     if isinstance(response, str):
         return response
+    if isinstance(response, list):
+        parts: list[str] = []
+        for part in response:
+            extracted = _extract_content_block(part)
+            if extracted:
+                parts.append(extracted)
+        return "".join(parts)
     if isinstance(response, dict):
         choices = response.get("choices", [])
-        if choices:
-            msg = choices[0].get("message", {})
-            return msg.get("content", "") if isinstance(msg, dict) else ""
-        return response.get("content", "")
-    return str(response)
+        if isinstance(choices, list) and choices:
+            choice = choices[0]
+            if isinstance(choice, dict):
+                msg = choice.get("message", {})
+                if isinstance(msg, dict):
+                    content = msg.get("content", "")
+                    extracted = _extract_content_block(content)
+                    if extracted:
+                        return extracted
+        content = response.get("content", "")
+        extracted = _extract_content_block(content)
+        if extracted:
+            return extracted
+        return ""
+    return _extract_content_block(response) or str(response)
+
+
+def _extract_content_block(content: Any) -> str:
+    """Extract text from a content block, list of blocks, or nested payload."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [_extract_content_block(part) for part in content]
+        return "".join(part for part in parts if part)
+    if isinstance(content, dict):
+        text = content.get("text")
+        if isinstance(text, str):
+            return text
+        nested_content = content.get("content")
+        if nested_content is not None:
+            extracted = _extract_content_block(nested_content)
+            if extracted:
+                return extracted
+        message = content.get("message")
+        if message is not None:
+            extracted = _extract_content_block(message)
+            if extracted:
+                return extracted
+        value = content.get("value")
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return _extract_content_block(value)
+        return ""
+    text = getattr(content, "text", None)
+    if isinstance(text, str):
+        return text
+    nested_content = getattr(content, "content", None)
+    if nested_content is not None:
+        return _extract_content_block(nested_content)
+    return ""
 
 
 def _strip_markdown_fences(text: str) -> str:

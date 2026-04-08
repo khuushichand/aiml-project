@@ -756,6 +756,11 @@ class ManuscriptDBHelper:
                 ),
             )
             self._propagate_word_counts(conn, chapter_id, project_id)
+            self._mark_scene_family_analyses_stale_in_txn(
+                conn,
+                chapter_id=chapter_id,
+                project_id=project_id,
+            )
 
         logger.debug("Created manuscript scene {} in chapter {}", sid, chapter_id)
         return sid
@@ -839,7 +844,12 @@ class ManuscriptDBHelper:
                 ).fetchone()
                 if row:
                     self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
-                self._mark_analyses_stale_in_txn(conn, "scene", scene_id)
+                    self._mark_scene_family_analyses_stale_in_txn(
+                        conn,
+                        scene_id=scene_id,
+                        chapter_id=row["chapter_id"],
+                        project_id=row["project_id"],
+                    )
 
     def soft_delete_scene(self, scene_id: str, expected_version: int) -> None:
         """Soft-delete a scene with optimistic locking; propagates word counts."""
@@ -865,10 +875,15 @@ class ManuscriptDBHelper:
                     f"Scene {scene_id!r} delete failed (version conflict or not found).",
                     entity="manuscript_scenes",
                     entity_id=scene_id,
-                )
+            )
 
             if row:
                 self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
+                self._mark_scene_family_analyses_stale_in_txn(
+                    conn,
+                    chapter_id=row["chapter_id"],
+                    project_id=row["project_id"],
+                )
 
     def get_all_scene_texts(self, project_id: str) -> list[str]:
         """Get all scene plain texts for a project in narrative order (single query)."""
@@ -2407,6 +2422,28 @@ class ManuscriptDBHelper:
             (now, self._client_id, scope_type, scope_id),
         )
         return cur.rowcount
+
+    def _mark_scene_family_analyses_stale_in_txn(
+        self,
+        conn: Any,
+        *,
+        scene_id: str | None = None,
+        chapter_id: str | None = None,
+        project_id: str | None = None,
+    ) -> int:
+        """Mark analysis rows for the affected scene family as stale.
+
+        Returns the total number of analysis rows updated across all supplied
+        scopes.
+        """
+        total = 0
+        if scene_id is not None:
+            total += self._mark_analyses_stale_in_txn(conn, "scene", scene_id)
+        if chapter_id is not None:
+            total += self._mark_analyses_stale_in_txn(conn, "chapter", chapter_id)
+        if project_id is not None:
+            total += self._mark_analyses_stale_in_txn(conn, "project", project_id)
+        return total
 
     def soft_delete_analysis(self, analysis_id: str, expected_version: int) -> None:
         """Soft-delete an analysis with optimistic locking."""
