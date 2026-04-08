@@ -689,6 +689,19 @@ class TestReorder:
                 project_id=left,
             )
 
+    def test_reorder_with_reparent_rejects_cross_project_part_without_project_id(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        local_part = mdb.create_part(left, "Local")
+        foreign_part = mdb.create_part(right, "Foreign")
+        chapter_id = mdb.create_chapter(left, "Movable", part_id=local_part)
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.reorder_items(
+                "chapter",
+                [{"id": chapter_id, "sort_order": 0, "part_id": foreign_part}],
+            )
+
     def test_reorder_parts(self, mdb):
         pid = mdb.create_project("Novel")
         p1 = mdb.create_part(pid, "P1", sort_order=1)

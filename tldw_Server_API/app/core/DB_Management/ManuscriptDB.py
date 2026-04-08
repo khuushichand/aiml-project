@@ -1125,6 +1125,30 @@ class ManuscriptDBHelper:
                             "part",
                         )
 
+            # Always enforce same-project part reparenting for chapters.
+            if entity_type == "chapter":
+                for item in items:
+                    if "part_id" not in item or item["part_id"] is None:
+                        continue
+
+                    effective_project_id = project_id
+                    if effective_project_id is None:
+                        chapter_row = conn.execute(
+                            "SELECT project_id FROM manuscript_chapters WHERE id = ? AND deleted = 0",
+                            (item["id"],),
+                        ).fetchone()
+                        if chapter_row is None:
+                            raise ValueError(f"chapter {item['id']!r} not found")
+                        effective_project_id = chapter_row["project_id"]
+
+                    self._assert_same_project(
+                        conn,
+                        "manuscript_parts",
+                        item["part_id"],
+                        effective_project_id,
+                        "part",
+                    )
+
             for item in items:
                 item_id = item["id"]
                 sort_order = item["sort_order"]
