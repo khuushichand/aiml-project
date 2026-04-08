@@ -202,19 +202,25 @@ def _restore_soft_deleted_writing_session(
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.snapshot.import")
     try:
         with db.transaction() as conn:
+            # NOTE: Do NOT call db.soft_delete_writing_session() (or similar
+            # high-level methods) inside an active transaction block -- those
+            # methods may start their own transactions internally, causing
+            # SQLite "cannot start a transaction within a transaction" errors.
+            # Instead, pass the existing `conn` to perform deletions directly,
+            # or refactor the helpers to accept an optional connection argument.
             if payload.mode == "replace":
                 for session in _list_all_writing_sessions(db):
                     session_id = str(session.get("id") or "")
                     if session_id:
-                        db.soft_delete_writing_session(session_id, int(session.get("version") or 1))
+                        _soft_delete_writing_session_with_conn(conn, session_id, int(session.get("version") or 1))
                 for template in _list_all_writing_templates(db):
                     template_name = str(template.get("name") or "")
                     if template_name:
-                        db.soft_delete_writing_template(template_name, int(template.get("version") or 1))
+                        _soft_delete_writing_template_with_conn(conn, template_name, int(template.get("version") or 1))
                 for theme in _list_all_writing_themes(db):
                     theme_name = str(theme.get("name") or "")
                     if theme_name:
-                        db.soft_delete_writing_theme(theme_name, int(theme.get("version") or 1))
+                        _soft_delete_writing_theme_with_conn(conn, theme_name, int(theme.get("version") or 1))
 
             imported_sessions = 0
             for session_item in payload.snapshot.sessions:
@@ -1337,6 +1343,16 @@ async def analyze_plot_holes_endpoint(
         provider=payload.provider,
         model=payload.model,
     )
+
+    # Build analysis inputs from the project's manuscript content.
+    # combined_text: full manuscript text concatenated from all scenes/chapters.
+    # char_summary / world_summary: summaries extracted from project metadata.
+    # helper: a ManuscriptAnalysisHelper(db) instance scoped to the current user's DB.
+    helper = ManuscriptAnalysisHelper(db)
+    combined_text = helper.get_combined_manuscript_text(project_id)
+    char_summary = helper.get_character_summary(project_id)
+    world_summary = helper.get_world_summary(project_id)
+
     result = await _analyze_plot_holes(
         combined_text,
         char_summary,

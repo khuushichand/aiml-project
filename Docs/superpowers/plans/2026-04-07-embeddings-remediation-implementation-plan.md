@@ -317,6 +317,9 @@ async def create_embeddings_batch_async(
             uncached_texts.append(text)
             uncached_indices.append(i)
 
+    # Generate embeddings for uncached texts via the provider
+    all_new_embeddings = await _call_provider(config, uncached_texts)
+
     for i, (idx, text) in enumerate(zip(uncached_indices, uncached_texts)):
         embedding = all_new_embeddings[i]
         embeddings[idx] = embedding
@@ -585,12 +588,21 @@ async def generate_embeddings_for_media(
         }
 
     if embedding_model != FALLBACK_EMBEDDING_MODEL:
-        fallback_embeddings = await create_embeddings_batch_async(
-            texts=chunk_texts,
-            provider="huggingface",
-            model_id=FALLBACK_EMBEDDING_MODEL,
-            metadata=request_metadata,
-        )
+        try:
+            fallback_embeddings = await create_embeddings_batch_async(
+                texts=chunk_texts,
+                provider="huggingface",
+                model_id=FALLBACK_EMBEDDING_MODEL,
+                metadata=request_metadata,
+            )
+        except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
+            return {
+                "status": "error",
+                "message": f"Fallback embedding generation also failed: {exc}",
+                "error": str(exc),
+                "embedding_count": 0,
+                "chunks_processed": len(chunks),
+            }
         validation_error = _validate_embeddings_result(fallback_embeddings, len(chunk_texts))
         if validation_error:
             return {

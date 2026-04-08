@@ -80,7 +80,7 @@ def migrate(
     db_path: str,
     target_version: Optional[int] = None,
     create_backup: bool = True,
-):
+) -> None:
     """Run database migrations"""
     migrator = DatabaseMigrator(db_path)
 

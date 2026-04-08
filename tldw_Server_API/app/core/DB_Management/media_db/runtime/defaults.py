@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import configparser
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from typing import Optional
 
 from loguru import logger
@@ -42,17 +42,26 @@ try:
     from threading import RLock
 
     _runtime_state_lock = RLock()
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover — environments without threading
     _runtime_state_lock = None  # type: ignore
 
 
-def _runtime_state_context():
+def _runtime_state_context() -> AbstractContextManager[None]:
+    """Return a context manager guarding runtime state mutations.
+
+    Uses an RLock when threading is available, otherwise a no-op context.
+    """
     if _runtime_state_lock is None:
         return nullcontext()
     return _runtime_state_lock
 
 
 def _clear_content_backend_cache_unlocked() -> None:
+    """Clear the cached content backend without acquiring the runtime lock.
+
+    Intended to be called from within a ``_runtime_state_context()`` block.
+    Swallows import and runtime errors so callers can proceed with reset.
+    """
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 

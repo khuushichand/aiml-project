@@ -229,16 +229,17 @@ def _ensure_rls_policy_set(
         return False
 
     with backend.transaction() as conn:
+        # Let the transaction context manager handle commit/rollback.
+        # Manual conn.commit() / conn.rollback() inside a context-managed
+        # transaction block is risky and can cause double-commit or
+        # mask the original exception during rollback.
         cur = conn.cursor()
-        try:
-            for index, statement in enumerate(statements, start=1):
+        for index, statement in enumerate(statements, start=1):
+            try:
                 cur.execute(statement)
-            conn.commit()
-            return True
-        except Exception as exc:
-            with contextlib.suppress(Exception):
-                conn.rollback()
-            raise DatabaseError(f"{name} RLS statement {index} failed: {exc}") from exc
+            except Exception as exc:
+                raise DatabaseError(f"{name} RLS statement {index} failed: {exc}") from exc
+        return True
 
 
 def ensure_prompt_studio_rls(backend: DatabaseBackend) -> bool:
@@ -882,8 +883,9 @@ Expected: FAIL because `resolve_trusted_database_path()` currently uses lexical 
 ```python
 # tldw_Server_API/app/core/DB_Management/db_path_utils.py
 def _resolve_candidate_for_containment(candidate: Path) -> Path:
-    parent = candidate.parent.resolve(strict=False)
-    return parent / candidate.name
+    # Resolve the entire path, not just the parent, so that symlinks
+    # and '..' segments anywhere in the path are fully resolved.
+    return candidate.resolve(strict=False)
 
 
 def resolve_trusted_database_path(...):

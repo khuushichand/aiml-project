@@ -6,7 +6,7 @@
 
 **Architecture:** Add two new AuthNZ migrations (`84` and `85`) to correct persisted SQLite schema, update Postgres/backstop DDL to the same contract, and introduce one shared SQLite schema-strictness predicate reused by both `DatabasePool` and `AuthnzApiKeysRepo`. The runtime code stays storage-first: repo/tracker APIs follow the corrected schema, and schema files plus fixtures are aligned so fresh installs and migrated installs behave the same.
 
-**Tech Stack:** Python 3.14, FastAPI/AuthNZ core, SQLite, PostgreSQL/asyncpg, aiosqlite, pytest
+**Tech Stack:** Python 3.12+, FastAPI/AuthNZ core, SQLite, PostgreSQL/asyncpg, aiosqlite, pytest
 
 ---
 
@@ -274,7 +274,17 @@ await conn.execute(
 )
 ```
 
+> **NOTE:** The snippet below uses PostgreSQL-specific features (`information_schema.columns`,
+> `LOCK TABLE`). Guard this code path with a backend-type check (e.g.
+> `if backend.is_postgres:`) and use the appropriate SQLite introspection
+> (`PRAGMA table_info(...)`) when running against SQLite.
+
 ```python
+# IMPORTANT: Only execute this block when the backend is PostgreSQL.
+# For SQLite use PRAGMA table_info('account_lockouts') instead of information_schema.
+if not backend.is_postgres:
+    raise RuntimeError("This migration path is PostgreSQL-only; see SQLite migration 84/85.")
+
 columns = await conn.fetch(
     """
     SELECT column_name
