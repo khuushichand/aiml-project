@@ -176,6 +176,9 @@ Safe fixes allowed in this batch:
   contract, but document it clearly instead of leaving it implicit
 - clarify that `notify_generic()` and digest paths do not currently share the
   full topic-alert delivery path
+- preserve current Guardian-facing behavior for shared
+  `NotificationService` helpers; this batch may harden those helpers but does
+  not redesign Guardian dispatch semantics
 
 Not allowed in this batch:
 
@@ -285,6 +288,8 @@ This remediation is successful if:
 - current public lifecycle behavior and overlay-only identity behavior are
   explicitly covered by tests rather than left implicit
 - monitoring docs match the actual backend behavior shipped after this batch
-- one umbrella GitHub issue exists for the deferred contract changes
+- deferred contract follow-up is captured either in one remote umbrella GitHub
+  issue or in issue-ready text artifacts when direct issue creation is
+  unavailable
 - the existing monitoring/admin/auth verification slices still pass after the
   remediation work
