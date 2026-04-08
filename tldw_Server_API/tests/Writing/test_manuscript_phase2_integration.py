@@ -152,6 +152,63 @@ def test_character_crud(client: TestClient):
     assert resp.status_code == 404
 
 
+def test_character_create_rejects_whitespace_name(client: TestClient):
+    project = _create_project(client, "Character Create Validation")
+    project_id = project["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "   ", "role": "supporting"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "name" in resp.json()["detail"].lower()
+
+
+def test_character_patch_null_custom_fields_resets_to_empty_object(client: TestClient):
+    project = _create_project(client, "Character Patch Validation")
+    project_id = project["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Aldric", "role": "protagonist", "custom_fields": {"hair_color": "black"}},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    char_id = create_resp.json()["id"]
+
+    resp = client.patch(
+        f"{PREFIX}/characters/{char_id}",
+        json={"custom_fields": None},
+        headers={"expected-version": "1"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["custom_fields"] == {}
+    assert updated["version"] == 2
+
+
+def test_character_patch_rejects_empty_payload(client: TestClient):
+    project = _create_project(client, "Character Empty Patch")
+    project_id = project["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Aldric", "role": "protagonist"},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    char_id = create_resp.json()["id"]
+
+    resp = client.patch(
+        f"{PREFIX}/characters/{char_id}",
+        json={},
+        headers={"expected-version": "1"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "no fields" in resp.json()["detail"].lower()
+
+
 # -----------------------------------------------------------------------
 # Character Relationships
 # -----------------------------------------------------------------------
@@ -296,6 +353,57 @@ def test_world_info_crud(client: TestClient):
     assert resp.status_code == 404
 
 
+def test_world_info_create_rejects_whitespace_name(client: TestClient):
+    project = _create_project(client, "World Info Create Validation")
+    project_id = project["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/world-info",
+        json={"kind": "location", "name": "   "},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "name" in resp.json()["detail"].lower()
+
+
+def test_world_info_patch_null_parent_and_collections_reset(client: TestClient):
+    project = _create_project(client, "World Info Patch Validation")
+    project_id = project["id"]
+
+    parent_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/world-info",
+        json={"kind": "location", "name": "Parent", "properties": {"era": "ancient"}, "tags": ["root"]},
+    )
+    assert parent_resp.status_code == 201, parent_resp.text
+    parent_id = parent_resp.json()["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/world-info",
+        json={
+            "kind": "location",
+            "name": "Child",
+            "parent_id": parent_id,
+            "properties": {"population": 500},
+            "tags": ["keep"],
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    item_id = create_resp.json()["id"]
+
+    resp = client.patch(
+        f"{PREFIX}/world-info/{item_id}",
+        json={"parent_id": None, "properties": None, "tags": None},
+        headers={"expected-version": "1"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["parent_id"] is None
+    assert updated["properties"] == {}
+    assert updated["tags"] == []
+    assert updated["version"] == 2
+
+
 # -----------------------------------------------------------------------
 # Plot Tracking
 # -----------------------------------------------------------------------
@@ -405,6 +513,214 @@ def test_plot_tracking(client: TestClient):
         headers={"expected-version": "2"},
     )
     assert resp.status_code == 204
+
+
+def test_plot_line_create_rejects_whitespace_title(client: TestClient):
+    project = _create_project(client, "Plot Line Create Validation")
+    project_id = project["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "   "},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "title" in resp.json()["detail"].lower()
+
+
+def test_plot_line_patch_null_description(client: TestClient):
+    project = _create_project(client, "Plot Line Patch Validation")
+    project_id = project["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "Main Quest", "description": "Initial"},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    plot_line_id = create_resp.json()["id"]
+
+    resp = client.patch(
+        f"{PREFIX}/plot-lines/{plot_line_id}",
+        json={"description": None},
+        headers={"expected-version": "1"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["description"] is None
+    assert updated["version"] == 2
+
+
+def test_plot_event_create_rejects_whitespace_title(client: TestClient):
+    project = _create_project(client, "Plot Event Create Validation")
+    project_id = project["id"]
+
+    plot_line_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "Main Quest"},
+    )
+    assert plot_line_resp.status_code == 201, plot_line_resp.text
+    plot_line_id = plot_line_resp.json()["id"]
+
+    resp = client.post(
+        f"{PREFIX}/plot-lines/{plot_line_id}/events",
+        json={"title": "   ", "event_type": "plot"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "title" in resp.json()["detail"].lower()
+
+
+def test_plot_event_patch_allows_nullable_scene_links(client: TestClient):
+    project = _create_project(client, "Plot Event Patch Validation")
+    project_id = project["id"]
+    chapter = _create_chapter(client, project_id)
+    scene = _create_scene(client, chapter["id"])
+
+    plot_line_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "Main Quest"},
+    )
+    assert plot_line_resp.status_code == 201, plot_line_resp.text
+    plot_line_id = plot_line_resp.json()["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/plot-lines/{plot_line_id}/events",
+        json={
+            "title": "Dragon Appears",
+            "scene_id": scene["id"],
+            "chapter_id": chapter["id"],
+            "event_type": "conflict",
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    event_id = create_resp.json()["id"]
+
+    resp = client.patch(
+        f"{PREFIX}/plot-events/{event_id}",
+        json={"scene_id": None, "chapter_id": None},
+        headers={"expected-version": "1"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["scene_id"] is None
+    assert updated["chapter_id"] is None
+    assert updated["version"] == 2
+
+
+def test_plot_hole_create_rejects_whitespace_title(client: TestClient):
+    project = _create_project(client, "Plot Hole Create Validation")
+    project_id = project["id"]
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-holes",
+        json={"title": "   "},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "title" in resp.json()["detail"].lower()
+
+
+def test_plot_hole_patch_null_resolution(client: TestClient):
+    project = _create_project(client, "Plot Hole Patch Validation")
+    project_id = project["id"]
+
+    create_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-holes",
+        json={"title": "Timeline gap", "severity": "high"},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    hole_id = create_resp.json()["id"]
+
+    first_patch = client.patch(
+        f"{PREFIX}/plot-holes/{hole_id}",
+        json={"status": "resolved", "resolution": "Temporary fix"},
+        headers={"expected-version": "1"},
+    )
+    assert first_patch.status_code == 200, first_patch.text
+    assert first_patch.json()["resolution"] == "Temporary fix"
+
+    resp = client.patch(
+        f"{PREFIX}/plot-holes/{hole_id}",
+        json={"status": "resolved", "resolution": None},
+        headers={"expected-version": "2"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["resolution"] is None
+    assert updated["status"] == "resolved"
+    assert updated["version"] == 3
+
+
+def test_deleted_project_hides_project_scoped_lists(client: TestClient):
+    project = _create_project(client, "Ghost Project")
+    project_id = project["id"]
+
+    part_resp = client.post(f"{PREFIX}/projects/{project_id}/parts", json={"title": "Part I"})
+    assert part_resp.status_code == 201, part_resp.text
+    part = part_resp.json()
+
+    chapter_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/chapters",
+        json={"title": "Chapter 1", "part_id": part["id"]},
+    )
+    assert chapter_resp.status_code == 201, chapter_resp.text
+
+    char_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Aldric", "role": "protagonist"},
+    )
+    assert char_resp.status_code == 201, char_resp.text
+    char = char_resp.json()
+
+    other_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Brin", "role": "supporting"},
+    )
+    assert other_resp.status_code == 201, other_resp.text
+    other = other_resp.json()
+
+    rel_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters/relationships",
+        json={
+            "from_character_id": char["id"],
+            "to_character_id": other["id"],
+            "relationship_type": "ally",
+            "bidirectional": True,
+        },
+    )
+    assert rel_resp.status_code == 201, rel_resp.text
+
+    world_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/world-info",
+        json={"kind": "location", "name": "Keep"},
+    )
+    assert world_resp.status_code == 201, world_resp.text
+
+    plot_line_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "Main Quest"},
+    )
+    assert plot_line_resp.status_code == 201, plot_line_resp.text
+
+    plot_hole_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-holes",
+        json={"title": "Gap", "description": "Missing", "severity": "high"},
+    )
+    assert plot_hole_resp.status_code == 201, plot_hole_resp.text
+
+    delete_resp = client.delete(f"{PREFIX}/projects/{project_id}", headers={"expected-version": "1"})
+    assert delete_resp.status_code == 204
+
+    assert client.get(f"{PREFIX}/projects/{project_id}/parts").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/chapters").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/characters").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/characters/relationships").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/world-info").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/plot-lines").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/plot-holes").json() == []
 
 
 # -----------------------------------------------------------------------

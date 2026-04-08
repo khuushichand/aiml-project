@@ -99,13 +99,21 @@ Monitoring emits alerts without changing moderation behavior or endpoint results
 - Admin-only APIs. Extend to org/team leads later.
 - Opt-in via config or explicit creation of watchlists.
 - Store minimal snippets (e.g., first 200 chars around the match).
-- All local; no external calls.
+- Local-first by default; webhook/email delivery is attempted only when operators configure those channels.
 
 ## Notifications (Phase 1 scaffolding)
 - Local JSONL file sink gated by severity threshold.
+- Topic-alert notifications may also make best-effort webhook/email attempts when configured.
+- Generic notifications use the JSONL sink plus optional webhook dispatch; they do not send email in the current batch.
+- Digest modes buffer items in memory, and `flush_digest()` currently clears buffered items and returns the count only.
 - Configure via env or config:
   - `MONITORING_NOTIFY_ENABLED`, `MONITORING_NOTIFY_MIN_SEVERITY`, `MONITORING_NOTIFY_FILE`
-  - Placeholder knobs: `MONITORING_NOTIFY_WEBHOOK_URL`, `MONITORING_NOTIFY_EMAIL_TO` (not delivered offline)
+  - `MONITORING_NOTIFY_WEBHOOK_URL`, `MONITORING_NOTIFY_EMAIL_TO`, `MONITORING_NOTIFY_SMTP_HOST`, `MONITORING_NOTIFY_EMAIL_FROM`
+
+## Alert Lifecycle
+- `POST /api/v1/monitoring/alerts/{id}/read` and `POST /api/v1/monitoring/alerts/{id}/acknowledge` currently return the same minimal `{status, id}` acknowledgement.
+- `DELETE /api/v1/monitoring/alerts/{id}` returns the same minimal acknowledgement after dismissing the alert.
+- Re-list alerts for authoritative merged state after any mutation.
 
 ## Phase 2 (planned)
 - Delivery channels: email, webhook, Slack.

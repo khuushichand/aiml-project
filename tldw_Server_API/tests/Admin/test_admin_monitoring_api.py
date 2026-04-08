@@ -36,13 +36,17 @@ async def _seed_assignable_user() -> int:
 async def test_admin_monitoring_rules_and_actions(tmp_path) -> None:
     _setup_env(tmp_path)
 
+    from tldw_Server_API.app.api.v1.endpoints import monitoring as monitoring_endpoints
     from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
     from tldw_Server_API.app.core.AuthNZ.session_manager import reset_session_manager
     from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
+    os.environ["MONITORING_ALERTS_DB"] = str(tmp_path / "monitoring_alerts.db")
+
     await reset_db_pool()
     reset_settings()
     await reset_session_manager()
+    monitoring_endpoints._TOPIC_MONITORING_DB = None
 
     headers = {"X-API-KEY": os.environ["SINGLE_USER_API_KEY"]}
 
@@ -95,10 +99,21 @@ async def test_admin_monitoring_rules_and_actions(tmp_path) -> None:
         assert escalate_resp.status_code == 200, escalate_resp.text
         assert escalate_resp.json()["item"]["escalated_severity"] == "critical"
 
-        history_resp = client.get("/api/v1/admin/monitoring/alerts/history", params={"alert_identity": "alert:7"})
+        public_alerts_resp = client.get("/api/v1/monitoring/alerts")
+        assert public_alerts_resp.status_code == 200, public_alerts_resp.text
+        assert all(item["alert_identity"] != "alert:7" for item in public_alerts_resp.json()["items"])
+
+        history_resp = client.get(
+            "/api/v1/admin/monitoring/alerts/history",
+            params={"alert_identity": "alert:7"},
+        )
         assert history_resp.status_code == 200, history_resp.text
-        actions = [item["action"] for item in history_resp.json()["items"]]
-        assert actions[:4] == ["escalated", "snoozed", "unassigned", "assigned"]
+        assert [item["action"] for item in history_resp.json()["items"][:4]] == [
+            "escalated",
+            "snoozed",
+            "unassigned",
+            "assigned",
+        ]
 
         delete_resp = client.delete(f"/api/v1/admin/monitoring/alert-rules/{rule_id}")
         assert delete_resp.status_code == 200, delete_resp.text

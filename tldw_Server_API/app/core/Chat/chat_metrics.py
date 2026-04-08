@@ -1,8 +1,10 @@
 # chat_metrics.py
 # Chat-specific metrics integration for telemetry
 
+import statistics
 import time
 import threading
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -22,6 +24,52 @@ RUN_FIRST_INELIGIBLE_REASONS = frozenset(
         "run_missing_after_filtering",
     }
 )
+
+_ENDPOINT_METRIC_SAMPLE_SIZE = 256
+_endpoint_metric_lock = threading.Lock()
+_endpoint_metric_samples = defaultdict(lambda: deque(maxlen=_ENDPOINT_METRIC_SAMPLE_SIZE))
+_endpoint_metric_timestamps: dict[str, float] = {}
+
+
+def _record_endpoint_metric(metric_name: str, value: float) -> None:
+    """Store sampled metric values for /api/v1/metrics/chat summary payloads."""
+    with _endpoint_metric_lock:
+        _endpoint_metric_samples[metric_name].append(float(value))
+        _endpoint_metric_timestamps[metric_name] = time.time()
+
+
+def get_endpoint_metrics_snapshot() -> dict[str, dict[str, float]]:
+    """Return summary stats for sampled chat endpoint metrics."""
+    with _endpoint_metric_lock:
+        copied_samples = {
+            metric_name: list(samples)
+            for metric_name, samples in _endpoint_metric_samples.items()
+        }
+        copied_timestamps = dict(_endpoint_metric_timestamps)
+
+    snapshot: dict[str, dict[str, float]] = {}
+    for metric_name, numeric_values in copied_samples.items():
+        if not numeric_values:
+            continue
+        snapshot[metric_name] = {
+            "count": len(numeric_values),
+            "sum": float(sum(numeric_values)),
+            "mean": float(statistics.mean(numeric_values)),
+            "median": float(statistics.median(numeric_values)),
+            "min": float(min(numeric_values)),
+            "max": float(max(numeric_values)),
+            "stddev": float(statistics.stdev(numeric_values)) if len(numeric_values) > 1 else 0.0,
+            "latest": float(numeric_values[-1]),
+            "latest_timestamp": float(copied_timestamps.get(metric_name, 0.0)),
+        }
+    return snapshot
+
+
+def reset_endpoint_metrics_snapshot() -> None:
+    """Clear in-process sampled metrics exposed by /api/v1/metrics/chat."""
+    with _endpoint_metric_lock:
+        _endpoint_metric_samples.clear()
+        _endpoint_metric_timestamps.clear()
 
 
 class ChatMetricLabels(Enum):
@@ -425,6 +473,7 @@ class ChatMetricsCollector:
             try:
                 # Increment request counter
                 self.metrics.requests_total.add(1, labels)
+                _record_endpoint_metric("chat_requests_total", 1.0)
 
                 yield span
 
@@ -438,6 +487,7 @@ class ChatMetricsCollector:
                 labels[ChatMetricLabels.ERROR_TYPE.value] = type(e).__name__
 
                 self.metrics.errors_total.add(1, labels)
+                _record_endpoint_metric("chat_errors_total", 1.0)
                 span.record_exception(e)
                 span.set_attribute("status", "error")
                 raise
@@ -446,6 +496,7 @@ class ChatMetricsCollector:
                 # Record duration
                 duration = time.time() - start_time
                 self.metrics.request_duration.record(duration, labels)
+                _record_endpoint_metric("chat_request_duration_seconds", duration)
 
                 with self._active_lock:
                     self.active_requests = max(0, self.active_requests - 1)
@@ -508,6 +559,7 @@ class ChatMetricsCollector:
                 duration,
                 {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
             )
+            _record_endpoint_metric("chat_streaming_duration_seconds", duration)
             self.metrics.streaming_chunks.record(
                 chunk_count,
                 {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
@@ -625,6 +677,8 @@ class ChatMetricsCollector:
         self.metrics.tokens_prompt.record(prompt_tokens, labels)
         self.metrics.tokens_completion.record(completion_tokens, labels)
         self.metrics.tokens_total.record(prompt_tokens + completion_tokens, labels)
+        _record_endpoint_metric("chat_tokens_prompt", float(prompt_tokens))
+        _record_endpoint_metric("chat_tokens_completion", float(completion_tokens))
 
         # Estimate cost
         if model in self.token_costs:
@@ -634,6 +688,7 @@ class ChatMetricsCollector:
             total_cost = prompt_cost + completion_cost
 
             self.metrics.llm_cost_estimate.record(total_cost, labels)
+            _record_endpoint_metric("chat_llm_cost_estimate_usd", total_cost)
 
             logger.debug(
                 f"Token usage: {prompt_tokens} prompt, {completion_tokens} completion. "
@@ -669,6 +724,7 @@ class ChatMetricsCollector:
 
         if is_new:
             self.metrics.conversations_created.add(1, labels)
+            _record_endpoint_metric("chat_conversations_created_total", 1.0)
         else:
             self.metrics.conversations_resumed.add(1, labels)
 
@@ -687,6 +743,7 @@ class ChatMetricsCollector:
                 ChatMetricLabels.MESSAGE_TYPE.value: message_type
             }
         )
+        _record_endpoint_metric("chat_messages_saved_total", 1.0)
 
     def track_image_processing(self, size_bytes: int, validation_time: float):
         """

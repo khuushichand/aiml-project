@@ -3,6 +3,7 @@ Pytest configuration for the main test suite.
 
 Registers shared test plugins and provides common fixtures.
 """
+from __future__ import annotations
 
 pytest_plugins = ["tldw_Server_API.tests._plugins.http_client_patch_guard"]
 

@@ -23,6 +23,7 @@ The remediation must:
 
 - PostgreSQL RLS policy installers:
   - `tldw_Server_API/app/core/DB_Management/backends/pg_rls_policies.py`
+  - `tldw_Server_API/app/main.py` for startup auto-ensure caller alignment
 - Migration loading, execution, verification, and CLI wiring:
   - `tldw_Server_API/app/core/DB_Management/db_migration.py`
   - `tldw_Server_API/app/core/DB_Management/migrate_db.py`
@@ -50,6 +51,9 @@ The remediation must:
   - `tldw_Server_API/app/core/DB_Management/backends/fts_translator.py`
 - Callers and tests that currently encode the buggy behavior:
   - `tldw_Server_API/app/core/MCP_unified/modules/implementations/media_module.py`
+  - `tldw_Server_API/app/core/StudyPacks/source_resolver.py`
+  - `tldw_Server_API/app/core/RAG/rag_service/agentic_chunker.py`
+  - `tldw_Server_API/app/api/v1/endpoints/media/navigation.py`
   - targeted files in `tldw_Server_API/tests/DB_Management/`
   - targeted caller tests outside `tests/DB_Management` when they directly depend on the changed contracts
 
@@ -124,7 +128,8 @@ Reason rejected:
 ### 6.1 PostgreSQL RLS Installation
 
 - `ensure_prompt_studio_rls(...)` and `ensure_chacha_rls(...)` must return success only when every required statement in that policy set succeeds.
-- Any statement failure must abort the installer, roll back the transaction, and raise or return a failure signal that callers cannot confuse with success.
+- For PostgreSQL backends, any required-statement failure must abort the installer, roll back the transaction, and raise `DatabaseError`.
+- Returning `False` is reserved for explicit no-op cases where the supplied backend is not PostgreSQL or cannot be positively identified as PostgreSQL.
 - Debug-only “best effort” application is no longer acceptable for tenant-isolation setup.
 - The installers remain idempotent for already-correct databases.
 
@@ -134,6 +139,7 @@ Reason rejected:
 - Duplicate version numbers across migration artifacts must fail migration loading.
 - Upgrade execution must require a contiguous version path from current version to target version.
 - A request to upgrade to latest available version must fail if an intermediate version is missing.
+- Downgrade execution must also require a contiguous version path and a defined `down_sql` for every migration in the requested rollback range before any downgrade step runs.
 - Verification should report missing migration files, checksum drift, and version gaps explicitly.
 
 ### 6.3 `UserDatabase_v2` Bootstrap
@@ -167,7 +173,7 @@ Reason rejected:
 - Shared `FTSQuery` input must be normalized per backend at the backend abstraction boundary before SQL generation.
 - SQLite keeps FTS5-compatible query execution.
 - PostgreSQL receives normalized tsquery-compatible text through the shared backend API rather than assuming callers pre-normalized it.
-- Caller code that already normalizes queries may continue to work; the backend layer must not require that normalization for correctness.
+- Caller code that already normalizes queries may continue to work; the backend layer must not require that normalization for correctness for the shared `fts_search(...)` abstraction.
 
 ### 6.8 Migration CLI Contract
 
@@ -189,6 +195,11 @@ Recommended shape:
 
 Tests should exercise partial failure by injecting one broken statement between otherwise valid ones and asserting the installer reports failure rather than success.
 
+Caller contract:
+
+- `app/main.py` should treat installer exceptions as failed auto-ensure, not as a boolean-applied result.
+- When `RAG_ENSURE_PG_RLS=true`, startup logging must never claim the policy set was applied if either installer raised.
+
 ### 7.2 Migration Contract Hardening
 
 `db_migration.py` should distinguish between “no migrations exist” and “migration set is invalid.” An invalid migration set must raise `MigrationError`.
@@ -197,6 +208,7 @@ Required design details:
 
 - `load_migrations()` raises on malformed file content, unreadable executable SQL with invalid version metadata, or duplicate versions
 - migration planning validates contiguous versions for the requested upgrade range before creating backups or executing SQL
+- downgrade planning validates contiguous versions and the presence of `down_sql` for the entire requested rollback range before creating backups or executing any rollback SQL
 - verification explicitly reports version gaps in applied or available migrations
 - failure messages should name the offending version or file so operators can repair the migration set without reproducing locally
 
@@ -263,6 +275,7 @@ Design details:
 Caller handling:
 
 - modules like `MCP_unified/modules/implementations/media_module.py` may catch the typed error if they intentionally want degraded fallback behavior
+- `StudyPacks/source_resolver.py`, `RAG/rag_service/agentic_chunker.py`, and `api/v1/endpoints/media/navigation.py` must be reviewed and either explicitly catch/log the typed error for intentional fallback behavior or allow it to surface
 - if callers do catch and degrade, that decision should be explicit and logged at the caller boundary, not hidden inside `media_db.api`
 
 ### 7.7 Backend FTS Normalization
@@ -277,6 +290,11 @@ Recommended design:
 
 This keeps the shared abstraction honest: callers hand the backend one logical search string and the backend adapts it for its own SQL dialect.
 
+Scope boundary:
+
+- This remediation guarantees parity at the shared backend `fts_search(...)` abstraction.
+- Existing direct raw-SQL search paths that already branch on backend and call `FTSQueryTranslator` themselves are not rewritten in this branch unless a touched regression test requires it.
+
 ### 7.8 CLI Wiring
 
 `migrate_db.py` should thread the parsed `--no-backup` flag directly into `DatabaseMigrator.migrate_to_version(..., create_backup=...)`.
@@ -287,6 +305,8 @@ No wider CLI redesign is needed in this branch.
 
 - `pg_rls_policies.py`
   - own all-or-nothing RLS installer behavior
+- `app/main.py`
+  - keep startup auto-ensure handling aligned with the hardened RLS exception contract
 - `db_migration.py`
   - own invalid-migration detection, contiguous upgrade validation, and stronger verification output
 - `migrate_db.py`
@@ -318,9 +338,11 @@ Required regression coverage:
 
 - RLS installer fails overall when any required statement fails
 - RLS installer still succeeds idempotently on a fully valid policy set
+- startup auto-ensure does not log a successful applied state after an installer exception
 - malformed migration `.json` and malformed SQL migration metadata fail loading
 - duplicate migration versions fail loading
 - missing intermediate versions fail planned upgrade
+- missing intermediate versions or missing `down_sql` fail planned rollback before any rollback step executes
 - `verify_migrations()` reports version-gap issues
 - `UserDatabase_v2` initialization fails when required column normalization fails
 - `UserDatabase_v2` initialization fails when required RBAC seeding leaves missing roles, permissions, or mappings
@@ -329,6 +351,7 @@ Required regression coverage:
 - representative helper modules apply the shared trust boundary
 - `media_db.api` helper methods raise typed DB errors on backend failure while still returning benign values for true miss cases
 - backend FTS search normalizes equivalent logical queries for SQLite and PostgreSQL consistently enough for the abstraction contract
+- direct callers of the changed `media_db.api` helpers either explicitly handle typed DB errors or fail transparently in tests
 - `migrate_db.py --no-backup` disables backup creation in the migration call path
 
 Verification should prefer focused unit and integration slices in `tldw_Server_API/tests/DB_Management/` plus only the direct caller tests needed to confirm changed error handling.
@@ -340,6 +363,7 @@ Primary risks:
 - latent bad databases now fail fast during bootstrap or migration
 - existing tests may encode the buggy fail-open behavior
 - a few callers may currently rely on silent `media_db.api` fallback and need explicit error handling
+- startup auto-ensure logging currently assumes boolean RLS installer results and must be kept aligned with the new exception contract
 - path hardening may reject historically tolerated but unsafe filesystem layouts
 
 Mitigations:
@@ -359,6 +383,6 @@ The remediation is successful when:
 - shared PostgreSQL backend resets do not leak displaced pools
 - trusted SQLite path checks reject symlink escape and representative helper modules use the same trust boundary
 - `media_db.api` no longer hides backend/query faults behind benign values
-- backend FTS behavior no longer depends on callers knowing different SQLite vs PostgreSQL query syntax rules
+- the shared backend `fts_search(...)` abstraction no longer depends on callers knowing different SQLite vs PostgreSQL query syntax rules
 - the migration CLI accurately reflects whether backups are enabled
 - each corrected behavior has direct regression coverage

@@ -113,6 +113,27 @@ def client(tmp_path_factory, monkeypatch):
                     return _DummyCursor([])
                 return _DummyCursor([row])
 
+            if sql_norm.startswith("update export_jobs set"):
+                status, completed_at, error_message, progress_percentage, job_id, user_id = params
+                row = self.export_jobs[job_id]
+                if row.get("user_id") == user_id:
+                    row["status"] = status
+                    row["completed_at"] = completed_at
+                    row["error_message"] = error_message
+                    row["progress_percentage"] = progress_percentage
+                return _DummyCursor([])
+
+            if sql_norm.startswith("update import_jobs set"):
+                status, completed_at, error_message, progress_percentage, job_id, user_id = params
+                row = self.import_jobs[job_id]
+                if row.get("user_id") == user_id:
+                    row["status"] = status
+                    row["completed_at"] = completed_at
+                    row["error_message"] = error_message
+                    row["progress_percentage"] = progress_percentage
+                return _DummyCursor([])
+
+
             return _DummyCursor([])
 
     async def override_user():

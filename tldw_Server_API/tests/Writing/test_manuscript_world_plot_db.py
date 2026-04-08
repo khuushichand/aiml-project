@@ -153,6 +153,15 @@ class TestWorldInfoCRUD:
         assert wi["properties"]["material"] == "steel"
         assert wi["tags"] == ["weapon"]
 
+    def test_update_world_info_rejects_cross_project_parent(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        local = mdb.create_world_info(left, kind="location", name="Local")
+        foreign_parent = mdb.create_world_info(right, kind="location", name="Foreign")
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.update_world_info(local, {"parent_id": foreign_parent}, expected_version=1)
+
     def test_update_version_conflict(self, mdb):
         pid = mdb.create_project("Novel")
         wid = mdb.create_world_info(pid, kind="location", name="Mordor")
