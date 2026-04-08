@@ -164,15 +164,18 @@ class ManuscriptDBHelper:
     def _scene_row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         """Convert a raw scene DB row into API-friendly dict.
 
-        Deserializes ``content_json`` (string) into ``content`` (dict)
-        so the response schema can serve it as structured JSON.
+        Preserves ``content_json`` for API responses and mirrors it into a
+        parsed ``content`` key for legacy helper callers.
         """
         d = dict(row)
-        raw = d.pop("content_json", None) or "{}"
+        raw = d.get("content_json")
+        if raw is None:
+            d["content"] = None
+            return d
         try:
             d["content"] = json.loads(raw)
         except (ValueError, TypeError):
-            d["content"] = {}
+            d["content"] = None
         return d
 
     @staticmethod

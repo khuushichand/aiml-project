@@ -503,10 +503,15 @@ async def create_part(
 ) -> ManuscriptPartResponse:
     """Create a new part within a project."""
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         part_id = helper.create_part(
             project_id=project_id,
-            title=payload.title.strip(),
+            title=title,
             sort_order=payload.sort_order,
             synopsis=payload.synopsis,
             part_id=payload.id,
@@ -804,6 +809,11 @@ async def create_scene(
     The project_id is resolved from the chapter's parent project.
     """
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         # Resolve project_id from the chapter
         chapter = helper.get_chapter(chapter_id)
@@ -820,7 +830,7 @@ async def create_scene(
         scene_id = helper.create_scene(
             chapter_id=chapter_id,
             project_id=project_id,
-            title=payload.title.strip(),
+            title=title,
             content_json=content_json,
             content_plain=payload.content_plain,
             synopsis=payload.synopsis,

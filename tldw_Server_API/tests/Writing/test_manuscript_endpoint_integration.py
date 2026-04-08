@@ -422,8 +422,49 @@ def test_scene_patch_with_content_and_content_plain_preserves_rich_content(clien
     assert updated["word_count"] == len(new_plain.split())
 
 
+def test_scene_patch_with_content_and_content_plain_round_trips_on_get(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Mixed Roundtrip"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={
+            "title": "Scene D",
+            "content": {"type": "doc", "content": [{"type": "paragraph", "text": "old"}]},
+            "content_plain": "old text",
+        },
+    ).json()
+
+    new_content = {"type": "doc", "content": [{"type": "paragraph", "text": "new rich body"}]}
+    new_plain = "new plain body"
+    patch_resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"content": new_content, "content_plain": new_plain},
+        headers={"expected-version": str(scene["version"])},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    get_resp = client.get(f"{PREFIX}/scenes/{scene['id']}")
+    assert get_resp.status_code == 200, get_resp.text
+    fetched = get_resp.json()
+    assert fetched["content"] == new_content
+    assert fetched["content_json"] is not None
+    assert fetched["content_plain"] == new_plain
+
+
 def test_create_project_rejects_whitespace_title(client: TestClient):
     resp = client.post(f"{PREFIX}/projects", json={"title": "   "})
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_part_rejects_whitespace_title(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Part Create"}).json()
+    resp = client.post(
+        f"{PREFIX}/projects/{project['id']}/parts",
+        json={"title": "   "},
+    )
     assert resp.status_code == 400, resp.text
 
 
@@ -449,6 +490,19 @@ def test_chapter_patch_rejects_whitespace_title(client: TestClient):
         headers={"expected-version": str(chapter["version"])},
     )
 
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_scene_rejects_whitespace_title_when_provided(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Scene Create"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    resp = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={"title": "   ", "content_plain": "alpha beta"},
+    )
     assert resp.status_code == 400, resp.text
 
 
