@@ -554,12 +554,66 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 7: Embeddings A/B and Webhook Surfaces
 ### Files Reviewed
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py`
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py`
+- `tldw_Server_API/app/api/v1/schemas/embeddings_abtest_schemas.py`
+- `tldw_Server_API/app/core/Evaluations/embeddings_abtest_repository.py`
+- `tldw_Server_API/app/core/Evaluations/embeddings_abtest_runner.py`
+- `tldw_Server_API/app/core/Evaluations/embeddings_abtest_service.py`
+- `tldw_Server_API/app/core/Evaluations/embeddings_abtest_jobs.py`
+- `tldw_Server_API/app/core/Evaluations/webhook_identity.py`
+- `tldw_Server_API/app/core/Evaluations/webhook_manager.py`
+- `tldw_Server_API/app/core/Evaluations/webhook_security.py`
 ### Baseline Notes
+- The embeddings A/B flow is split into create, run, status, results, and significance routes, with persistence handled by the repository/store layer and execution split between synchronous `TESTING` mode and Jobs-backed async execution.
+- The webhook flow is normalized around `webhook_user_id_from_user(current_user)` for ownership, then handed to `WebhookManager` for registration, status lookup, unregistration, test delivery, and signed payload delivery.
+- The shared webhook manager stores both registration and delivery rows, signs payloads with an HMAC secret, and records retry/statistics data in the delivery tables.
 ### Control and Data Flow Notes
+- `create_embeddings_abtest()` persists the test, arms, and queries through the evaluations store before returning the new test id.
+- `run_embeddings_abtest()` validates policy, then either executes inline in `TESTING` mode or enqueues a Jobs domain task with the test id, config, and user id payload.
+- `get_embeddings_abtest_status()` and `get_embeddings_abtest_results()` read serialized rows back from the store and reconstruct the API schema, including per-arm aggregates from `stats_json`.
+- `register_webhook()`, `list_webhooks()`, `unregister_webhook()`, and `test_webhook()` all route through the same per-user manager binding, while `_deliver_webhook()` performs SSRF checks, HMAC signing, delivery creation, retry attempts, and stats updates.
 ### Findings
+1. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Mixed
+   Why it matters: `evaluations_webhooks.py` normalizes webhook ownership with `webhook_user_id_from_user(current_user)`, but `_get_webhook_manager_for_user()` still binds through `get_unified_evaluation_service_for_user(current_user.id)`. That service helper coerces any non-numeric id to the default single-user database, so a tenant-style user can write webhook state into `/Databases/user_databases/1/evaluations/evaluations.db` while the ownership id remains `user_tenant-user`. The same numeric-only service lookup is used by the embeddings A/B endpoints, so both surfaces can silently collapse string ids into the default account.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py:60`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py:111`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py:143`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py:190`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:90`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:160`, `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py:1565`, `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py:1580`, `tldw_Server_API/app/core/Evaluations/webhook_identity.py:18`
+   Recommended fix: Make the service lookup and ownership id share one canonical user-id representation. Either teach `get_unified_evaluation_service_for_user()` to preserve string tenant ids instead of falling back to the single-user DB, or normalize the route input once and pass that same value into service binding, storage, job payloads, and webhook ownership.
+   Recommended tests: Add a regression that hits the webhook and embeddings A/B routes with `User(id="tenant-user", ...)` and asserts the resolved evaluations DB path is tenant-specific rather than the default single-user DB. Add a second assertion that webhook storage and manager binding both use the same canonical id.
+   Verification note: A direct probe returned `webhook_user_id_from_user(User(id='tenant-user', ...)) == 'user_tenant-user'`, while `get_unified_evaluation_service_for_user('tenant-user')` resolved `/Databases/user_databases/1/evaluations/evaluations.db`.
+
+2. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Baseline
+   Why it matters: The `run_embeddings_abtest()` idempotency replay branch returns `EmbeddingsABTestStatusResponse(..., status='running', progress={'phase': 0.05})` as soon as `lookup_idempotency("emb_abtest_run", ...)` finds a prior record. It never checks the stored test status, so a replay after a completed or failed run will still report `running`, which can mislead clients and break idempotent retry semantics.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:164`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:175`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:220`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py:228`
+   Recommended fix: On idempotency hit, read the persisted test row and return its current status/progress, or persist the first terminal replay response and reuse that value on subsequent calls.
+   Recommended tests: Add a replay regression that completes an embeddings A/B run, repeats the same `Idempotency-Key`, and asserts the response reflects the persisted terminal state instead of `running`.
+   Verification note: Direct code-path review shows the replay branch hard-codes a running response without consulting the stored test row.
 ### Open Questions
+- None.
 ### Verification Run
+- `source .venv/bin/activate && rg -n "signature|secret|retry|backend|schema|deliver|job|queue|callback|tenant|user_id" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py tldw_Server_API/app/core/Evaluations/embeddings_abtest_repository.py tldw_Server_API/app/core/Evaluations/embeddings_abtest_service.py tldw_Server_API/app/core/Evaluations/webhook_manager.py tldw_Server_API/app/core/Evaluations/webhook_security.py`
+  Result: confirmed the expected signature, secret, retry, backend, delivery, job, queue, callback, tenant, and user-id touchpoints in the slice.
+- `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_embeddings_abtest_retrieval.py tldw_Server_API/tests/Evaluations/unit/test_evaluations_abtest_store_init.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/unit/test_webhook_manager_backend_schema.py`
+  Result: `11 passed`.
+- `python - <<'PY'`
+  `from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import get_unified_evaluation_service_for_user`
+  `svc = get_unified_evaluation_service_for_user('tenant-user')`
+  `print(getattr(svc.db, 'db_path', None))`
+  `PY`
+  Result: resolved the tenant-style user id to the default single-user evaluations DB path, confirming the identity fallback.
+- `python - <<'PY'`
+  `from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_user`
+  `from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User`
+  `print(webhook_user_id_from_user(User(id='tenant-user', username='x')))`
+  `PY`
+  Result: preserved the tenant-style user id as `user_tenant-user`, confirming the identity split with the service lookup.
 ### Slice Status
+- reviewed
 
 ## Slice 8: Cross-Slice Contract Synthesis
 ### Shared Schemas and Config
