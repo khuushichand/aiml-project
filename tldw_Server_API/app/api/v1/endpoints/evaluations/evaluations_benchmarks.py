@@ -107,6 +107,7 @@ async def run_benchmark(
 ):
     try:
         evaluation_manager = _get_evaluation_manager_for_user(current_user)
+        stable_user_id = getattr(current_user, "id_str", None) or str(getattr(current_user, "id", ""))
         registry = get_registry()
         config = registry.get(benchmark_name)
         if not config:
@@ -206,7 +207,7 @@ async def run_benchmark(
                 results={"summary": summary, "scores": scores},
                 metadata={
                     "api_name": request.api_name,
-                    "user_id": user_id,
+                    "user_id": stable_user_id,
                     "current_user_id": str(getattr(current_user, "id", "")),
                     "total_samples": len(dataset),
                 },

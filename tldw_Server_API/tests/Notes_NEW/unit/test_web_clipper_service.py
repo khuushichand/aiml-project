@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -218,6 +219,41 @@ def test_persist_enrichment_stores_ocr_and_vlm_structured_payloads_when_inline_w
     assert note_after["content"].endswith("User edit remains.")
 
 
+def test_persist_enrichment_preserves_visible_body_without_comment(clipper_db):
+    service = WebClipperService(db=clipper_db, user_id=1)
+    request = _save_request(destination_mode="note", clip_id="clip-visible-preserve", full_extract=None)
+    request.note = WebClipperSaveRequest.NotePayload(
+        title="Example Story",
+        comment=None,
+        keywords=[],
+    )
+    request.content = WebClipperSaveRequest.ContentPayload(
+        visible_body="para1\n\npara2",
+        full_extract=None,
+        selected_text=None,
+    )
+
+    save_result = service.save_clip(request)
+    enrichment = service.persist_enrichment(
+        "clip-visible-preserve",
+        WebClipperEnrichmentPayload(
+            clip_id="clip-visible-preserve",
+            enrichment_type="ocr",
+            status="complete",
+            inline_summary="Captured text summary.",
+            structured_payload={"raw_text": "Captured text summary."},
+            source_note_version=save_result.note.version,
+        ),
+    )
+
+    note = clipper_db.get_note_by_id("clip-visible-preserve")
+    assert enrichment.inline_applied is True
+    assert note is not None
+    content_before_analysis = note["content"].split("## Web Clipper Analysis", maxsplit=1)[0]
+    assert "para1" in content_before_analysis
+    assert "para2" in content_before_analysis
+
+
 def test_persist_enrichment_clamps_inline_summaries_to_per_type_and_combined_budgets(clipper_db):
     service = WebClipperService(db=clipper_db, user_id=1)
     service.save_clip(_save_request(destination_mode="note", clip_id="clip-enrichment-budgets"))
@@ -268,16 +304,43 @@ def test_persist_enrichment_clamps_inline_summaries_to_per_type_and_combined_bud
     assert ocr_body.count("O") + vlm_section.count("V") == 2500
 
 
+def test_save_clip_prefers_visible_body_over_full_extract(clipper_db):
+    service = WebClipperService(db=clipper_db, user_id=1)
+    request = _save_request(destination_mode="note", clip_id="clip-visible-vs-full")
+    request.content = WebClipperSaveRequest.ContentPayload(
+        visible_body="VISIBLE BODY",
+        full_extract="FULL EXTRACT",
+        selected_text="SELECTED TEXT",
+    )
+
+    service.save_clip(request)
+
+    note = clipper_db.get_note_by_id("clip-visible-vs-full")
+    clip_doc = clipper_db.get_note_clipper_document_by_clip_id("clip-visible-vs-full")
+    assert note is not None
+    assert clip_doc is not None
+    assert note["content"].endswith("VISIBLE BODY")
+    assert "FULL EXTRACT" not in note["content"]
+    assert clip_doc["content_budget_json"]["visible_body"] == "VISIBLE BODY"
+
+
 def test_save_clip_truncates_visible_body_to_content_budget(clipper_db):
     service = WebClipperService(db=clipper_db, user_id=1)
     oversized_extract = "\n\n".join(["Paragraph " + ("A" * 3000) for _ in range(8)])
+    request = _save_request(destination_mode="note", full_extract=oversized_extract)
+    request.content = WebClipperSaveRequest.ContentPayload(
+        visible_body=oversized_extract,
+        full_extract=oversized_extract,
+        selected_text=None,
+    )
 
-    result = service.save_clip(_save_request(destination_mode="note", full_extract=oversized_extract))
+    result = service.save_clip(request)
 
     note = clipper_db.get_note_by_id("clip-123")
     assert note is not None
     assert result.status in {"saved", "saved_with_warnings"}
-    assert "Truncated. Full extract attached." in note["content"]
+    assert "Truncated. Full extract attached." not in note["content"]
+    assert "Truncated. Full extract preserved in clip metadata." in note["content"]
 
     clip_doc = clipper_db.get_note_clipper_document_by_clip_id("clip-123")
     assert clip_doc is not None
@@ -313,6 +376,54 @@ def test_save_clip_attachment_io_failure_becomes_saved_with_warnings(clipper_db,
     assert result.status == "saved_with_warnings"
     assert status.status == "saved_with_warnings"
     assert any("attachment" in warning.lower() for warning in result.warnings)
+
+
+def test_save_clip_resyncs_existing_workspace_note_and_keywords(clipper_db):
+    service = WebClipperService(db=clipper_db, user_id=1)
+
+    first_request = _save_request(destination_mode="both", clip_id="clip-workspace-sync", full_extract=None)
+    first_request.note = WebClipperSaveRequest.NotePayload(
+        title="Title One",
+        comment="First comment.",
+        keywords=["one"],
+    )
+    first_request.content = WebClipperSaveRequest.ContentPayload(
+        visible_body="body one",
+        full_extract=None,
+        selected_text=None,
+    )
+    service.save_clip(first_request)
+
+    second_request = _save_request(destination_mode="both", clip_id="clip-workspace-sync", full_extract=None)
+    second_request.note = WebClipperSaveRequest.NotePayload(
+        title="Title Two",
+        comment="Second comment.",
+        keywords=["two"],
+    )
+    second_request.content = WebClipperSaveRequest.ContentPayload(
+        visible_body="body two",
+        full_extract=None,
+        selected_text=None,
+    )
+    result = service.save_clip(second_request)
+
+    placement = clipper_db.list_note_clipper_workspace_placements("clip-workspace-sync")[0]
+    workspace_note = clipper_db.execute_query(
+        "SELECT title, content, keywords_json FROM workspace_notes WHERE workspace_id = ? AND id = ? AND deleted = 0",
+        ("ws-1", int(placement["workspace_note_id"])),
+    ).fetchone()
+    note = clipper_db.get_note_by_id("clip-workspace-sync")
+    keywords = [row["keyword"] for row in clipper_db.get_keywords_for_note("clip-workspace-sync")]
+
+    assert result.workspace_placement is not None
+    assert note is not None
+    assert workspace_note is not None
+    assert note["title"] == "Title Two"
+    assert "body two" in note["content"]
+    assert keywords == ["two"]
+    assert workspace_note["title"] == "Title Two"
+    assert "body two" in workspace_note["content"]
+    assert json.loads(workspace_note["keywords_json"]) == ["two"]
 
 
 def test_save_clip_returns_failed_when_canonical_note_cannot_be_created(clipper_db, monkeypatch: pytest.MonkeyPatch):

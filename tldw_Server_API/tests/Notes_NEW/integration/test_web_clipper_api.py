@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
 from tldw_Server_API.app.api.v1.endpoints import web_clipper as web_clipper_endpoint
+from tldw_Server_API.app.api.v1.schemas.web_clipper_schemas import WebClipperSaveResponse
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
@@ -171,3 +172,30 @@ def test_web_clipper_rate_limiter_failure_returns_503(client_with_web_clipper_db
 
     assert response.status_code == 503, response.text
     assert response.json()["detail"] == "Rate limiter unavailable"
+
+
+def test_web_clipper_save_returns_500_for_failed_canonical_save_payload(
+    client_with_web_clipper_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_web_clipper_db
+
+    def _failed_save(*_args, **_kwargs):
+        return WebClipperSaveResponse(
+            clip_id="clip-123",
+            status="failed",
+            note=None,
+            workspace_placement=None,
+            attachments=[],
+            warnings=["Canonical note save failed: write failed"],
+            note_id="clip-123",
+            workspace_placement_saved=False,
+            workspace_placement_count=0,
+        )
+
+    monkeypatch.setattr(web_clipper_endpoint.WebClipperService, "save_clip", _failed_save)
+
+    response = client.post("/api/v1/web-clipper/save", json=_save_payload())
+
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"] == "Canonical note save failed: write failed"

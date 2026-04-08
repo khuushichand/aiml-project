@@ -254,6 +254,336 @@ def test_optimistic_locking(client: TestClient):
     assert resp.status_code == 409
 
 
+def test_project_patch_null_clears_synopsis_and_settings(client: TestClient):
+    create_resp = client.post(
+        f"{PREFIX}/projects",
+        json={"title": "Null Project", "synopsis": "Filled", "settings": {"theme": "dark"}},
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    project = create_resp.json()
+
+    resp = client.patch(
+        f"{PREFIX}/projects/{project['id']}",
+        json={"synopsis": None, "settings": None},
+        headers={"expected-version": str(project["version"])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["synopsis"] is None
+    assert resp.json()["settings"] == {}
+
+
+def test_part_patch_null_clears_synopsis(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Part Nulls"}).json()
+    part = client.post(
+        f"{PREFIX}/projects/{project['id']}/parts",
+        json={"title": "Part I", "synopsis": "Filled"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/parts/{part['id']}",
+        json={"synopsis": None},
+        headers={"expected-version": str(part['version'])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["synopsis"] is None
+
+
+def test_chapter_patch_null_clears_part_and_synopsis(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Chapter Nulls"}).json()
+    part = client.post(f"{PREFIX}/projects/{project['id']}/parts", json={"title": "Part I"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1", "part_id": part["id"], "synopsis": "Filled"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/chapters/{chapter['id']}",
+        json={"part_id": None, "synopsis": None},
+        headers={"expected-version": str(chapter["version"])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["part_id"] is None
+    assert resp.json()["synopsis"] is None
+
+
+def test_scene_patch_null_clears_synopsis(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Nulls"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={"title": "Scene 1", "synopsis": "Filled", "content_plain": "alpha beta"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"synopsis": None},
+        headers={"expected-version": str(scene['version'])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["synopsis"] is None
+
+
+def test_scene_patch_null_content_clears_content_json_only(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Content Null"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    rich_content = {"type": "doc", "content": [{"type": "paragraph", "text": "alpha beta"}]}
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={
+            "title": "Scene A",
+            "content": rich_content,
+            "content_plain": "alpha beta",
+            "synopsis": "filled",
+        },
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"content": None},
+        headers={"expected-version": str(scene["version"])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["content"] is None
+    assert updated["content_json"] is None
+    assert updated["content_plain"] == "alpha beta"
+    assert updated["title"] == "Scene A"
+    assert updated["word_count"] == 2
+
+
+def test_scene_patch_null_content_plain_clears_plain_and_word_count(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Plain Null"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={
+            "title": "Scene B",
+            "content": {"type": "doc", "content": [{"type": "paragraph", "text": "one two three"}]},
+            "content_plain": "one two three",
+        },
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"content_plain": None},
+        headers={"expected-version": str(scene["version"])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["content_plain"] is None
+    assert updated["content"] is None
+    assert updated["content_json"] is None
+    assert updated["word_count"] == 0
+
+
+def test_scene_patch_with_content_and_content_plain_preserves_rich_content(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Mixed Patch"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={
+            "title": "Scene C",
+            "content": {"type": "doc", "content": [{"type": "paragraph", "text": "old"}]},
+            "content_plain": "old text",
+        },
+    ).json()
+
+    new_content = {"type": "doc", "content": [{"type": "paragraph", "text": "new rich body"}]}
+    new_plain = "new plain body"
+    resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"content": new_content, "content_plain": new_plain},
+        headers={"expected-version": str(scene["version"])},
+    )
+
+    assert resp.status_code == 200, resp.text
+    updated = resp.json()
+    assert updated["content"] == new_content
+    assert updated["content_json"] is not None
+    assert updated["content_plain"] == new_plain
+    assert updated["word_count"] == len(new_plain.split())
+
+
+def test_scene_patch_with_content_and_content_plain_round_trips_on_get(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Mixed Roundtrip"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={
+            "title": "Scene D",
+            "content": {"type": "doc", "content": [{"type": "paragraph", "text": "old"}]},
+            "content_plain": "old text",
+        },
+    ).json()
+
+    new_content = {"type": "doc", "content": [{"type": "paragraph", "text": "new rich body"}]}
+    new_plain = "new plain body"
+    patch_resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"content": new_content, "content_plain": new_plain},
+        headers={"expected-version": str(scene["version"])},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    get_resp = client.get(f"{PREFIX}/scenes/{scene['id']}")
+    assert get_resp.status_code == 200, get_resp.text
+    fetched = get_resp.json()
+    assert fetched["content"] == new_content
+    assert fetched["content_json"] is not None
+    assert fetched["content_plain"] == new_plain
+
+
+def test_create_project_rejects_whitespace_title(client: TestClient):
+    resp = client.post(f"{PREFIX}/projects", json={"title": "   "})
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_part_rejects_whitespace_title(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Part Create"}).json()
+    resp = client.post(
+        f"{PREFIX}/projects/{project['id']}/parts",
+        json={"title": "   "},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_chapter_rejects_whitespace_title(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Chapter"}).json()
+    resp = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "   "},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_chapter_patch_rejects_whitespace_title(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Patch"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/chapters/{chapter['id']}",
+        json={"title": "   "},
+        headers={"expected-version": str(chapter["version"])},
+    )
+
+    assert resp.status_code == 400, resp.text
+
+
+def test_create_scene_rejects_whitespace_title_when_provided(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Scene Create"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    resp = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={"title": "   ", "content_plain": "alpha beta"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_part_patch_rejects_whitespace_title(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Whitespace Part"}).json()
+    part = client.post(
+        f"{PREFIX}/projects/{project['id']}/parts",
+        json={"title": "Part I"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/parts/{part['id']}",
+        json={"title": "   "},
+        headers={"expected-version": str(part["version"])},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_patch_requires_expected_version_header(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Missing Header"}).json()
+    resp = client.patch(f"{PREFIX}/projects/{project['id']}", json={"synopsis": None})
+    assert resp.status_code == 422, resp.text
+
+
+def test_project_patch_rejects_empty_payload(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Empty Patch"}).json()
+    resp = client.patch(
+        f"{PREFIX}/projects/{project['id']}",
+        json={},
+        headers={"expected-version": str(project["version"])},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_scene_patch_rejects_empty_payload(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Scene Empty Patch"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter 1"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={"title": "Scene 1", "content_plain": "alpha beta"},
+    ).json()
+
+    resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={},
+        headers={"expected-version": str(scene["version"])},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_reorder_rejects_stale_item_version(client: TestClient):
+    project = client.post(f"{PREFIX}/projects", json={"title": "Reorder Conflict"}).json()
+    chapter = client.post(
+        f"{PREFIX}/projects/{project['id']}/chapters",
+        json={"title": "Chapter R"},
+    ).json()
+    scene = client.post(
+        f"{PREFIX}/chapters/{chapter['id']}/scenes",
+        json={"title": "Scene 0", "sort_order": 0.0},
+    ).json()
+
+    patch_resp = client.patch(
+        f"{PREFIX}/scenes/{scene['id']}",
+        json={"title": "Scene 0 Updated"},
+        headers={"expected-version": str(scene["version"])},
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project['id']}/reorder",
+        json={
+            "entity_type": "scenes",
+            "items": [{"id": scene["id"], "sort_order": 1.0, "version": scene["version"]}],
+        },
+    )
+    assert resp.status_code == 409, resp.text
+
+
 def test_reorder(client: TestClient):
     """Create scenes, reorder them, verify new sort order."""
 

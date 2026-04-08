@@ -110,6 +110,55 @@ def _create_project_chapter_scene(client: TestClient) -> tuple[str, str, str]:
     return project_id, chapter_id, scene_id
 
 
+def _seed_project_and_chapter_analyses(client: TestClient, project_id: str, chapter_id: str) -> None:
+    """Create chapter and project analyses so later scene mutations can stale-mark them."""
+    with patch(
+        f"{_LLM_MODULE}.perform_chat_api_call_async",
+        new_callable=AsyncMock,
+        return_value=_mock_llm_response(_pacing_json()),
+    ):
+        resp = client.post(f"{PREFIX}/chapters/{chapter_id}/analyze", json={"analysis_types": ["pacing"]})
+    assert resp.status_code == 200, resp.text
+
+    with patch(
+        f"{_LLM_MODULE}.perform_chat_api_call_async",
+        new_callable=AsyncMock,
+        return_value=_mock_llm_response(_consistency_json()),
+    ):
+        resp = client.post(f"{PREFIX}/projects/{project_id}/analyze/consistency", json={})
+    assert resp.status_code == 200, resp.text
+
+
+def _seed_scene_analysis(client: TestClient, scene_id: str) -> None:
+    """Create a scene analysis so delete flows can stale-mark it."""
+    with patch(
+        f"{_LLM_MODULE}.perform_chat_api_call_async",
+        new_callable=AsyncMock,
+        return_value=_mock_llm_response(_pacing_json()),
+    ):
+        resp = client.post(f"{PREFIX}/scenes/{scene_id}/analyze", json={"analysis_types": ["pacing"]})
+    assert resp.status_code == 200, resp.text
+
+
+def _assert_project_and_chapter_analyses_stale(
+    client: TestClient,
+    project_id: str,
+    *,
+    expected_scopes: set[str] | None = None,
+) -> None:
+    """Assert the cached analyses for a project are marked stale."""
+    expected_scopes = expected_scopes or {"chapter", "project"}
+    resp = client.get(
+        f"{PREFIX}/projects/{project_id}/analyses",
+        params={"include_stale": True},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["total"] == len(expected_scopes)
+    assert {analysis["scope_type"] for analysis in data["analyses"]} == expected_scopes
+    assert all(analysis["stale"] is True for analysis in data["analyses"])
+
+
 def test_analyze_scene(client: TestClient):
     """Create a scene, run pacing analysis, verify response structure and cached in DB."""
     project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
@@ -279,18 +328,27 @@ def test_list_analyses_filter_by_type(client: TestClient):
     assert data["analyses"][0]["analysis_type"] == "pacing"
 
 
-def test_stale_after_update(client: TestClient):
-    """Create analysis, update scene, verify analyses are stale."""
+def test_stale_after_scene_create(client: TestClient):
+    """Creating a new scene should stale chapter and project analyses."""
     project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
+    _seed_project_and_chapter_analyses(client, project_id, chapter_id)
 
-    # Run analysis
-    with patch(
-        f"{_LLM_MODULE}.perform_chat_api_call_async",
-        new_callable=AsyncMock,
-        return_value=_mock_llm_response(_pacing_json()),
-    ):
-        resp = client.post(f"{PREFIX}/scenes/{scene_id}/analyze", json={"analysis_types": ["pacing"]})
-    assert resp.status_code == 200
+    resp = client.post(
+        f"{PREFIX}/chapters/{chapter_id}/scenes",
+        json={
+            "title": "Inserted Scene",
+            "content_plain": "A new scene arrives and changes the chapter.",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+    _assert_project_and_chapter_analyses_stale(client, project_id)
+
+
+def test_stale_after_scene_update(client: TestClient):
+    """Updating scene body content should stale chapter and project analyses."""
+    project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
+    _seed_project_and_chapter_analyses(client, project_id, chapter_id)
 
     # Get scene version for optimistic locking
     resp = client.get(f"{PREFIX}/scenes/{scene_id}")
@@ -305,17 +363,36 @@ def test_stale_after_update(client: TestClient):
     )
     assert resp.status_code == 200, resp.text
 
-    # List analyses including stale ones
-    resp = client.get(
-        f"{PREFIX}/projects/{project_id}/analyses",
-        params={"include_stale": True},
-    )
+    _assert_project_and_chapter_analyses_stale(client, project_id)
+
+    resp = client.get(f"{PREFIX}/projects/{project_id}/analyses")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] == 1
-    assert data["analyses"][0]["stale"] is True
+    assert data["total"] == 0
 
-    # Without include_stale, stale analyses should be excluded
+
+def test_stale_after_scene_delete(client: TestClient):
+    """Deleting a scene should stale chapter and project analyses."""
+    project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
+    _seed_project_and_chapter_analyses(client, project_id, chapter_id)
+    _seed_scene_analysis(client, scene_id)
+
+    resp = client.get(f"{PREFIX}/scenes/{scene_id}")
+    assert resp.status_code == 200
+    scene_version = resp.json()["version"]
+
+    resp = client.delete(
+        f"{PREFIX}/scenes/{scene_id}",
+        headers={"expected-version": str(scene_version)},
+    )
+    assert resp.status_code == 204, resp.text
+
+    _assert_project_and_chapter_analyses_stale(
+        client,
+        project_id,
+        expected_scopes={"scene", "chapter", "project"},
+    )
+
     resp = client.get(f"{PREFIX}/projects/{project_id}/analyses")
     assert resp.status_code == 200
     data = resp.json()
@@ -373,6 +450,81 @@ def test_analyze_scene_rejects_unknown_model_override(client: TestClient, monkey
     resp = client.post(
         f"{PREFIX}/scenes/{scene_id}/analyze",
         json={"analysis_types": ["pacing"], "provider": "openai", "model": "bad-model"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "model" in resp.json()["detail"].lower()
+
+
+@pytest.mark.parametrize("analysis_route", ["plot-holes", "consistency"])
+def test_project_analysis_enforces_runtime_rate_limit(client: TestClient, analysis_route: str):
+    """Project analysis endpoints should surface 429 when runtime limits deny the call."""
+    project_id, _chapter_id, _scene_id = _create_project_chapter_scene(client)
+
+    class _RejectingRateLimiter:
+        async def check_user_rate_limit(self, *_args, **_kwargs):
+            return False, {"retry_after": 13}
+
+    client.app.dependency_overrides[get_rate_limiter_dep] = lambda: _RejectingRateLimiter()
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/analyze/{analysis_route}",
+        json={},
+    )
+
+    assert resp.status_code == 429, resp.text
+    assert resp.headers["Retry-After"] == "13"
+
+
+@pytest.mark.parametrize("analysis_route", ["plot-holes", "consistency"])
+def test_project_analysis_rejects_unknown_provider_override(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    analysis_route: str,
+):
+    """Project analysis overrides must be validated against the configured allowlist."""
+    project_id, _chapter_id, _scene_id = _create_project_chapter_scene(client)
+    import tldw_Server_API.app.api.v1.endpoints.writing_manuscripts as writing_endpoint
+
+    monkeypatch.setattr(
+        writing_endpoint,
+        "get_provider_manager",
+        lambda: SimpleNamespace(providers=["openai"], primary_provider="openai"),
+    )
+    monkeypatch.setattr(writing_endpoint, "is_model_known_for_provider", lambda *_args, **_kwargs: True)
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/analyze/{analysis_route}",
+        json={"provider": "totally-invalid", "model": "gpt-4o-mini"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "provider" in resp.json()["detail"].lower()
+
+
+@pytest.mark.parametrize("analysis_route", ["plot-holes", "consistency"])
+def test_project_analysis_rejects_unknown_model_override(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    analysis_route: str,
+):
+    """Project analysis overrides must validate the selected provider/model pair."""
+    project_id, _chapter_id, _scene_id = _create_project_chapter_scene(client)
+    import tldw_Server_API.app.api.v1.endpoints.writing_manuscripts as writing_endpoint
+
+    monkeypatch.setattr(
+        writing_endpoint,
+        "get_provider_manager",
+        lambda: SimpleNamespace(providers=["openai"], primary_provider="openai"),
+    )
+    monkeypatch.setattr(
+        writing_endpoint,
+        "is_model_known_for_provider",
+        lambda provider, model: False if provider == "openai" and model == "bad-model" else True,
+    )
+
+    resp = client.post(
+        f"{PREFIX}/projects/{project_id}/analyze/{analysis_route}",
+        json={"provider": "openai", "model": "bad-model"},
     )
 
     assert resp.status_code == 400, resp.text
