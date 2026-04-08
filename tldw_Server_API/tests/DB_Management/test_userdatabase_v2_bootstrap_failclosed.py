@@ -1,0 +1,89 @@
+import pytest
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
+    UserDatabase,
+    UserDatabaseError,
+)
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+
+
+class _Result:
+    def __init__(self, rows):
+        self.rows = rows
+
+
+def test_ensure_core_columns_raises_when_required_column_add_fails():
+    class _Backend:
+        backend_type = BackendType.SQLITE
+
+        def execute(self, sql, params=None):
+            if sql == "PRAGMA table_info(users)":
+                return _Result([{"name": "id"}])
+            if sql.startswith("ALTER TABLE users ADD COLUMN uuid"):
+                raise RuntimeError("no alter")
+            return _Result([])
+
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = _Backend()
+
+    with pytest.raises(UserDatabaseError, match="uuid"):
+        db._ensure_core_columns()
+
+
+def test_seed_default_data_raises_when_required_role_missing_after_seed():
+    class _Backend:
+        backend_type = BackendType.SQLITE
+
+        def execute(self, sql, params=None):
+            if sql.startswith("SELECT id FROM roles WHERE name = ?"):
+                if params == ("admin",):
+                    return _Result([])
+                return _Result([{"id": 1}])
+            if sql.startswith("SELECT id FROM permissions WHERE name = ?"):
+                return _Result([{"id": 1}])
+            return _Result([])
+
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = _Backend()
+
+    with pytest.raises(UserDatabaseError, match="admin"):
+        db._seed_default_data()
+
+
+def test_seed_default_data_raises_when_required_role_permission_link_missing():
+    class _Backend:
+        backend_type = BackendType.SQLITE
+
+        _roles = {
+            "admin": 1,
+            "user": 2,
+            "viewer": 3,
+        }
+        _permissions = {
+            "media.read": 10,
+            "media.create": 11,
+            "media.delete": 12,
+            "sql.read": 13,
+            "sql.target:media_db": 14,
+            "system.configure": 15,
+            "users.manage_roles": 16,
+        }
+
+        def execute(self, sql, params=None):
+            if sql.startswith("SELECT id FROM roles WHERE name = ?"):
+                return _Result([{"id": self._roles[params[0]]}])
+            if sql.startswith("SELECT id FROM permissions WHERE name = ?"):
+                return _Result([{"id": self._permissions[params[0]]}])
+            if sql.startswith("SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?"):
+                if params == (1, 16):
+                    return _Result([])
+                return _Result([{"1": 1}])
+            return _Result([])
+
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = _Backend()
+
+    with pytest.raises(UserDatabaseError, match="users.manage_roles"):
+        db._seed_default_data()
