@@ -128,8 +128,10 @@ class UserDatabase:
         elif self.backend.backend_type == BackendType.POSTGRESQL:
             schema_path = base_path / "Databases" / "Postgres" / "Schema" / schema_name
         else:
-            logger.warning(f"No schema path defined for backend type: {self.backend.backend_type}")
-            return
+            backend_label = getattr(self.backend.backend_type, "value", str(self.backend.backend_type))
+            raise UserDatabaseError(
+                f"Unsupported backend type for schema initialization: {backend_label}"
+            )
 
         schema_statements: Optional[list[str]] = None
         loaded_from_file = False

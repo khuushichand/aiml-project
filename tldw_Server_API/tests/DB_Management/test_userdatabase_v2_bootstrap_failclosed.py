@@ -41,6 +41,101 @@ def test_initialize_schema_raises_when_required_schema_apply_fails(monkeypatch):
         db._initialize_schema()
 
 
+def test_initialize_schema_raises_for_unsupported_backend_type():
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = SimpleNamespace(backend_type=SimpleNamespace(value="unsupported"))
+
+    with pytest.raises(UserDatabaseError, match="Unsupported backend type"):
+        db._initialize_schema()
+
+
+def test_initialize_schema_real_sqlite_bootstrap_seeds_required_state(tmp_path):
+    db_path = tmp_path / "users.db"
+    db = UserDatabase(
+        config=DatabaseConfig(
+            backend_type=BackendType.SQLITE,
+            sqlite_path=str(db_path),
+        ),
+        client_id="test_suite",
+    )
+
+    tables = {
+        row["name"]
+        for row in db.backend.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).rows
+    }
+    expected_tables = {
+        "users",
+        "roles",
+        "permissions",
+        "role_permissions",
+        "registration_codes",
+        "auth_audit_log",
+    }
+    missing_tables = expected_tables - tables
+    if missing_tables:
+        pytest.fail(f"expected SQLite bootstrap to create tables: {sorted(missing_tables)}")
+
+    user_columns = {
+        row["name"] if isinstance(row, dict) else row[1]
+        for row in db.backend.execute("PRAGMA table_info(users)").rows
+    }
+    expected_columns = {
+        "uuid",
+        "metadata",
+        "failed_login_attempts",
+        "locked_until",
+        "is_superuser",
+    }
+    missing_columns = expected_columns - user_columns
+    if missing_columns:
+        pytest.fail(f"expected SQLite bootstrap to create columns: {sorted(missing_columns)}")
+
+    role_names = {
+        row["name"]
+        for row in db.backend.execute("SELECT name FROM roles").rows
+    }
+    expected_roles = {"admin", "user", "viewer"}
+    missing_roles = expected_roles - role_names
+    if missing_roles:
+        pytest.fail(f"expected SQLite bootstrap to seed roles: {sorted(missing_roles)}")
+
+    permission_names = {
+        row["name"]
+        for row in db.backend.execute("SELECT name FROM permissions").rows
+    }
+    expected_permissions = {
+        "media.read",
+        "media.create",
+        "media.delete",
+        "sql.read",
+        "sql.target:media_db",
+        "system.configure",
+        "users.manage_roles",
+    }
+    missing_permissions = expected_permissions - permission_names
+    if missing_permissions:
+        pytest.fail(
+            f"expected SQLite bootstrap to seed permissions: {sorted(missing_permissions)}"
+        )
+
+    admin_role = db.backend.execute(
+        "SELECT id FROM roles WHERE name = ?",
+        ("admin",),
+    ).rows[0]["id"]
+    manage_roles_permission = db.backend.execute(
+        "SELECT id FROM permissions WHERE name = ?",
+        ("users.manage_roles",),
+    ).rows[0]["id"]
+    admin_link = db.backend.execute(
+        "SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?",
+        (admin_role, manage_roles_permission),
+    ).rows
+    if not admin_link:
+        pytest.fail("expected SQLite bootstrap to seed admin users.manage_roles mapping")
+
+
 def test_ensure_core_columns_handles_real_legacy_sqlite_uuid_migration(tmp_path):
     db_path = tmp_path / "users.db"
     backend = DatabaseBackendFactory.create_backend(
