@@ -16,7 +16,7 @@ class RecordingCache:
         self.data[key] = value
 
 
-def test_local_api_backend_identity_strips_credentials_and_query():
+def test_local_api_backend_identity_strips_credentials_and_sensitive_params():
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
 
     clean_url = "http://backend-one.example:8080/v1"
@@ -35,6 +35,42 @@ def test_local_api_backend_identity_strips_credentials_and_query():
     credentialed_cache_key = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=credentialed_identity)
 
     assert credentialed_cache_key == clean_cache_key
+
+
+def test_local_api_backend_identity_preserves_nonsensitive_query_params():
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    url_tenant_a = "http://backend-one.example:8080/v1?tenant=a"
+    url_tenant_b = "http://backend-one.example:8080/v1?tenant=b"
+    url_no_query = "http://backend-one.example:8080/v1"
+
+    identity_a = mod._normalize_cache_backend_identity({"api_url": url_tenant_a}, "local_api")
+    identity_b = mod._normalize_cache_backend_identity({"api_url": url_tenant_b}, "local_api")
+    identity_none = mod._normalize_cache_backend_identity({"api_url": url_no_query}, "local_api")
+
+    # Non-sensitive query params produce distinct identities
+    assert identity_a != identity_b
+    assert identity_a != identity_none
+    assert "tenant=a" in identity_a
+    assert "tenant=b" in identity_b
+
+    # Cache keys are therefore distinct
+    key_a = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=identity_a)
+    key_b = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=identity_b)
+    assert key_a != key_b
+
+
+def test_local_api_backend_identity_strips_sensitive_but_keeps_nonsensitive():
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    url_mixed = "http://backend.example:8080/v1?tenant=prod&token=secret123&region=us-east"
+
+    identity = mod._normalize_cache_backend_identity({"api_url": url_mixed}, "local_api")
+
+    assert "tenant=prod" in identity
+    assert "region=us-east" in identity
+    assert "token" not in identity
+    assert "secret123" not in identity
 
 
 @pytest.mark.asyncio
