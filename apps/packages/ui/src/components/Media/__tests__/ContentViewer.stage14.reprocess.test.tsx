@@ -116,6 +116,13 @@ const selectedMedia = {
   }
 }
 
+const selectedMediaWithSource = {
+  ...selectedMedia,
+  raw: {
+    url: 'https://www.youtube.com/watch?v=abc123'
+  }
+}
+
 describe('ContentViewer stage 14 reprocess action', () => {
   beforeEach(() => {
     mocks.bgRequest.mockReset()
@@ -196,6 +203,72 @@ describe('ContentViewer stage 14 reprocess action', () => {
       expect(mocks.messageError).toHaveBeenCalledWith(
         'Unable to start reprocessing. Please try again.'
       )
+    })
+    expect(onRefreshMedia).not.toHaveBeenCalled()
+  })
+
+  it('re-requests a stored video-lite summary from the actions menu', async () => {
+    const onRefreshMedia = vi.fn()
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (
+        path ===
+        '/api/v1/media/video-lite/workspace/youtube%3Aabc123/summary-refresh?source_url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123'
+      ) {
+        return { state: 'ready', summary_state: 'processing' }
+      }
+      return {}
+    })
+
+    render(
+      <ContentViewer
+        selectedMedia={selectedMediaWithSource}
+        content={'Transcript body'}
+        mediaDetail={{ type: 'video', url: 'https://www.youtube.com/watch?v=abc123' }}
+        onRefreshMedia={onRefreshMedia}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('menu-item-refresh-video-lite-summary'))
+
+    await waitFor(() => {
+      expect(mocks.bgRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: '/api/v1/media/video-lite/workspace/youtube%3Aabc123/summary-refresh?source_url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123',
+          method: 'POST'
+        })
+      )
+    })
+    expect(mocks.messageSuccess).toHaveBeenCalledWith('Summary refresh started.')
+    expect(onRefreshMedia).toHaveBeenCalled()
+  })
+
+  it('shows a warning toast when a summary cannot be refreshed before transcript readiness', async () => {
+    const onRefreshMedia = vi.fn()
+    mocks.bgRequest.mockImplementation(async (request: { path?: string }) => {
+      const path = String(request?.path || '')
+      if (
+        path ===
+        '/api/v1/media/video-lite/workspace/youtube%3Aabc123/summary-refresh?source_url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc123'
+      ) {
+        throw Object.assign(new Error('conflict'), { status: 409 })
+      }
+      return {}
+    })
+
+    render(
+      <ContentViewer
+        selectedMedia={selectedMediaWithSource}
+        content={'Transcript body'}
+        mediaDetail={{ type: 'video', url: 'https://www.youtube.com/watch?v=abc123' }}
+        onRefreshMedia={onRefreshMedia}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('menu-item-refresh-video-lite-summary'))
+
+    await waitFor(() => {
+      expect(mocks.messageWarning).toHaveBeenCalledWith('Transcript not ready yet.')
     })
     expect(onRefreshMedia).not.toHaveBeenCalled()
   })
