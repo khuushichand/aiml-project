@@ -617,10 +617,92 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - reviewed
 
 ## Slice 8: Cross-Slice Contract Synthesis
+### Files Reviewed
+- `Docs/superpowers/reviews/evals-module/README.md` (Slices 1-7 findings and evidence)
+- `tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py`
+- `tldw_Server_API/app/api/v1/schemas/evaluation_schema.py`
+- `tldw_Server_API/app/api/v1/schemas/evaluation_recipe_schemas.py`
+- `tldw_Server_API/app/api/v1/schemas/embeddings_abtest_schemas.py`
+- `tldw_Server_API/app/api/v1/schemas/synthetic_eval_schemas.py`
+- `tldw_Server_API/Config_Files/evaluations_config.yaml`
+- `tldw_Server_API/app/core/Evaluations/README.md`
+- `tldw_Server_API/app/core/Evaluations/EVALS_DEVELOPER_GUIDE.md`
+- `tldw_Server_API/app/core/Evaluations/SECURITY.md`
+### Baseline Notes
+- Slice 8 reuses the strongest evidence from Slices 1-7 and checks whether the shared schemas, config, and module docs actually define one coherent contract across those surfaces.
+- The grouped findings below are baseline unless noted otherwise; they do not replace the slice-local findings above, but identify the smaller set of module-level defects that explain most of them.
+- The shared docs and config describe a cleaner contract than the implementation consistently enforces today: per-user database isolation, PostgreSQL/RLS compatibility, config-driven registries, typed status values, and idempotent create/run semantics.
+### Control and Data Flow Notes
+- User identity flows through multiple parallel channels: `verify_api_key()` / `get_eval_request_user()`, route-local service binding helpers, `created_by` / `user_id` DB fields, Jobs payload ownership, limiter subjects, and webhook owner ids. No single canonical normalization point currently owns that translation.
+- Lifecycle state flows through routes, services, DB rows, schemas, SSE/webhook payloads, and idempotency replays using string literals and route-local decisions rather than a shared state machine.
+- Registry/config/docs contracts are duplicated across schemas, service helpers, loaders, and module docs. When those copies diverge, the module usually fails at runtime instead of rejecting the mismatch at startup.
 ### Shared Schemas and Config
+- `evaluation_schemas_unified.py` defines the shared `RunStatus` enum as `cancelled`, but `embeddings_abtest_schemas.py` hard-codes `canceled`, and the embeddings A/B SSE stream in `evaluations_unified.py` also waits for `canceled`. Cancellation vocabulary is already split at the shared-schema layer instead of being derived from one status contract.
+- `tldw_Server_API/app/core/Evaluations/README.md` advertises per-user DB paths, optional PostgreSQL with RLS policies, and idempotent create/run semantics. The slice findings show those promises are only partially enforced once routes bind managers/services, especially for string tenant ids and shared backend tables.
+- `EVALS_DEVELOPER_GUIDE.md` describes the module as configuration-driven and type-safe, but Slice 5 and Slice 6 found registry and loader behavior that still depends on duplicate runtime maps and permissive overwrite/fallback behavior rather than strict validation.
 ### Cross-Slice Systemic Issues
+1. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Mixed
+   Why it matters: The module does not have one canonical notion of user identity for ownership, rate limiting, or database binding. Slice 1 keys limiter state with the raw single-user API key, Slice 6 benchmark routes coerce `User.id` to `int` and silently fall back to the default DB for string ids, and Slice 7 webhook plus embeddings A/B routes bind services through a numeric-only helper while ownership ids preserve the tenant-style string. The shared docs promise per-user DB routing and RLS-friendly behavior, but the implementation still normalizes identity differently per surface. That is the clearest cross-user leakage and mis-accounting risk in the module.
+   File references: `Docs/superpowers/reviews/evals-module/README.md:90`, `Docs/superpowers/reviews/evals-module/README.md:503`, `Docs/superpowers/reviews/evals-module/README.md:578`, `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py:1565`, `tldw_Server_API/app/core/Evaluations/README.md:65`
+   Recommended fix: Introduce one canonical evaluations actor/owner identifier and require all route, service, limiter, job, and webhook helpers to derive DB binding and ownership from it. Remove route-local `int(...)` coercion and raw-token limiter subjects; unsupported id shapes should fail explicitly at the auth boundary instead of silently defaulting to the single-user DB.
+   Recommended tests: Add a cross-surface user-id matrix that runs the same assertions for `int` and tenant-style `str` ids across rate limits, benchmark runs, dataset access, webhook registration, and embeddings A/B create/run/read flows. Add a regression that proves single-user API-key rotation does not create a new limiter subject for the same account.
+   Verification note: Direct slice evidence already shows the failure in three independent surfaces: rate-limit subject drift (Slice 1), benchmark DB fallback (Slice 6), and webhook/A/B service binding drift (Slice 7).
+
+2. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: Shared-backend and storage-isolation assumptions are still SQLite-first and single-user-first. Slice 3 found explicit path validation and backend adapter contract gaps, Slice 5 found cross-user preset collisions and global ephemeral index cleanup on shared PostgreSQL-backed deployments, and Slice 6 found registry-backed benchmark definitions that are not actually runnable through the loader path. The module docs describe PostgreSQL/RLS compatibility and config-driven behavior, but those guarantees are not enforced consistently where rows, tables, and registries are keyed.
+   File references: `Docs/superpowers/reviews/evals-module/README.md:237`, `Docs/superpowers/reviews/evals-module/README.md:392`, `Docs/superpowers/reviews/evals-module/README.md:494`, `tldw_Server_API/app/core/Evaluations/README.md:65`, `tldw_Server_API/app/core/Evaluations/EVALS_DEVELOPER_GUIDE.md:57`
+   Recommended fix: Treat SQLite and PostgreSQL as equal first-class targets in the contract. Audit every shared table and registry for owner scoping, composite uniqueness, and cleanup isolation; enforce adapter return-type contracts centrally; and make registry-backed loader resolution the only path for runnable benchmark definitions.
+   Recommended tests: Add a backend contract suite that runs against SQLite and PostgreSQL for trusted path resolution, adapter row/scalar access, per-user preset uniqueness, ephemeral collection cleanup ownership, and benchmark registry-to-loader parity.
+   Verification note: Slice 3, Slice 5, and Slice 6 all found different symptoms of the same pattern: persistence code assumes isolation that only exists in the default deployment shape.
+
+3. Severity: High
+   Confidence: High
+   Priority: Near-term
+   Applicability: Baseline
+   Why it matters: Lifecycle and idempotency state are not anchored to one persisted state machine. Slice 2 showed cancellation mutating completed or failed runs into `cancelled`, Slice 7 showed idempotent replay returning a hard-coded `running` response instead of the stored terminal status, and the shared schemas already split `cancelled` versus `canceled` across unified and embeddings A/B surfaces. That combination makes cancellation, replay, streaming termination, and client polling semantics unreliable even before new evaluation types are added.
+   File references: `Docs/superpowers/reviews/evals-module/README.md:173`, `Docs/superpowers/reviews/evals-module/README.md:588`, `tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py:107`, `tldw_Server_API/app/api/v1/schemas/embeddings_abtest_schemas.py:92`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py:452`
+   Recommended fix: Move cancellation, replay, and terminal-state reporting behind a shared state-transition helper that reads and writes persisted state consistently. Replace handwritten status literals in route and schema code with one shared enum/value mapper, and require replay responses to read the stored run/test state instead of returning route-local placeholders.
+   Recommended tests: Add table-driven state-transition tests for run cancellation and replay; add schema parity coverage that prevents `cancelled` / `canceled` drift; add a polling/stream regression for embeddings A/B terminal-state handling.
+   Verification note: This is a synthesis of Slice 2 and Slice 7 plus direct shared-schema inspection, not a new isolated route bug.
+
+4. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Baseline
+   Why it matters: Route, registry, and schema boundaries are duplicated instead of enforced once. Slice 5 found silent recipe-id overwrite, Slice 6 found benchmark registry entries that the loader cannot actually resolve and a dataset route that bypasses the service compatibility layer, and the developer guide still describes a configuration-driven, type-safe architecture. In practice, duplicated maps and permissive fallbacks let contract drift survive until runtime, where it turns into 404s, wrong DB calls, or silently shadowed implementations.
+   File references: `Docs/superpowers/reviews/evals-module/README.md:410`, `Docs/superpowers/reviews/evals-module/README.md:494`, `Docs/superpowers/reviews/evals-module/README.md:512`, `tldw_Server_API/app/core/Evaluations/EVALS_DEVELOPER_GUIDE.md:57`, `tldw_Server_API/app/core/Evaluations/README.md:11`
+   Recommended fix: Make registries and service interfaces authoritative. Reject duplicate registry ids at initialization, route benchmark execution through registry-backed configs only, and keep routes on service-level compatibility methods instead of calling DB adapters with surface-specific kwargs.
+   Recommended tests: Add startup validation tests for registry uniqueness, parity tests between benchmark registry entries and runnable loaders, and strict route-to-service protocol tests that use fake DB/service objects to catch boundary drift before integration time.
+   Verification note: The runtime symptoms differ, but the underlying failure is the same: duplicate definitions are allowed to drift without load-time validation.
 ### Priority Summary
+1. Canonicalize user identity and per-user DB binding across every evaluations surface.
+2. Repair shared-backend isolation and adapter contracts so PostgreSQL and multi-user deployments stop depending on SQLite-only assumptions.
+3. Centralize lifecycle and idempotency state handling, including one cancellation vocabulary.
+4. Collapse duplicated registry and route/service contracts into validated single sources of truth.
 ### Recommended Remediation Order
+1. Build a canonical evaluations identity helper and thread it through auth, limiter, service binding, webhook ownership, jobs payloads, and DB `created_by` filters. This removes the cross-user leakage class before touching more local bugs.
+2. Fix shared storage contracts next: trusted path enforcement, backend adapter return semantics, composite uniqueness for shared tables, and owner-scoped ephemeral cleanup. This stabilizes SQLite/PostgreSQL behavior and prevents cross-user overwrite.
+3. Introduce a shared lifecycle/state-transition layer for cancellations, replays, and terminal-state reporting. Migrate routes and schemas to shared status values instead of handwritten literals.
+4. Tighten registry and service boundaries so startup validation catches duplicate ids, loader mismatches, and unsupported adapter signatures before runtime.
+5. Update module docs and examples after the code fixes land so the documented per-user, idempotent, config-driven contract matches reality again.
 ### Coverage Gaps and Verification Items
+- Add a module-wide identity regression matrix covering `int` and tenant-style `str` user ids across CRUD, rate limits, benchmarks, datasets, webhooks, and embeddings A/B routes.
+- Add dual-backend contract coverage for SQLite and PostgreSQL, especially for adapter row/scalar semantics, preset uniqueness, ephemeral cleanup ownership, and registry-backed benchmark loading.
+- Add parity coverage for shared status vocabulary. `RunStatus` uses `cancelled`, while embeddings A/B schemas and SSE handling still use `canceled`; this should be asserted explicitly instead of relying on ad hoc literals.
+- Verify the `create_run()` -> task-registration -> `cancel_run()` window explicitly. Slice 2 proved terminal-state corruption on the fallback path, but the intended cancellable startup window still needs a positive contract test.
+- Resolve the working-tree-specific batch `webhook_user_id` call-shape drift noted in Slice 2. The default service accepts the keyword, but strict test doubles still fail, so the route-to-service contract should either be standardized or documented as intentionally changed.
+- Decide whether dual pagination styles are intentional. `/history`-style request models still imply `limit`/`offset`, while the CRUD listings use `limit`/`after`; Slice 8 should not leave that split undocumented.
+- Verify whether migration failure is supposed to fail closed or silently fall back to legacy schema creation in supported runtime paths. Slice 3 found the fallback code path, but its intended production posture still needs an explicit contract.
+- Verify and document the intended production semantics of `TEST_MODE`, `PYTEST_CURRENT_TEST`, and other test-only fallback paths separately from runtime behavior. Several slice findings were either hidden or exposed by test-specific branches.
+- Reconcile the module docs and security guide with the reviewed behavior. The docs currently advertise stronger per-user, config-driven, and path-safety guarantees than the implementation consistently provides.
 ### Verification Run
+- `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/property/test_evaluation_invariants.py tldw_Server_API/tests/e2e/test_evaluations_workflow.py tldw_Server_API/tests/server_e2e_tests/test_evaluations_workflow.py`
+  Result: mixed but informative. `tldw_Server_API/tests/Evaluations/property/test_evaluation_invariants.py` passed, confirming no obvious broad invariant failure in the pure in-process evaluation helpers. The workflow suites were only partially runnable in this environment: the client-driven e2e tests skipped because they expect a separately running server, and the server e2e tests errored during fixture setup with `PermissionError: [Errno 1] Operation not permitted` while binding `127.0.0.1` in the sandbox. This does not contradict the slice findings, but it leaves full end-to-end verification dependent on a less restricted environment.
 ### Slice Status
+- reviewed
