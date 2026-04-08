@@ -357,12 +357,54 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 5: Retrieval and Recipe-Driven Evaluation Surfaces
 ### Files Reviewed
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py`
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_recipes.py`
+- `tldw_Server_API/app/api/v1/schemas/evaluation_recipe_schemas.py`
+- `tldw_Server_API/app/core/Evaluations/rag_evaluator.py`
+- `tldw_Server_API/app/core/Evaluations/response_quality_evaluator.py`
+- `tldw_Server_API/app/core/Evaluations/recipe_runs_service.py`
+- `tldw_Server_API/app/core/Evaluations/recipe_runs_jobs.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/base.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/registry.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/rag_answer_quality.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/rag_answer_quality_execution.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/rag_retrieval_tuning.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/rag_retrieval_tuning_execution.py`
+- `tldw_Server_API/app/core/Evaluations/recipes/embeddings_retrieval.py`
 ### Baseline Notes
+- The reviewed slice is baseline-stable relative to `ec30354a2`; the requested code paths are present in the frozen baseline and the current tree.
 ### Control and Data Flow Notes
+- The API layer normalizes recipe requests through `evaluations_recipes.py`, then delegates to `RecipeRunsService` for validation, reuse hashing, persistence, and report shaping.
+- The registry path is intentionally small: manifests are registered up front, and recipe-specific execution helpers build the report payloads returned by the API.
 ### Findings
+1. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Baseline
+   Why it matters: `RecipeRegistry` silently overwrites earlier entries when two definitions share the same `recipe_id`. That makes registration order significant and can shadow the intended recipe implementation without any warning, which is risky for both custom registries and future builtin additions.
+   File references: `tldw_Server_API/app/core/Evaluations/recipes/registry.py:39`, `tldw_Server_API/app/core/Evaluations/recipes/registry.py:42`, `tldw_Server_API/app/core/Evaluations/recipes/registry.py:43`
+   Recommended fix: Reject duplicate `recipe_id` values during registry initialization, or raise a deterministic error or warning when a collision is detected.
+   Recommended tests: Add a unit test that constructs a `RecipeRegistry` with two recipe definitions using the same `recipe_id` and asserts that initialization fails instead of silently keeping the later recipe.
+   Verification note: A direct probe with two `StaticRecipeDefinition` instances that both used `recipe_id="dup"` returned the second manifest from `get_manifest("dup")`, confirming the silent shadowing behavior. The baseline code shows the same overwrite path.
 ### Open Questions
+- None.
 ### Verification Run
+- `source .venv/bin/activate && rg -n "registry|execute|candidate|metric|retrieval|quality|job|background|dataset|snapshot" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_recipes.py tldw_Server_API/app/core/Evaluations/recipe_runs_service.py tldw_Server_API/app/core/Evaluations/recipes`
+  Result: confirmed the expected registry, execution, dataset, and report-shaping hotspots across the slice.
+- `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_rag_evaluator_embeddings.py tldw_Server_API/tests/Evaluations/unit/test_rag_evaluator.py tldw_Server_API/tests/Evaluations/test_recipe_embeddings_retrieval.py tldw_Server_API/tests/Evaluations/test_recipe_rag_retrieval_tuning.py`
+  Result: `63 passed, 2 skipped`.
+- `source .venv/bin/activate && python - <<'PY'`
+  `from tldw_Server_API.app.core.Evaluations.recipes.base import StaticRecipeDefinition`
+  `from tldw_Server_API.app.core.Evaluations.recipes.registry import RecipeRegistry`
+  `from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import RecipeManifest`
+  `first = StaticRecipeDefinition(RecipeManifest(recipe_id='dup', recipe_version='1', name='first', description='first'))`
+  `second = StaticRecipeDefinition(RecipeManifest(recipe_id='dup', recipe_version='1', name='second', description='second'))`
+  `registry = RecipeRegistry(recipes=(first, second))`
+  `print(registry.get_manifest('dup').name)`
+  `PY`
+  Result: the registry returned `second`, confirming that duplicate `recipe_id` values are overwritten silently.
 ### Slice Status
+- reviewed
 
 ## Slice 6: Benchmark, Dataset, and Synthetic Evaluation Surfaces
 ### Files Reviewed
