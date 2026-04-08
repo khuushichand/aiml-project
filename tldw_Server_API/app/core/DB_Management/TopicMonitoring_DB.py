@@ -684,6 +684,25 @@ class TopicMonitoringDB:
             finally:
                 conn.close()
 
+    def get_alert(self, alert_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            conn = self._connect()
+            try:
+                cur = conn.execute(
+                    """
+                    SELECT id, created_at, user_id, scope_type, scope_id, source,
+                           watchlist_id, rule_id, rule_category, rule_severity, pattern,
+                           source_id, chunk_id, chunk_seq, text_snippet, metadata, is_read, read_at
+                    FROM topic_alerts
+                    WHERE id = ?
+                    """,
+                    (int(alert_id),),
+                )
+                row = cur.fetchone()
+                return {key: row[key] for key in row.keys()} if row else None
+            finally:
+                conn.close()
+
     def mark_read(self, alert_id: int) -> bool:
         with self._lock:
             conn = self._connect()

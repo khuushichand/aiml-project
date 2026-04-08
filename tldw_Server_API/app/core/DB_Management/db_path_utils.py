@@ -117,6 +117,11 @@ def _ensure_dir(path: Path, *, label: str) -> None:
         raise StorageUnavailableError(f"Failed to create {label} directory") from e
 
 
+def _resolve_candidate_for_containment(candidate: Path) -> Path:
+    parent = candidate.parent.resolve(strict=False)
+    return parent / candidate.name
+
+
 def resolve_trusted_database_path(
     db_path: str | Path,
     *,
@@ -163,13 +168,13 @@ def resolve_trusted_database_path(
         raise InvalidStoragePathError("invalid_path") from exc
 
     if candidate.is_absolute():
-        normalized = Path(os.path.normpath(str(candidate)))
+        normalized = _resolve_candidate_for_containment(candidate)
     else:
-        normalized = Path(os.path.normpath(str(project_root / candidate)))
+        normalized = _resolve_candidate_for_containment(project_root / candidate)
 
     for root in unique_roots:
         try:
-            normalized.relative_to(root)
+            normalized.relative_to(root.resolve(strict=False))
             return normalized
         except ValueError:
             continue
