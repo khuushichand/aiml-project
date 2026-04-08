@@ -1134,6 +1134,7 @@ class UserDatabase:
             )
             sel_role_id = "SELECT id FROM roles WHERE name = %s"
             sel_perm_id = "SELECT id FROM permissions WHERE name = %s"
+            sel_role_perm = "SELECT 1 FROM role_permissions WHERE role_id = %s AND permission_id = %s"
         else:
             role_sql = "INSERT OR IGNORE INTO roles (name, description, is_system) VALUES (?, ?, ?)"
             perm_sql = "INSERT OR IGNORE INTO permissions (name, description, category) VALUES (?, ?, ?)"
