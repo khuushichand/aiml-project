@@ -184,6 +184,7 @@ class ACPRuntimePolicyService:
         acp_profile_id: int | None = None,
         acp_profile: dict[str, Any] | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        template_name: str | None = None,
     ) -> ACPRuntimePolicySnapshot:
         metadata, execution_config = await self.build_resolution_metadata(
             session_record=session_record,
@@ -201,6 +202,21 @@ class ACPRuntimePolicyService:
             effective_policy.get("resolved_policy_document")
             or effective_policy.get("policy_document")
         )
+
+        # Apply permission policy template as a base layer.
+        # User / MCP-Hub overrides that are already in the resolved document
+        # take precedence over template defaults.
+        if template_name:
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
+                PERMISSION_POLICY_TEMPLATES,
+            )
+
+            template = PERMISSION_POLICY_TEMPLATES.get(template_name)
+            if template:
+                existing_overrides = resolved_policy_document.get("tool_tier_overrides", {})
+                # Template is the base layer -- merge user overrides on top.
+                merged = {**template.get("tool_tier_overrides", {}), **existing_overrides}
+                resolved_policy_document["tool_tier_overrides"] = merged
         allowed_tools = _unique(_as_str_list(resolved_policy_document.get("allowed_tools")))
         denied_tools = _unique(_as_str_list(resolved_policy_document.get("denied_tools")))
         capabilities = _unique(_as_str_list(resolved_policy_document.get("capabilities")))

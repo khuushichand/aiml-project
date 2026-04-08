@@ -1413,6 +1413,22 @@ else:
     except _IMPORT_EXCEPTIONS as _acp_import_err:
         logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
         acp_router = None  # type: ignore[assignment]
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+    except _IMPORT_EXCEPTIONS as _acp_sched_err:
+        logger.warning(f"ACP schedules endpoints unavailable at import time; deferring: {_acp_sched_err}")
+        acp_schedules_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+    except _IMPORT_EXCEPTIONS as _acp_trig_err:
+        logger.warning(f"ACP triggers endpoints unavailable at import time; deferring: {_acp_trig_err}")
+        acp_triggers_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+    except _IMPORT_EXCEPTIONS as _acp_perm_err:
+        logger.warning(f"ACP permissions endpoints unavailable at import time; deferring: {_acp_perm_err}")
+        acp_permissions_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -6592,6 +6608,25 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+
+        app.include_router(acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"])
+    except _IMPORT_EXCEPTIONS as _acp_sched_min_err:
+        logger.debug(f"Skipping ACP schedules router in minimal test app: {_acp_sched_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+
+        app.include_router(acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"])
+    except _IMPORT_EXCEPTIONS as _acp_trig_min_err:
+        logger.debug(f"Skipping ACP triggers router in minimal test app: {_acp_trig_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+
+        app.include_router(acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"])
+    except _IMPORT_EXCEPTIONS as _acp_perm_min_err:
+        logger.debug(f"Skipping ACP permissions router in minimal test app: {_acp_perm_min_err}")
     # Agent Orchestration endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
@@ -6845,6 +6880,12 @@ else:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     if "acp_router" in locals() and acp_router is not None:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
+    if "acp_schedules_router" in locals() and acp_schedules_router is not None:
+        _include_if_enabled("acp", acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"], default_stable=False)
+    if "acp_triggers_router" in locals() and acp_triggers_router is not None:
+        _include_if_enabled("acp", acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"], default_stable=False)
+    if "acp_permissions_router" in locals() and acp_permissions_router is not None:
+        _include_if_enabled("acp", acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_memory_router" in locals():

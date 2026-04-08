@@ -114,6 +114,28 @@ def _resolve_runtime_permission_outcome(
             "provenance_summary": dict(snapshot.policy_provenance_summary or {}),
         }
 
+    # Check tool_tier_overrides -- Bash prefix patterns like Bash(git:*) -> auto
+    overrides = policy_document.get("tool_tier_overrides", {})
+    if isinstance(overrides, dict):
+        for pattern, tier in overrides.items():
+            if fnmatch.fnmatch(tool_name, pattern):
+                tier_lower = str(tier or "").strip().lower()
+                if tier_lower == "auto":
+                    return {
+                        "action": "approve",
+                        "approval_requirement": "allow",
+                        "policy_snapshot_fingerprint": snapshot.policy_snapshot_fingerprint,
+                        "provenance_summary": dict(snapshot.policy_provenance_summary or {}),
+                    }
+                # Any non-auto tier (individual, batch, etc.) requires approval
+                return {
+                    "action": "prompt",
+                    "approval_requirement": "approval_required",
+                    "governance_reason": f"tool_tier_override_{tier_lower}",
+                    "policy_snapshot_fingerprint": snapshot.policy_snapshot_fingerprint,
+                    "provenance_summary": dict(snapshot.policy_provenance_summary or {}),
+                }
+
     approval_mode = str(
         (snapshot.approval_summary or {}).get("mode")
         or policy_document.get("approval_mode")
