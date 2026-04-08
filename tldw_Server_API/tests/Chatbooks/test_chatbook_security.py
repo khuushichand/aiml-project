@@ -3,6 +3,7 @@
 
 import os
 import io
+import json
 import zipfile
 import tempfile
 from pathlib import Path
@@ -10,6 +11,59 @@ import pytest
 from unittest.mock import Mock, patch
 
 from tldw_Server_API.app.core.Chatbooks.chatbook_validators import ChatbookValidator
+
+
+def make_chatbook_manifest(**overrides):
+    manifest = {
+        "version": "1.0.0",
+        "name": "Security Test",
+        "description": "Archive validation test manifest",
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:00:00",
+        "content_items": [],
+        "configuration": {},
+        "statistics": {},
+        "metadata": {},
+        "user_info": {"user_id": "test"},
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def build_chatbook_archive_bytes(*, members=None, manifest=None, compression=zipfile.ZIP_STORED) -> bytes:
+    zip_buffer = io.BytesIO()
+    archive_members = members or []
+    manifest_payload = manifest or make_chatbook_manifest()
+
+    with zipfile.ZipFile(zip_buffer, "w", compression=compression) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest_payload))
+        for archive_member, content in archive_members:
+            zf.writestr(archive_member, content)
+
+    return zip_buffer.getvalue()
+
+
+def build_traversal_archive_bytes(member_name: str = "../../../etc/passwd") -> bytes:
+    return build_chatbook_archive_bytes(
+        members=[(member_name, "malicious content")],
+    )
+
+
+def build_symlink_archive_bytes(link_name: str = "symlink_file") -> bytes:
+    symlink_info = zipfile.ZipInfo(link_name)
+    symlink_info.external_attr = 0xA1ED0000
+    return build_chatbook_archive_bytes(
+        members=[
+            ("regular_file.txt", "content"),
+            (symlink_info, "/etc/passwd"),
+        ],
+    )
+
+
+def build_dangerous_file_archive_bytes(filename: str = "malware.exe") -> bytes:
+    return build_chatbook_archive_bytes(
+        members=[(filename, "potentially malicious content")],
+    )
 
 
 class TestPathTraversalSecurity:
