@@ -73,6 +73,7 @@
 - Add: `tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingest_jobs_video_dedupe.py`
 
 - [ ] **Step 1: Write failing worker tests**
+- [x] **Step 1: Write failing worker tests**
 
 Cover:
 
@@ -87,7 +88,7 @@ Cover:
 - a completed job means transcript persistence and the initial summary attempt have both finished
 - weak or mutable sources fall back to normal ingest when freshness cannot be established cheaply
 
-- [ ] **Step 2: Run the targeted backend tests to verify they fail**
+- [x] **Step 2: Run the targeted backend tests to verify they fail**
 
 Run:
 
@@ -97,7 +98,7 @@ source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/MediaIngestion_NEW/integration/test_media_ingest_jobs_video_dedupe.py -v
 ```
 
-- [ ] **Step 3: Implement the internal dedupe shim**
+- [x] **Step 3: Implement the internal dedupe shim**
 
 Requirements:
 
@@ -115,7 +116,7 @@ Requirements:
 - fall back to the normal ingest path when source freshness cannot be established cheaply
 - return the normal completed job result shape with `media_id`
 
-- [ ] **Step 4: Run backend verification**
+- [x] **Step 4: Run backend verification**
 
 Run:
 
@@ -129,7 +130,7 @@ source .venv/bin/activate && python -m bandit -r \
   -f json -o /tmp/bandit_video_lite_dedupe.json
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Suggested message:
 
@@ -147,7 +148,7 @@ git commit -m "feat: dedupe video ingest behind existing jobs"
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/web/VideoWorkspacePage.test.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/web/video-lite-runtime.test.tsx`
 
-- [ ] **Step 1: Write failing private-frontend tests**
+- [x] **Step 1: Write failing private-frontend tests**
 
 Cover:
 
@@ -160,7 +161,7 @@ Cover:
 - summary unavailable or failed states render from the reserved per-user summary metadata
 - completed jobs without `media_id` are treated as failures
 
-- [ ] **Step 2: Run the targeted frontend tests to verify they fail**
+- [x] **Step 2: Run the targeted frontend tests to verify they fail**
 
 Run:
 
@@ -170,7 +171,7 @@ cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test \
   tests/web/video-lite-runtime.test.tsx -v
 ```
 
-- [ ] **Step 3: Replace custom backend-client assumptions**
+- [x] **Step 3: Replace custom backend-client assumptions**
 
 Requirements:
 
@@ -179,7 +180,7 @@ Requirements:
 - use existing media detail fetches
 - keep login and upgrade intent preservation in the private app
 
-- [ ] **Step 4: Run private frontend verification**
+- [x] **Step 4: Run private frontend verification**
 
 Run:
 
@@ -193,7 +194,7 @@ bunx vitest run --environment jsdom tests/web/video-lite-runtime.test.tsx
 cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web && bun run build
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Suggested message:
 
@@ -208,7 +209,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "re
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension/src/routes/sidepanel-video.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/extension/sidepanel-video.test.tsx`
 
-- [ ] **Step 1: Write failing launcher tests**
+- [x] **Step 1: Write failing launcher tests**
 
 Cover:
 
@@ -217,7 +218,7 @@ Cover:
 - transcript/chat intent is preserved in hosted handoff
 - login/upgrade routing stays in the hosted app
 
-- [ ] **Step 2: Run the extension tests to verify they fail**
+- [x] **Step 2: Run the extension tests to verify they fail**
 
 Run:
 
@@ -226,7 +227,7 @@ cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test \
   tests/extension/sidepanel-video.test.tsx -v
 ```
 
-- [ ] **Step 3: Implement the thinner launcher contract**
+- [x] **Step 3: Implement the thinner launcher contract**
 
 Requirements:
 
@@ -234,7 +235,7 @@ Requirements:
 - hosted app owns ingest submission, status polling, and workspace load
 - no custom backend `launcher_access` surface
 
-- [ ] **Step 4: Re-run extension verification**
+- [x] **Step 4: Re-run extension verification**
 
 Run:
 
@@ -244,7 +245,7 @@ cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test \
 cd extension && bun run build
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Suggested message:
 
@@ -257,7 +258,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "re
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/verification.md`
 
-- [ ] **Step 1: Run backend verification**
+- [x] **Step 1: Run backend verification**
 
 ```bash
 source .venv/bin/activate && python -m pytest \
@@ -269,7 +270,7 @@ source .venv/bin/activate && python -m bandit -r \
   -f json -o /tmp/bandit_video_lite_dedupe.json
 ```
 
-- [ ] **Step 2: Run private repo verification**
+- [x] **Step 2: Run private repo verification**
 
 ```bash
 cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test \
@@ -282,7 +283,12 @@ cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web && bun run bu
 cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/extension && bun run build
 ```
 
-- [ ] **Step 3: Update verification docs**
+- [x] **Step 3: Update verification docs**
+
+Completed in:
+
+- OSS repo dedupe/backend commits: `eea93b21e`
+- Private repo frontend rewire commit: `558000e`
 
 Record:
 

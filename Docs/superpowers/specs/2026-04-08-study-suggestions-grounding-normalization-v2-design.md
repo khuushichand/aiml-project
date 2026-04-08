@@ -131,6 +131,9 @@ Each topic must have two separate identities:
   - used by the UI for selection, editing, and reset behavior
 - `topic_key`
   - stable semantic identity derived from deterministic normalization
+  - encoded in a namespaced format such as `<namespace>:<canonical_slug>`
+  - `namespace` comes from the normalization dictionary or domain family, not from the calling service
+  - default namespace is `general` when no stronger domain is available
   - used for dedupe, analytics, and future cross-service reuse
 
 `display_label` remains user-facing presentation text and may change without changing `topic_key`.
@@ -178,6 +181,15 @@ Allowed in snapshot payload:
 - light source refs
 - safe evidence reasons
 
+Frozen labels must come from a strict allowlist:
+
+- user-authored tags already visible elsewhere in product UI
+- deck names, study-pack titles, workspace-visible labels
+- source titles or headings that already exist as explicit metadata fields
+- deterministic canonical labels produced from allowlisted labels plus alias dictionaries
+
+If a candidate label can only be derived from restricted body text, transcript text, question text, chat content, note content, or LLM summarization of those bodies, it must stay live-only and must not be serialized into the frozen snapshot.
+
 Not allowed in snapshot payload:
 
 - source excerpts
@@ -208,7 +220,7 @@ Each topic row in a new snapshot payload should carry:
 - `id`
   - snapshot-local identifier, for example `topic-1`
 - `topic_key`
-  - stable deterministic semantic key
+  - stable deterministic semantic key in the form `<namespace>:<canonical_slug>`
 - `normalization_version`
   - deterministic canonicalization version, starting with something like `norm-v2`
 - `canonical_label`
@@ -232,6 +244,9 @@ Each topic row in a new snapshot payload should carry:
 
 - `id` must remain snapshot-local and stable for the lifetime of that snapshot.
 - `topic_key` must be stable across snapshots as long as the canonicalization rules and source semantics remain unchanged.
+- `topic_key` identity is defined by the full `<namespace>:<canonical_slug>` pair plus `normalization_version`.
+- service name must not be used as the namespace boundary.
+- different services may reuse the same `topic_key` only when they resolve to the same namespace and canonical slug.
 - `display_label` may change due to user edits or improved formatting without changing `topic_key`.
 
 ## Proposed Backend Changes
@@ -274,6 +289,8 @@ New deterministic outputs:
 - normalization version
 - merged evidence metadata
 
+The pipeline must treat namespace resolution as part of canonicalization, not as an adapter-side afterthought.
+
 ### `quiz_adapter.py`
 
 Refactor quiz evidence extraction out of `snapshot_service.py` and into the adapter.
@@ -288,9 +305,41 @@ The adapter should emit structured inputs such as:
 
 The adapter should prefer:
 
-1. citation/source labels
+1. citation/source labels that resolve to allowlisted metadata fields
 2. structured tags
 3. deterministic derived labels only when needed
+
+If citation-derived wording is only available from question text or explanation bodies, the adapter may use it as live evidence for ranking but must not serialize it into the frozen payload label set.
+
+### `flashcard_review_sessions` and `flashcard_reviews`
+
+Phase 1 must make flashcard evidence acquisition concrete instead of reconstructing everything ad hoc.
+
+Chosen contract:
+
+- add persisted session-level aggregates to `flashcard_review_sessions`
+  - `cards_reviewed`
+  - a deterministic recall-success metric, exposed as `correct_count` for compatibility if needed
+  - lightweight `source_bundle_json`
+  - optional lineage references such as `study_pack_id` when the deck/session came from one
+- update those aggregates at review time so completed sessions can be summarized without replaying the entire review log on the hot path
+- keep `flashcard_reviews.review_session_id` as the row-level source of truth for reconstruction and legacy backfill
+
+Query strategy:
+
+- primary path for new sessions
+  - load aggregates and lightweight source refs directly from `flashcard_review_sessions`
+- fallback path for legacy or partially populated sessions
+  - reconstruct reviewed-card coverage from `flashcard_reviews.review_session_id`
+  - hydrate card/deck/study-pack provenance live from the existing tables
+
+This is intentionally hybrid:
+
+- persisted session aggregates keep snapshot generation cheap and deterministic
+- review-log reconstruction preserves compatibility with sessions created before the new columns exist
+- card-level metadata stays recoverable without bloating the session row
+
+If the implementation keeps the compatibility name `correct_count`, the spec should require one deterministic mapping from stored flashcard ratings into that value and use it consistently across backend and UI summaries.
 
 ### `flashcard_adapter.py`
 
@@ -299,7 +348,7 @@ This phase must explicitly improve flashcard evidence quality before expecting b
 The adapter should consume or derive:
 
 - real `cards_reviewed`
-- real `correct_count` or similar performance signals
+- real `correct_count` or similar performance signals from the persisted session aggregate or review-log reconstruction path above
 - session source bundle when available
 - deck provenance and study-pack lineage
 - card-level source metadata when recoverable
@@ -332,12 +381,25 @@ Update topic selection and fingerprint resolution rules:
 - fall back to legacy label normalization when it is absent
 - preserve snapshot-local `id` for selection targeting
 
+Action handling must preserve two separate concepts:
+
+- semantic identity
+  - resolved server-side from the selected snapshot rows as `selected_topic_keys`
+  - used for dedupe, analytics, and refreshed-snapshot equivalence
+- prompt text
+  - resolved from `selected_topic_edits` plus `manual_topic_labels`
+  - used for generation instructions and user-visible follow-up copy
+
+The external request contract may continue to send `selected_topic_ids`, `selected_topic_edits`, and `manual_topic_labels`.
+The server must resolve both semantic and prompt-oriented representations before dispatching generation.
+
 New follow-up fingerprints should include:
 
 - `snapshot_id`
 - `target_service`
 - `target_type`
 - selected `topic_key`s when present
+- normalized manual-topic labels for exploratory additions that do not have a `topic_key`
 - `action_kind`
 - `generator_version`
 - `normalization_version`
@@ -345,6 +407,8 @@ New follow-up fingerprints should include:
 For legacy snapshots:
 
 - continue using normalized labels as the fallback fingerprint input
+
+Edited labels for snapshot-backed topics must not change duplicate identity on their own. If the user wants a semantically identical selection regenerated with different phrasing, that must go through `force_regenerate`.
 
 ## UI Impact
 
@@ -383,6 +447,22 @@ Instead:
 - new snapshots use the new fingerprint composition
 - duplicate detection continues to work within each generation style
 
+### Refreshed Snapshot Equivalence
+
+Refreshing a legacy snapshot into a V2 child snapshot should prefer reuse over duplicate generation.
+
+Chosen behavior:
+
+- direct lookup still checks the current snapshot id plus its native fingerprint first
+- if that misses and the snapshot has an ancestor chain, action resolution should perform a second equivalence lookup across the refreshed-from lineage
+- that lineage lookup should compare action contract plus semantic topic identity
+  - use `topic_key` when both sides have it
+  - fall back to normalized legacy labels when an ancestor snapshot predates V2
+- if an ancestor hit is found, return `opened_existing` instead of creating a duplicate artifact
+- the system may persist a new child-snapshot alias link pointing at the reused target so later lookups stay fast
+
+This lineage-equivalence reuse should apply only to semantic selections. Manual-only additions or `force_regenerate` requests should continue to create new outputs.
+
 ### Refresh Behavior
 
 Refreshing an old snapshot may produce a new child snapshot with the V2 payload shape.
@@ -391,31 +471,38 @@ This is acceptable and desirable, as long as:
 
 - the original snapshot remains unchanged
 - the new snapshot explicitly carries the new normalization version
+- lineage-aware duplicate lookup can still reopen an equivalent existing artifact from the ancestor chain
 
 ## Testing Strategy
 
 Add or extend tests for:
 
 - deterministic `topic_key` stability under raw-label drift
+- namespace collision protection, for example identical slugs in different domain dictionaries
 - alias collapse across source labels, tags, and derived labels
 - `normalization_version` propagation into snapshot payloads and fingerprints
 - legacy snapshot compatibility in follow-up action resolution
+- refreshed-child lineage equivalence opening an existing ancestor artifact instead of generating a duplicate
+- semantic fingerprint stability when display labels are edited but selected `topic_key`s stay constant
 - flashcard provenance downgrade behavior
 - quiz weakness vs adjacency ordering
 - snapshot payload safety guarantees
+- frozen-label allowlist enforcement
 - UI compatibility with mixed old/new snapshot shapes
+- fixture-based grounding audit for flashcard sessions
 
 ## Rollout Plan
 
 Phase 1 should land in this order:
 
 1. introduce new topic types and compatibility-safe payload schema
-2. refactor adapters to emit structured evidence
-3. refactor topic pipeline to emit `topic_key` and `normalization_version`
-4. upgrade snapshot serialization
-5. upgrade action fingerprinting with legacy fallback
-6. add UI compatibility handling
-7. add targeted tests
+2. add flashcard session aggregate and provenance storage plus legacy reconstruction helpers
+3. refactor adapters to emit structured evidence
+4. refactor topic pipeline to emit `topic_key` and `normalization_version`
+5. upgrade snapshot serialization
+6. upgrade action fingerprinting with legacy and refreshed-lineage fallback
+7. add UI compatibility handling
+8. add targeted tests and grounding audit fixtures
 
 This order keeps the system working at every step and avoids breaking frozen history.
 
@@ -426,7 +513,9 @@ Phase 1 is successful when:
 - repeated semantically equivalent labels map to the same `topic_key`
 - old snapshots still render and generate follow-up artifacts successfully
 - new snapshots carry richer, stable topic identity
-- flashcard suggestions show noticeably better grounding behavior
+- a checked-in flashcard grounding audit fixture set exists and passes
+- grounded flashcard fixtures produce at least one grounded or weakly grounded topic in the top 3
+- exploratory/manual flashcard fixtures produce zero falsely grounded topics
 - future analytics can key on `topic_key` instead of only display labels
 
 ## Follow-On Phases
@@ -454,7 +543,6 @@ Generalize the suggestion engine for other internal services such as:
 That later expansion should reuse:
 
 - the adapter boundary
-- `topic_key`
+- namespaced `topic_key`
 - `normalization_version`
 - permission-safe frozen snapshots
-
