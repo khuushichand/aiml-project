@@ -29,8 +29,10 @@ def _utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp with a single Z suffix."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-def _normalize_labels_once(metric_name, labels):
-    """Normalize labels once and return them, or None if they collide."""
+def _normalize_labels_once(
+    metric_name: str, labels: dict[str, str] | None
+) -> dict[str, str] | None:
+    """Normalize labels once and return them, or ``None`` if they collide."""
     try:
         registry = get_metrics_registry()
         return registry.normalize_labels(labels, reject_collisions=True)
@@ -43,7 +45,12 @@ def _normalize_labels_once(metric_name, labels):
         return None
 
 
-def _bridge_to_registry(metric_name, metric_type, value, normalized_labels):
+def _bridge_to_registry(
+    metric_name: str,
+    metric_type: MetricType,
+    value: float,
+    normalized_labels: dict[str, str],
+) -> None:
     """Best-effort bridge from log-based metrics to the in-process registry.
 
     Expects *already-normalized* labels so the recording hot path can skip
@@ -62,19 +69,12 @@ def _bridge_to_registry(metric_name, metric_type, value, normalized_labels):
                 ),
                 persistent=False,
             )
-        if metric_type == MetricType.COUNTER:
-            registry.record(metric_name, value, normalized_labels, _normalized=True)
-        elif metric_type == MetricType.HISTOGRAM:
-            registry.record(metric_name, value, normalized_labels, _normalized=True)
-        elif metric_type == MetricType.GAUGE:
-            registry.record(metric_name, value, normalized_labels, _normalized=True)
-        else:
-            registry.record(metric_name, value, normalized_labels, _normalized=True)
+        registry.record(metric_name, value, normalized_labels, _normalized=True)
     except Exception as exc:
         logger.debug("metrics_logger: registry bridge failed: {err}", err=exc)
 
 
-def log_counter(metric_name, labels=None, value=1):
+def log_counter(metric_name: str, labels: dict[str, str] | None = None, value: float = 1) -> None:
     normalized = _normalize_labels_once(metric_name, labels)
     if normalized is None:
         return
@@ -89,7 +89,7 @@ def log_counter(metric_name, labels=None, value=1):
     _bridge_to_registry(metric_name, MetricType.COUNTER, value, normalized)
 
 
-def log_histogram(metric_name, value, labels=None):
+def log_histogram(metric_name: str, value: float, labels: dict[str, str] | None = None) -> None:
     normalized = _normalize_labels_once(metric_name, labels)
     if normalized is None:
         return
@@ -104,7 +104,7 @@ def log_histogram(metric_name, value, labels=None):
     _bridge_to_registry(metric_name, MetricType.HISTOGRAM, value, normalized)
 
 
-def log_gauge(metric_name, value, labels=None):
+def log_gauge(metric_name: str, value: float, labels: dict[str, str] | None = None) -> None:
     """Log an instantaneous measurement (gauge).
 
     The current metrics backend is log-based, so we simply emit a structured
