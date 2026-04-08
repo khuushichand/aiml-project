@@ -298,8 +298,12 @@ def _normalize_conversation_assistant_context(
         }
 
     character_id = conversation.get("character_id")
-    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     assistant_id = conversation.get("assistant_id")
+    # Mirror the assistant_id fallback used by _resolve_assistant_context_for_chat
+    # so moderation scope stays consistent with the runtime character resolution.
+    if character_id is None and assistant_id is not None:
+        character_id = assistant_id
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     if assistant_id is None and character_id is not None:
         assistant_id = str(character_id)
     is_default_character = _is_default_character_reference(
@@ -392,6 +396,14 @@ async def resolve_input_moderation_chat_type(
     """Resolve chat_type for input moderation from request fields and saved conversation state."""
     default_character_id = await _resolve_default_character_id(chat_db, loop)
     requested_character_id = getattr(request_data, "character_id", None)
+    # Also check legacy persona_id alias so moderation scope is consistent
+    # even before the endpoint normalizes persona_id -> character_id.
+    if not requested_character_id:
+        raw_persona_id = getattr(request_data, "persona_id", None)
+        if raw_persona_id is not None:
+            persona_id_str = str(raw_persona_id).strip()
+            if persona_id_str:
+                requested_character_id = persona_id_str
     if requested_character_id:
         return "regular" if _is_default_character_reference(
             requested_character_id,

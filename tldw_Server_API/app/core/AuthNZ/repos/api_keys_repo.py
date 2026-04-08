@@ -70,8 +70,9 @@ class AuthnzApiKeysRepo:
                     "'python -m tldw_Server_API.app.core.AuthNZ.initialize')."
                 )
 
-            if should_enforce_sqlite_schema_strictness(getattr(self.db_pool, "_sqlite_fs_path", None)):
-                validate_required_sqlite_api_key_schema(getattr(self.db_pool, "_sqlite_fs_path", None))
+            sqlite_fs_path = getattr(self.db_pool, "_sqlite_fs_path", None)
+            if should_enforce_sqlite_schema_strictness(sqlite_fs_path):
+                validate_required_sqlite_api_key_schema(sqlite_fs_path)
         except Exception as exc:
             logger.error(f"AuthnzApiKeysRepo.ensure_tables failed: {exc}")
             raise

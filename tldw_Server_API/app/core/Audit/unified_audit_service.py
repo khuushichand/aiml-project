@@ -815,19 +815,23 @@ class RiskScorer:
             except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return default
 
-        # Event type risk
-        if event.event_type in [
-            AuditEventType.SECURITY_VIOLATION,
-            AuditEventType.PERMISSION_DENIED,
-            AuditEventType.SUSPICIOUS_ACTIVITY,
-            AuditEventType.SYSTEM_ERROR,
-        ]:
+        # Event type risk — normalize to string so raw string callers
+        # receive the same risk bonuses as enum callers.
+        _et = _event_type_value(event.event_type).lower()
+        _high_risk_types = {
+            AuditEventType.SECURITY_VIOLATION.value,
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+            AuditEventType.SYSTEM_ERROR.value,
+        }
+        _medium_risk_types = {
+            AuditEventType.AUTH_LOGIN_FAILURE.value,
+            AuditEventType.DATA_DELETE.value,
+            AuditEventType.CONFIG_CHANGED.value,
+        }
+        if _et in _high_risk_types:
             score += 50
-        elif event.event_type in [
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            AuditEventType.DATA_DELETE,
-            AuditEventType.CONFIG_CHANGED
-        ]:
+        elif _et in _medium_risk_types:
             score += 30
 
         # Failed operations (case-insensitive)

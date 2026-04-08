@@ -77,6 +77,36 @@ class AuthnzRateLimitsRepo:
         )
         await conn.execute("DROP TABLE IF EXISTS account_lockouts_legacy")
 
+    async def _ensure_sqlite_account_lockouts_schema(self, conn: Any) -> None:
+        """Upgrade legacy identifier-only lockout tables to attempt-type scope (SQLite)."""
+        rows = await conn.fetch("PRAGMA table_info(account_lockouts)")
+        if not rows:
+            return
+        column_names = {row[1] if isinstance(row, (list, tuple)) else row["name"] for row in rows}
+        if "attempt_type" in column_names:
+            return
+
+        await conn.execute("ALTER TABLE account_lockouts RENAME TO account_lockouts_legacy")
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
+                locked_until TEXT NOT NULL,
+                reason TEXT,
+                PRIMARY KEY (identifier, attempt_type)
+            )
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO account_lockouts (identifier, attempt_type, locked_until, reason)
+            SELECT identifier, 'login', locked_until, reason
+            FROM account_lockouts_legacy
+            """
+        )
+        await conn.execute("DROP TABLE IF EXISTS account_lockouts_legacy")
+
     async def ensure_schema(self) -> None:
         """
         Ensure the AuthNZ rate-limiter tables exist for the configured backend.
@@ -161,6 +191,7 @@ class AuthnzRateLimitsRepo:
                 else:
                     for sql in ddl_sqlite:
                         await conn.execute(sql)
+                    await self._ensure_sqlite_account_lockouts_schema(conn)
                     try:
                         await conn.commit()
                     except Exception as commit_error:

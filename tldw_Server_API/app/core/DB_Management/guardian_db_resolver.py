@@ -10,12 +10,17 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 def coerce_guardian_storage_user_id(raw_user_id: object) -> int:
-    """Normalize user IDs to the integer storage key used for guardian DB paths."""
+    """Normalize user IDs to the integer storage key used for guardian DB paths.
+
+    Raises :class:`ValueError` for empty or invalid IDs.
+    """
+    if raw_user_id is None or (isinstance(raw_user_id, str) and not raw_user_id.strip()):
+        raise ValueError("Guardian storage user ID must not be empty")
     try:
         return int(raw_user_id)
-    except Exception:
+    except (TypeError, ValueError):
         digest = hashlib.sha256(str(raw_user_id).encode("utf-8")).digest()
-        return int.from_bytes(digest[:4], byteorder="big", signed=False)
+        return int.from_bytes(digest[:16], byteorder="big", signed=False)
 
 
 def resolve_guardian_db_for_user_id(user_id: object) -> GuardianDB:

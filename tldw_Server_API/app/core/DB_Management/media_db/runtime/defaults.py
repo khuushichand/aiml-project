@@ -52,7 +52,7 @@ def _runtime_state_context():
     return _runtime_state_lock
 
 
-def _clear_content_backend_cache_unlocked() -> None:
+def _clear_content_backend_cache_inner() -> None:
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
@@ -72,7 +72,7 @@ def _clear_content_backend_cache() -> None:
 
     with _runtime_state_context():
         content_db_backend = None
-        _clear_content_backend_cache_unlocked()
+        _clear_content_backend_cache_inner()
 
 
 def ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
@@ -113,7 +113,7 @@ def reset_media_runtime_defaults(
     with _runtime_state_context():
         cfg = config or single_user_config
         content_db_backend = None
-        _clear_content_backend_cache_unlocked()
+        _clear_content_backend_cache_inner()
 
         single_user_config = cfg
         content_db_settings = load_content_db_settings(cfg)

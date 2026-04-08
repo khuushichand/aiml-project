@@ -248,12 +248,16 @@ def _sqlite_missing_required_columns(
     table_name: str,
     required_columns: frozenset[str],
 ) -> list[str]:
+    # SECURITY: table_name must be a trusted, hardcoded value.
+    # PRAGMA does not support parameterized queries.
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     present_columns = {row[1] for row in rows}
     return sorted(required_columns - present_columns)
 
 
 def _sqlite_table_info_by_name(conn: sqlite3.Connection, table_name: str) -> dict[str, tuple]:
+    # SECURITY: table_name must be a trusted, hardcoded value.
+    # PRAGMA does not support parameterized queries.
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row[1]: row for row in rows}
 

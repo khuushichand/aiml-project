@@ -30242,6 +30242,50 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
 
+    def restore_writing_session(
+        self,
+        session_id: str,
+        *,
+        name: str,
+        payload: dict,
+        schema_version: int,
+        version_parent_id: str | None,
+    ) -> None:
+        """Restore a soft-deleted writing session while preserving its ID."""
+        existing = self.get_writing_session(session_id, include_deleted=True)
+        if not existing:
+            raise ConflictError(
+                f"Session with ID '{session_id}' not found.",
+                entity="writing_sessions",
+                entity_id=session_id,
+            )
+        payload_json = json.dumps(payload, ensure_ascii=True)
+        next_version = int(existing.get("version") or 1) + 1
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE writing_sessions
+                   SET name = ?,
+                       payload_json = ?,
+                       schema_version = ?,
+                       version_parent_id = ?,
+                       deleted = 0,
+                       last_modified = CURRENT_TIMESTAMP,
+                       version = ?,
+                       client_id = ?
+                 WHERE id = ?
+                """,
+                (
+                    name,
+                    payload_json,
+                    int(schema_version),
+                    version_parent_id,
+                    next_version,
+                    self.client_id,
+                    session_id,
+                ),
+            )
+
     def clone_writing_session(self, session_id: str, *, name: str | None = None) -> dict[str, Any]:
         """
         Clone a writing session, optionally renaming the copy.

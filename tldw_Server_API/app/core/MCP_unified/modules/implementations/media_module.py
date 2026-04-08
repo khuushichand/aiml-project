@@ -1000,7 +1000,13 @@ class MediaModule(BaseModule):
                 body = self._make_snippet(content, None, snippet_length)
                 return {"meta": item, "content": body, "attachments": None}
 
-            anchor_index = 0 if approx_offset is None else max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            # Prefer explicit anchor_index (from loc.chunk_index) over offset-derived
+            if isinstance(anchor_index, int):
+                anchor_index = max(0, min(len(chunks) - 1, anchor_index))
+            elif isinstance(approx_offset, int):
+                anchor_index = max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            else:
+                anchor_index = 0
 
             if mode == "chunk":
                 body = chunks[anchor_index]

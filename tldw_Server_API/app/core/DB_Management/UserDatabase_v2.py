@@ -1265,10 +1265,6 @@ class UserDatabase:
                 self.backend.execute(
                     "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"
                 )
-                user_step = "users.locked_until backfill"
-                self.backend.execute(
-                    "UPDATE users SET locked_until = NULL WHERE locked_until IS NULL"
-                )
             elif self.backend.backend_type == BackendType.POSTGRESQL:
                 user_step = "pgcrypto extension"
                 self.backend.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
@@ -1299,10 +1295,6 @@ class UserDatabase:
                 user_step = "users.failed_login_attempts backfill"
                 self.backend.execute(
                     "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"
-                )
-                user_step = "users.locked_until backfill"
-                self.backend.execute(
-                    "UPDATE users SET locked_until = NULL WHERE locked_until IS NULL"
                 )
         except Exception as exc:  # noqa: BLE001
             raise UserDatabaseError(

@@ -507,7 +507,6 @@ def _list_all_writing_themes(db: CharactersRAGDB, *, batch_size: int = 500) -> l
 
 
 def _restore_soft_deleted_writing_session(
-    conn: Any,
     db: CharactersRAGDB,
     *,
     session_id: str,
@@ -517,37 +516,12 @@ def _restore_soft_deleted_writing_session(
     version_parent_id: str | None,
 ) -> None:
     """Restore a soft-deleted writing session while preserving its ID."""
-    existing = db.get_writing_session(session_id, include_deleted=True)
-    if not existing:
-        raise ConflictError(
-            f"Session with ID '{session_id}' already exists.",
-            entity="writing_sessions",
-            entity_id=session_id,
-        )
-    payload_json = json.dumps(payload, ensure_ascii=True)
-    next_version = int(existing.get("version") or 1) + 1
-    conn.execute(
-        """
-        UPDATE writing_sessions
-           SET name = ?,
-               payload_json = ?,
-               schema_version = ?,
-               version_parent_id = ?,
-               deleted = 0,
-               last_modified = CURRENT_TIMESTAMP,
-               version = ?,
-               client_id = ?
-         WHERE id = ?
-        """,
-        (
-            name,
-            payload_json,
-            int(schema_version),
-            version_parent_id,
-            next_version,
-            db.client_id,
-            session_id,
-        ),
+    db.restore_writing_session(
+        session_id,
+        name=name,
+        payload=payload,
+        schema_version=schema_version,
+        version_parent_id=version_parent_id,
     )
 
 
@@ -1641,7 +1615,6 @@ async def import_writing_snapshot(
                     if existing:
                         if bool(existing.get("deleted")):
                             _restore_soft_deleted_writing_session(
-                                conn,
                                 db,
                                 session_id=session_id,
                                 name=session_name,

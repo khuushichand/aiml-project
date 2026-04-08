@@ -305,7 +305,12 @@ async def update_project(
         update_data["author"] = payload.author
     if _field_present(payload, "genre"):
         update_data["genre"] = payload.genre
-    if _field_present(payload, "status") and payload.status is not None:
+    if _field_present(payload, "status"):
+        if payload.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status cannot be null",
+            )
         update_data["status"] = payload.status
     if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
@@ -745,7 +750,12 @@ async def update_chapter(
         update_data["sort_order"] = payload.sort_order
     if _field_present(payload, "synopsis"):
         update_data["synopsis"] = payload.synopsis
-    if _field_present(payload, "status") and payload.status is not None:
+    if _field_present(payload, "status"):
+        if payload.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status cannot be null",
+            )
         update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
@@ -927,7 +937,12 @@ async def update_scene(
         update_data["synopsis"] = payload.synopsis
     if _field_present(payload, "sort_order") and payload.sort_order is not None:
         update_data["sort_order"] = payload.sort_order
-    if _field_present(payload, "status") and payload.status is not None:
+    if _field_present(payload, "status"):
+        if payload.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status cannot be null",
+            )
         update_data["status"] = payload.status
     if not update_data:
         raise HTTPException(
@@ -1479,7 +1494,12 @@ async def update_plot_line(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if _field_present(payload, "description"):
         update_data["description"] = payload.description
-    if _field_present(payload, "status") and payload.status is not None:
+    if _field_present(payload, "status"):
+        if payload.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status cannot be null",
+            )
         update_data["status"] = payload.status
     if _field_present(payload, "color"):
         update_data["color"] = payload.color
@@ -1759,7 +1779,12 @@ async def update_plot_hole(
         update_data["description"] = payload.description
     if _field_present(payload, "severity") and payload.severity is not None:
         update_data["severity"] = payload.severity
-    if _field_present(payload, "status") and payload.status is not None:
+    if _field_present(payload, "status"):
+        if payload.status is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="status cannot be null",
+            )
         update_data["status"] = payload.status
     if _field_present(payload, "resolution"):
         update_data["resolution"] = payload.resolution

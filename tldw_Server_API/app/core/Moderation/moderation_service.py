@@ -159,6 +159,8 @@ class ModerationService:
         self._max_replacements_per_pattern = _read_int_env("MODERATION_MAX_REPLACEMENTS_PER_PATTERN", 1000)
         # Window extension to detect matches spanning chunk boundaries
         self._match_window_chars = _read_int_env("MODERATION_MATCH_WINDOW_CHARS", 4096)
+        # Max text length for the full-text regex fallback (ReDoS guardrail)
+        self._max_fallback_scan_chars = _read_int_env("MODERATION_MAX_FALLBACK_SCAN_CHARS", 800000)
         # Optional debounce for blocklist writes (ms); default disabled
         self._write_debounce_ms = _read_int_env("MODERATION_BLOCKLIST_WRITE_DEBOUNCE_MS", 0)
         self._last_blocklist_write: float = 0.0
@@ -591,7 +593,10 @@ class ModerationService:
                 cats = [str(c).strip().lower() for c in categories_enabled if str(c).strip()]
                 next_override["categories_enabled"] = set(cats)
             if persist:
-                self._persist_runtime_overrides(next_override)
+                try:
+                    self._persist_runtime_overrides(next_override)
+                except _MODERATION_NONCRITICAL_EXCEPTIONS as exc:
+                    logger.warning("Failed to persist moderation overrides (continuing in-memory): {}", exc)
             self._runtime_override = next_override
             # Recompute policy with overrides
             self._global_policy = self._load_global_policy()
@@ -627,15 +632,16 @@ class ModerationService:
     def _write_json_atomic(path: str, payload: object) -> None:
         """Atomically write JSON payload to ``path`` using a temporary file."""
         dirpath = os.path.dirname(os.path.abspath(path))
-        if dirpath:
-            os.makedirs(dirpath, exist_ok=True)
+        if not dirpath:
+            dirpath = "."
+        os.makedirs(dirpath, exist_ok=True)
         tmp_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w",
                 encoding="utf-8",
                 delete=False,
-                dir=dirpath or None,
+                dir=dirpath,
                 prefix=".moderation.",
                 suffix=".tmp",
             ) as tmp:
@@ -657,9 +663,7 @@ class ModerationService:
             cats = overrides.get("categories_enabled")
             if isinstance(cats, set):
                 payload["categories_enabled"] = sorted(cats)
-            elif isinstance(cats, list):
-                payload["categories_enabled"] = list(cats)
-            elif isinstance(cats, tuple):
+            elif isinstance(cats, (list, tuple)):
                 payload["categories_enabled"] = list(cats)
         return payload
 
@@ -1253,9 +1257,13 @@ class ModerationService:
                     continue
                 if m.start() < end:
                     return m.start(), m.end()
-            m = pat.search(text)
-            if m:
-                return m.start(), m.end()
+            # Full-text fallback with configurable length guardrail to
+            # mitigate ReDoS risk on very large inputs.
+            fallback_limit = max(1, int(self._max_fallback_scan_chars))
+            if len(text) <= fallback_limit:
+                m = pat.search(text)
+                if m:
+                    return m.start(), m.end()
             return None
         except re.error:
             return None

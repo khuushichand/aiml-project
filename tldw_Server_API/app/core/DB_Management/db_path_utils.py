@@ -118,8 +118,7 @@ def _ensure_dir(path: Path, *, label: str) -> None:
 
 
 def _resolve_candidate_for_containment(candidate: Path) -> Path:
-    parent = candidate.parent.resolve(strict=False)
-    return parent / candidate.name
+    return candidate.resolve(strict=False)
 
 
 def resolve_trusted_database_path(

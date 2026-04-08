@@ -136,7 +136,7 @@ class ModerationTestRequest(BaseModel):
         None,
         description="Dependent user ID to simulate for guardian overlay; defaults to user_id when omitted",
     )
-    chat_type: Optional[str] = Field(
+    chat_type: Optional[Literal["regular", "character", "persona"]] = Field(
         None,
         description="Chat type to simulate for guardian overlay; defaults to 'regular' when omitted",
     )

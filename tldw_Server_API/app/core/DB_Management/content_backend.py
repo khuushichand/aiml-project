@@ -174,12 +174,21 @@ def _close_backend_pool(backend) -> None:
 
 
 def clear_cached_backend() -> None:
-    """Clear and close the currently cached shared content backend."""
+    """Clear and close the currently cached shared content backend.
+
+    Thread-safe: acquires the cache lock internally.
+    """
     global _cached_backend, _cached_backend_signature
 
-    old_backend = _cached_backend
-    _cached_backend = None
-    _cached_backend_signature = None
+    if _cache_lock is not None:
+        with _cache_lock:
+            old_backend = _cached_backend
+            _cached_backend = None
+            _cached_backend_signature = None
+    else:
+        old_backend = _cached_backend
+        _cached_backend = None
+        _cached_backend_signature = None
     _close_backend_pool(old_backend)
 
 
