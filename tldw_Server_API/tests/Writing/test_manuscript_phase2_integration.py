@@ -407,6 +407,75 @@ def test_plot_tracking(client: TestClient):
     assert resp.status_code == 204
 
 
+def test_deleted_project_hides_project_scoped_lists(client: TestClient):
+    project = _create_project(client, "Ghost Project")
+    project_id = project["id"]
+
+    part_resp = client.post(f"{PREFIX}/projects/{project_id}/parts", json={"title": "Part I"})
+    assert part_resp.status_code == 201, part_resp.text
+    part = part_resp.json()
+
+    chapter_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/chapters",
+        json={"title": "Chapter 1", "part_id": part["id"]},
+    )
+    assert chapter_resp.status_code == 201, chapter_resp.text
+
+    char_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Aldric", "role": "protagonist"},
+    )
+    assert char_resp.status_code == 201, char_resp.text
+    char = char_resp.json()
+
+    other_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters",
+        json={"name": "Brin", "role": "supporting"},
+    )
+    assert other_resp.status_code == 201, other_resp.text
+    other = other_resp.json()
+
+    rel_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/characters/relationships",
+        json={
+            "from_character_id": char["id"],
+            "to_character_id": other["id"],
+            "relationship_type": "ally",
+            "bidirectional": True,
+        },
+    )
+    assert rel_resp.status_code == 201, rel_resp.text
+
+    world_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/world-info",
+        json={"kind": "location", "name": "Keep"},
+    )
+    assert world_resp.status_code == 201, world_resp.text
+
+    plot_line_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-lines",
+        json={"title": "Main Quest"},
+    )
+    assert plot_line_resp.status_code == 201, plot_line_resp.text
+
+    plot_hole_resp = client.post(
+        f"{PREFIX}/projects/{project_id}/plot-holes",
+        json={"title": "Gap", "description": "Missing", "severity": "high"},
+    )
+    assert plot_hole_resp.status_code == 201, plot_hole_resp.text
+
+    delete_resp = client.delete(f"{PREFIX}/projects/{project_id}", headers={"expected-version": "1"})
+    assert delete_resp.status_code == 204
+
+    assert client.get(f"{PREFIX}/projects/{project_id}/parts").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/chapters").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/characters").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/characters/relationships").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/world-info").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/plot-lines").json() == []
+    assert client.get(f"{PREFIX}/projects/{project_id}/plot-holes").json() == []
+
+
 # -----------------------------------------------------------------------
 # Scene-Character Linking
 # -----------------------------------------------------------------------

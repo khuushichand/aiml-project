@@ -191,12 +191,21 @@ class ManuscriptDBHelper:
 
     # Tables eligible for cross-project ownership checks.
     _PROJECT_CHECK_TABLES: frozenset[str] = frozenset({
+        "manuscript_parts",
         "manuscript_characters",
         "manuscript_scenes",
         "manuscript_chapters",
         "manuscript_world_info",
         "manuscript_plot_lines",
     })
+
+    def _project_is_active(self, conn: Any, project_id: str) -> bool:
+        """Return ``True`` when the project exists and is not soft-deleted."""
+        row = conn.execute(
+            "SELECT 1 FROM manuscript_projects WHERE id = ? AND deleted = 0",
+            (project_id,),
+        ).fetchone()
+        return row is not None
 
     def _assert_same_project(
         self,
@@ -443,6 +452,8 @@ class ManuscriptDBHelper:
     def list_parts(self, project_id: str) -> list[dict[str, Any]]:
         """List all non-deleted parts for a project ordered by sort_order."""
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(
                 "SELECT * FROM manuscript_parts "
                 "WHERE project_id = ? AND deleted = 0 ORDER BY sort_order",
@@ -499,6 +510,12 @@ class ManuscriptDBHelper:
         next_version = expected_version + 1
 
         with self.db.transaction() as conn:
+            chapter_rows = conn.execute(
+                "SELECT id FROM manuscript_chapters WHERE part_id = ? AND deleted = 0",
+                (part_id,),
+            ).fetchall()
+            chapter_ids = [row["id"] for row in chapter_rows]
+
             cur = conn.execute(
                 "UPDATE manuscript_parts "
                 "SET deleted = 1, last_modified = ?, version = ?, client_id = ? "
@@ -518,13 +535,13 @@ class ManuscriptDBHelper:
                 "WHERE part_id = ? AND deleted = 0",
                 (now, self._client_id, part_id),
             )
-            # Cascade to scenes of those chapters (only non-deleted chapters)
-            conn.execute(
-                "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
-                "WHERE chapter_id IN (SELECT id FROM manuscript_chapters WHERE part_id = ? AND deleted = 0) "
-                "AND deleted = 0",
-                (now, self._client_id, part_id),
-            )
+            if chapter_ids:
+                placeholders = ", ".join("?" for _ in chapter_ids)
+                conn.execute(
+                    "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                    f"WHERE chapter_id IN ({placeholders}) AND deleted = 0",  # nosec B608
+                    (now, self._client_id, *chapter_ids),
+                )
 
     # ------------------------------------------------------------------
     # Chapters
@@ -549,6 +566,8 @@ class ManuscriptDBHelper:
             raise ValueError(f"Invalid chapter status: {status!r}")  # noqa: TRY003
 
         with self.db.transaction() as conn:
+            if part_id is not None:
+                self._assert_same_project(conn, "manuscript_parts", part_id, project_id, "part")
             conn.execute(
                 """
                 INSERT INTO manuscript_chapters
@@ -596,6 +615,8 @@ class ManuscriptDBHelper:
             params = (project_id,)
 
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
@@ -627,6 +648,24 @@ class ManuscriptDBHelper:
         params.extend([chapter_id, expected_version])
 
         with self.db.transaction() as conn:
+            if "part_id" in updates and updates["part_id"] is not None:
+                chapter_row = conn.execute(
+                    "SELECT project_id FROM manuscript_chapters WHERE id = ? AND deleted = 0",
+                    (chapter_id,),
+                ).fetchone()
+                if chapter_row is None:
+                    raise ConflictError(
+                        f"Chapter {chapter_id!r} update failed (version conflict or not found).",
+                        entity="manuscript_chapters",
+                        entity_id=chapter_id,
+                    )
+                self._assert_same_project(
+                    conn,
+                    "manuscript_parts",
+                    updates["part_id"],
+                    chapter_row["project_id"],
+                    "part",
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_chapters SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1073,6 +1112,18 @@ class ManuscriptDBHelper:
                         raise ValueError(
                             f"{entity_type} {item['id']!r} does not belong to project {project_id!r}"
                         )
+                    if (
+                        entity_type == "chapter"
+                        and "part_id" in item
+                        and item["part_id"] is not None
+                    ):
+                        self._assert_same_project(
+                            conn,
+                            "manuscript_parts",
+                            item["part_id"],
+                            project_id,
+                            "part",
+                        )
 
             for item in items:
                 item_id = item["id"]
@@ -1177,6 +1228,8 @@ class ManuscriptDBHelper:
     ) -> list[dict[str, Any]]:
         """List non-deleted characters for a project, optionally filtered."""
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             cur = conn.execute(
                 """
                 SELECT *
@@ -1367,6 +1420,8 @@ class ManuscriptDBHelper:
     def list_relationships(self, project_id: str) -> list[dict[str, Any]]:
         """List non-deleted relationships for a project."""
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(
                 "SELECT * FROM manuscript_character_relationships "
                 "WHERE project_id = ? AND deleted = 0",
@@ -1521,6 +1576,8 @@ class ManuscriptDBHelper:
             params.append(kind_filter)
 
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(
                 f"SELECT * FROM manuscript_world_info WHERE {where} ORDER BY sort_order",  # nosec B608
                 params,
@@ -1567,6 +1624,24 @@ class ManuscriptDBHelper:
         params.extend([world_info_id, expected_version])
 
         with self.db.transaction() as conn:
+            if "parent_id" in updates and updates["parent_id"] is not None:
+                current_row = conn.execute(
+                    "SELECT project_id FROM manuscript_world_info WHERE id = ? AND deleted = 0",
+                    (world_info_id,),
+                ).fetchone()
+                if current_row is None:
+                    raise ConflictError(
+                        f"WorldInfo {world_info_id!r} update failed (version conflict or not found).",
+                        entity="manuscript_world_info",
+                        entity_id=world_info_id,
+                    )
+                self._assert_same_project(
+                    conn,
+                    "manuscript_world_info",
+                    updates["parent_id"],
+                    current_row["project_id"],
+                    "parent_world_info",
+                )
             cur = conn.execute(
                 f"UPDATE manuscript_world_info SET {', '.join(set_parts)} "  # nosec B608
                 "WHERE id = ? AND version = ? AND deleted = 0",
@@ -1694,6 +1769,8 @@ class ManuscriptDBHelper:
     def list_plot_lines(self, project_id: str) -> list[dict[str, Any]]:
         """List non-deleted plot lines for a project ordered by sort_order."""
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(
                 "SELECT * FROM manuscript_plot_lines "
                 "WHERE project_id = ? AND deleted = 0 ORDER BY sort_order",
@@ -1968,6 +2045,8 @@ class ManuscriptDBHelper:
             params.append(status_filter)
 
         with self.db.transaction() as conn:
+            if not self._project_is_active(conn, project_id):
+                return []
             rows = conn.execute(
                 f"SELECT * FROM manuscript_plot_holes WHERE {where}",  # nosec B608
                 params,
