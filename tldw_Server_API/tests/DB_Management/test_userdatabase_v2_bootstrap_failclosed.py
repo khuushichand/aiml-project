@@ -1,5 +1,5 @@
-import pytest
-
+from pathlib import Path
+from types import SimpleNamespace
 import pytest
 
 from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
@@ -12,6 +12,32 @@ from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 class _Result:
     def __init__(self, rows):
         self.rows = rows
+
+
+def test_initialize_schema_raises_when_required_schema_apply_fails(monkeypatch):
+    db = UserDatabase.__new__(UserDatabase)
+    db.backend = SimpleNamespace(backend_type=BackendType.SQLITE)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(db, "_default_schema_statements", lambda: ["CREATE TABLE users (id INTEGER)"])
+    monkeypatch.setattr(
+        db,
+        "_apply_schema_statements",
+        lambda _statements: (_ for _ in ()).throw(RuntimeError("schema boom")),
+    )
+    monkeypatch.setattr(
+        db,
+        "_ensure_core_columns",
+        lambda: pytest.fail("_ensure_core_columns should not run after schema failure"),
+    )
+    monkeypatch.setattr(
+        db,
+        "_seed_default_data",
+        lambda: pytest.fail("_seed_default_data should not run after schema failure"),
+    )
+
+    with pytest.raises(UserDatabaseError, match="schema initialization"):
+        db._initialize_schema()
 
 
 def test_ensure_core_columns_raises_when_required_column_add_fails():

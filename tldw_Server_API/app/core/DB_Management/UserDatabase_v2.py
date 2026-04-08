@@ -154,11 +154,19 @@ class UserDatabase:
         try:
             self._apply_schema_statements(schema_statements)
         except Exception as exc:  # noqa: BLE001
-            logger.error(f"Schema application failed: {exc}")
             if loaded_from_file:
                 fallback_statements = self._default_schema_statements()
                 logger.info("Retrying schema initialization with embedded defaults")
-                self._apply_schema_statements(fallback_statements)
+                try:
+                    self._apply_schema_statements(fallback_statements)
+                except Exception as fallback_exc:  # noqa: BLE001
+                    raise UserDatabaseError(
+                        f"Required schema initialization failed after fallback: {fallback_exc}"
+                    ) from fallback_exc
+            else:
+                raise UserDatabaseError(
+                    f"Required schema initialization failed: {exc}"
+                ) from exc
 
         self._ensure_core_columns()
         self._seed_default_data()
