@@ -751,18 +751,23 @@ const deriveStreamIdleTimeout = (cfg: any, path: string, override?: number) => {
     : defaultIdle
 }
 
-const parseStreamError = async (resp: Response): Promise<string> => {
+type StreamErrorInfo = { message: string; details?: unknown }
+
+const parseStreamError = async (resp: Response): Promise<StreamErrorInfo> => {
   const ct = resp.headers.get("content-type") || ""
   if (ct.includes("application/json")) {
     const json = await resp.json().catch(() => null)
     if (json && (json.detail || json.error || json.message)) {
       const candidate = json.detail ?? json.error ?? json.message
-      return formatErrorMessage(candidate, resp.statusText || `HTTP ${resp.status}`)
+      return {
+        message: formatErrorMessage(candidate, resp.statusText || `HTTP ${resp.status}`),
+        details: json,
+      }
     }
   }
   const text = await resp.text().catch(() => null)
-  if (text) return text
-  return resp.statusText
+  if (text) return { message: text }
+  return { message: resp.statusText }
 }
 
 const yieldToBrowser = async (): Promise<void> => {
@@ -900,8 +905,13 @@ async function* bgStreamDirect<
   }
 
   if (!resp.ok) {
-    const msg = await parseStreamError(resp)
-    throw new Error(formatErrorMessage(msg, `HTTP ${resp.status}`))
+    const errorInfo = await parseStreamError(resp)
+    const error = new Error(
+      formatErrorMessage(errorInfo.message, `HTTP ${resp.status}`)
+    ) as Error & { status?: number; details?: unknown }
+    error.status = resp.status
+    if (errorInfo.details) error.details = errorInfo.details
+    throw error
   }
   if (!resp.body) {
     throw new Error("No response body")

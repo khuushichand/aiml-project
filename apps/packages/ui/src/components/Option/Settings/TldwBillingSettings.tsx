@@ -436,24 +436,53 @@ export const TldwBillingSettings = ({
           <Alert
             type="error"
             showIcon
-            title={t(
+            message={t(
               'settings:tldw.billing.limitExceeded',
               'Usage has exceeded one or more plan limits.'
             )}
+            description={
+              <div className="mt-1">
+                {billingUsage.limit_checks && (
+                  <div className="text-xs mb-2">
+                    {Object.entries(billingUsage.limit_checks)
+                      .filter(([, v]) => v.exceeded)
+                      .map(([k]) => k.replace(/_/g, ' '))
+                      .join(', ') || 'plan limits'}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="text-xs underline"
+                  onClick={() => document.getElementById('tldw-billing-plans')?.scrollIntoView({ behavior: 'smooth' })}
+                >
+                  {t('settings:tldw.billing.viewPlans', 'View upgrade options')}
+                </button>
+              </div>
+            }
           />
         )}
         {!billingUsage?.has_exceeded && billingUsage?.has_warnings && (
           <Alert
             type="warning"
             showIcon
-            title={t(
+            message={t(
               'settings:tldw.billing.limitWarning',
               'Approaching plan limits for some resources.'
             )}
+            description={
+              billingUsage.limit_checks ? (
+                <div className="text-xs mt-1">
+                  {Object.entries(billingUsage.limit_checks)
+                    .filter(([, v]) => v.warning && !v.exceeded)
+                    .map(([k]) => k.replace(/_/g, ' '))
+                    .join(', ')} {t('settings:tldw.billing.nearingLimit', 'usage is nearing the limit.')}
+                </div>
+              ) : undefined
+            }
           />
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div id="tldw-billing-plans" className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="rounded border border-border bg-surface p-3">
             <div className="text-sm font-medium mb-2">
               {t('settings:tldw.billing.selectPlan', 'Select a plan')}

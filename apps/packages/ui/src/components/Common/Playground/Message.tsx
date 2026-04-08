@@ -1440,6 +1440,18 @@ export const PlaygroundMessage = (props: Props) => {
         onClick: props.onContinue
       })
     }
+    if (errorPayload.upgradeUrl) {
+      actions.unshift({
+        id: "upgrade",
+        label: t(
+          "playground:errorRecovery.upgradePlan",
+          "Upgrade plan"
+        ),
+        onClick: () => {
+          window.open(errorPayload.upgradeUrl!, "_blank", "noopener")
+        }
+      })
+    }
     return actions
   }, [
     errorPayload,
