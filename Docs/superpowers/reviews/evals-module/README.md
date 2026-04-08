@@ -219,12 +219,63 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 3: Persistence and State Management
 ### Files Reviewed
+- `tldw_Server_API/app/core/Evaluations/evaluation_manager.py`
+- `tldw_Server_API/app/core/Evaluations/db_adapter.py`
+- `tldw_Server_API/app/core/Evaluations/connection_pool.py`
+- `tldw_Server_API/app/core/Evaluations/audit_adapter.py`
+- `tldw_Server_API/app/core/DB_Management/DB_Manager.py`
+- `tldw_Server_API/app/core/DB_Management/db_path_utils.py`
 ### Baseline Notes
+- The slice-3 persistence code is baseline-stable relative to `ec30354a2`.
+- The `tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py` setup failure caused by `resolve_trusted_database_path()` rejecting the temp DB path reproduces against the frozen baseline path logic, so it is verification context rather than a dirty-tree regression.
 ### Control and Data Flow Notes
+- `EvaluationManager._get_db_path()` resolves the default evaluations DB from `DatabasePaths`, but the explicit `db_path` branch returns any resolved path after null-byte stripping and does not apply the same user-directory containment check used for config-driven paths.
+- Config-driven `evaluations_db_path` values are contained with `relative_to(base_resolved)` and fall back to the default path when they escape the user directory.
+- `BackendAdapter` routes unified backends through the shared `DatabaseBackend` abstraction, but `fetch_one()` and `fetch_value()` currently surface `QueryResult.first` / `QueryResult.scalar` as attributes instead of calling the accessors.
+- `EvaluationManager.store_evaluation()` writes to `internal_evaluations` and `evaluation_metrics`; `get_history()` filters by type/date and computes aggregates; `list_evaluations()` is session-scoped and clears `_recent_created_ids` after each readback.
 ### Findings
+1. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: The explicit `db_path` constructor path bypasses the containment rule that protects config-driven evaluations paths. A caller can pass an absolute path outside the per-user database tree and `EvaluationManager` will accept it after `resolve()`, which defeats the path-safety model used everywhere else in this slice.
+   File references: `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:46`
+   Recommended fix: Apply the same containment check used for config-driven paths to the explicit `db_path` branch, or reject explicit paths that do not resolve under the user base directory / trusted roots.
+   Recommended tests: Add a regression that instantiates `EvaluationManager` with an explicit path outside the user tree and asserts it is rejected or normalized back to the default per-user evaluations DB.
+   Verification note: Baseline comparison with `git show ec30354a2:tldw_Server_API/app/core/Evaluations/evaluation_manager.py` shows the same explicit-path branch, so this is not a new working-tree regression.
+
+2. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: `BackendAdapter.fetch_one()` and `BackendAdapter.fetch_value()` return bound methods instead of the underlying row/value data because `QueryResult.first` and `QueryResult.scalar` are accessed as attributes, not invoked. Any call site routed through the shared backend abstraction will get the wrong type and may fail in non-SQLite backend paths.
+   File references: `tldw_Server_API/app/core/Evaluations/db_adapter.py:271`, `tldw_Server_API/app/core/Evaluations/db_adapter.py:279`
+   Recommended fix: Call the `QueryResult` accessors (`result.first()` and `result.scalar()`) or normalize the backend result contract so the adapter always returns concrete rows/scalars.
+   Recommended tests: Add unit coverage for `BackendAdapter.fetch_one()` and `BackendAdapter.fetch_value()` against a stub backend result object that exposes `first()` / `scalar()`, plus a backend-routing smoke test that exercises the adapter through the unified backend path.
+   Verification note: `QueryResult` in the shared backend contract exposes `first()` and `scalar()` methods, so the current adapter code is returning callables. This is baseline code, not a dirty-tree change.
 ### Open Questions
+- Needs verification: whether `list_evaluations()` is meant to be a session-isolated helper only. The current implementation clears `_recent_created_ids` after each readback, so it does not behave like a persistent “list all evaluations” API.
+- Needs verification: the temp-path rejection seen in `test_evaluation_manager.py` is baseline-identical under `ec30354a2`, but the `/private/var` vs `/var` normalization mismatch should be addressed somewhere in the storage-path stack if that fixture is expected to be portable across macOS sandbox layouts.
 ### Verification Run
+- `git show ec30354a2:tldw_Server_API/app/core/DB_Management/db_path_utils.py | sed -n '120,210p'`
+  `git show ec30354a2:tldw_Server_API/app/core/Evaluations/evaluation_manager.py | sed -n '1,140p'`
+  Result: baseline path containment and migration fallback logic match the current tree, including the trusted-root set used by `resolve_trusted_database_path()` and the explicit-path branch in `EvaluationManager._get_db_path()`.
+- `source .venv/bin/activate && rg -n "resolve|fallback|migrate|sqlite|postgres|db_path|relative_to|CREATE TABLE|OperationalError|RuntimeError" tldw_Server_API/app/core/Evaluations/evaluation_manager.py tldw_Server_API/app/core/Evaluations/db_adapter.py tldw_Server_API/app/core/Evaluations/connection_pool.py`
+  Result: confirmed the Slice 3 hotspots for path resolution, migration fallback, SQLite-only fallbacks, and adapter/backend routing.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py`
+  Result: `20 errors` from `InvalidStoragePathError: invalid_path` in the `temp_db_path` fixture while `EvaluationsDatabase` initialized its embeddings A/B store. The failing path normalized to `/var/folders/.../tmp*_test_eval.db` and was rejected by `resolve_trusted_database_path()`.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/unit/test_evaluations_db_filters.py`
+  Result: `2 passed`.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_backend_dual.py`
+  Result: `1 passed, 1 skipped`.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_postgres_crud.py`
+  Result: `1 passed, 1 skipped`.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_migration_cli.py`
+  Result: `1 skipped`.
+- `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/DB_Management/test_evaluations_unified_and_crud.py`
+  Result: `1 passed, 1 skipped`.
 ### Slice Status
+- reviewed
 
 ## Slice 4: CRUD and Run Lifecycle Endpoints
 ### Files Reviewed
