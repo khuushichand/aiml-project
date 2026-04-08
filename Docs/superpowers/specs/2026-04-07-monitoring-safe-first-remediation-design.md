@@ -53,6 +53,8 @@ In scope:
   [`tldw_Server_API/tests/AuthNZ_SQLite/test_authnz_monitoring_repo_sqlite.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/tests/AuthNZ_SQLite/test_authnz_monitoring_repo_sqlite.py)
 - monitoring product documentation:
   [`Docs/Product/Completed/Topic_Monitoring_Watchlists.md`](/Users/appledev/Documents/GitHub/tldw_server/Docs/Product/Completed/Topic_Monitoring_Watchlists.md)
+- topic-monitoring and notification documentation in
+  [`tldw_Server_API/app/core/Monitoring/README.md`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/Monitoring/README.md)
 
 Out of scope:
 
@@ -71,12 +73,23 @@ Out of scope:
   behavior, provided they do not change the documented external API contract.
 - Reviewed contract flaws that require public behavior changes will be deferred
   to follow-up GitHub issues instead of being changed silently here.
+- Runtime enforcement added in this batch must not reject requests that are
+  currently accepted by the public monitoring/admin contracts.
+- If stronger invariant checks are added, they must be limited to:
+  - regression tests
+  - non-throwing runtime diagnostics
+  - helper-level assertions that do not change route success paths
 - Tests will explicitly encode both:
   - behavior we are intentionally preserving for compatibility
   - behavior that is currently defective and should change now
 - One umbrella GitHub issue will be created for deferred monitoring follow-up,
   with linked sub-items for the major contract changes we are not shipping in
   this pass.
+- GitHub follow-up creation must have an execution fallback:
+  - use `gh` only if it is available and authenticated in the execution
+    environment
+  - otherwise generate issue-ready markdown/text artifacts and stop short of
+    claiming that remote GitHub issues were created
 
 ## Approaches Considered
 
@@ -195,8 +208,9 @@ stop being accidental.
 The remediation work will:
 
 - add tests that make the current overlay-only identity behavior explicit
-- add internal assertions or consistency checks where they can fail loudly in
-  tests without changing public success paths
+- add runtime-safe consistency checks that surface invariant drift without
+  rejecting currently accepted requests in production
+- add stronger assertions in test coverage where we want failures to be loud
 - keep merge-time and visibility invariants under closer test coverage
 
 This does not ban overlay-only state. It makes the current seam legible and
@@ -208,6 +222,8 @@ The completed monitoring product doc will be updated to match backend reality.
 
 Specifically:
 
+- the completed product doc and the core Monitoring README must stop describing
+  current notification behavior in contradictory ways
 - notification behavior must stop describing webhook/email as mere placeholders
   if the backend already attempts them
 - current local-first and best-effort caveats should be stated plainly
@@ -222,6 +238,9 @@ GitHub tracking:
   - public alert lifecycle/response redesign
   - true digest delivery semantics if desired
   - stronger admin/public permission model clarification if needed
+- if the environment cannot create GitHub issues directly, generate the issue
+  title/body text in-repo or in turn output so the follow-up work is still
+  captured without falsely reporting remote issue creation
 
 ## Testing Strategy
 
@@ -269,4 +288,3 @@ This remediation is successful if:
 - one umbrella GitHub issue exists for the deferred contract changes
 - the existing monitoring/admin/auth verification slices still pass after the
   remediation work
-
