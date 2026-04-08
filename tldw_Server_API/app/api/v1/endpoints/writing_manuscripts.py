@@ -990,10 +990,15 @@ async def create_character(
 ) -> ManuscriptCharacterResponse:
     """Create a new character within a project."""
     try:
+        name = _require_non_empty_text(payload.name, "name")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         character_id = helper.create_character(
             project_id=project_id,
-            name=payload.name.strip(),
+            name=name,
             role=payload.role,
             cast_group=payload.cast_group,
             full_name=payload.full_name,
@@ -1005,7 +1010,7 @@ async def create_character(
             motivation=payload.motivation,
             arc_summary=payload.arc_summary,
             notes=payload.notes,
-            custom_fields=payload.custom_fields or None,
+            custom_fields=_normalize_mapping_field(payload.custom_fields),
             sort_order=payload.sort_order,
             character_id=payload.id,
         )
@@ -1079,9 +1084,38 @@ async def update_character(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptCharacterResponse:
     """Update a manuscript character with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "name" in update_data:
-        update_data["name"] = update_data["name"].strip()
+    update_data: dict[str, Any] = {}
+    if _field_present(payload, "name"):
+        try:
+            update_data["name"] = _require_non_empty_text(payload.name, "name")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "role") and payload.role is not None:
+        update_data["role"] = payload.role
+    if _field_present(payload, "cast_group"):
+        update_data["cast_group"] = payload.cast_group
+    if _field_present(payload, "full_name"):
+        update_data["full_name"] = payload.full_name
+    if _field_present(payload, "age"):
+        update_data["age"] = payload.age
+    if _field_present(payload, "gender"):
+        update_data["gender"] = payload.gender
+    if _field_present(payload, "appearance"):
+        update_data["appearance"] = payload.appearance
+    if _field_present(payload, "personality"):
+        update_data["personality"] = payload.personality
+    if _field_present(payload, "backstory"):
+        update_data["backstory"] = payload.backstory
+    if _field_present(payload, "motivation"):
+        update_data["motivation"] = payload.motivation
+    if _field_present(payload, "arc_summary"):
+        update_data["arc_summary"] = payload.arc_summary
+    if _field_present(payload, "notes"):
+        update_data["notes"] = payload.notes
+    if _field_present(payload, "custom_fields"):
+        update_data["custom_fields"] = _normalize_mapping_field(payload.custom_fields)
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1221,15 +1255,20 @@ async def create_world_info(
 ) -> ManuscriptWorldInfoResponse:
     """Create a new world-info entry within a project."""
     try:
+        name = _require_non_empty_text(payload.name, "name")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         item_id = helper.create_world_info(
             project_id=project_id,
             kind=payload.kind,
-            name=payload.name.strip(),
+            name=name,
             description=payload.description,
             parent_id=payload.parent_id,
-            properties=payload.properties or None,
-            tags=payload.tags or None,
+            properties=_normalize_mapping_field(payload.properties),
+            tags=payload.tags or [],
             sort_order=payload.sort_order,
             world_info_id=payload.id,
         )
@@ -1300,9 +1339,22 @@ async def update_world_info(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptWorldInfoResponse:
     """Update a world-info entry with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "name" in update_data:
-        update_data["name"] = update_data["name"].strip()
+    update_data: dict[str, Any] = {}
+    if _field_present(payload, "name"):
+        try:
+            update_data["name"] = _require_non_empty_text(payload.name, "name")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "description"):
+        update_data["description"] = payload.description
+    if _field_present(payload, "parent_id"):
+        update_data["parent_id"] = payload.parent_id
+    if _field_present(payload, "properties"):
+        update_data["properties"] = _normalize_mapping_field(payload.properties)
+    if _field_present(payload, "tags"):
+        update_data["tags"] = [] if payload.tags is None else payload.tags
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1362,10 +1414,15 @@ async def create_plot_line(
 ) -> ManuscriptPlotLineResponse:
     """Create a new plot line within a project."""
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         plot_line_id = helper.create_plot_line(
             project_id=project_id,
-            title=payload.title.strip(),
+            title=title,
             description=payload.description,
             status=payload.status,
             color=payload.color,
@@ -1414,9 +1471,20 @@ async def update_plot_line(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPlotLineResponse:
     """Update a plot line with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "description"):
+        update_data["description"] = payload.description
+    if _field_present(payload, "status") and payload.status is not None:
+        update_data["status"] = payload.status
+    if _field_present(payload, "color"):
+        update_data["color"] = payload.color
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1479,6 +1547,11 @@ async def create_plot_event(
     The project_id is resolved from the plot line's parent project.
     """
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         # Resolve project_id from the plot line
         plot_line = helper.get_plot_line(plot_line_id)
@@ -1491,7 +1564,7 @@ async def create_plot_event(
         event_id = helper.create_plot_event(
             project_id=project_id,
             plot_line_id=plot_line_id,
-            title=payload.title.strip(),
+            title=title,
             description=payload.description,
             scene_id=payload.scene_id,
             chapter_id=payload.chapter_id,
@@ -1541,9 +1614,22 @@ async def update_plot_event(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPlotEventResponse:
     """Update a plot event with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "description"):
+        update_data["description"] = payload.description
+    if _field_present(payload, "scene_id"):
+        update_data["scene_id"] = payload.scene_id
+    if _field_present(payload, "chapter_id"):
+        update_data["chapter_id"] = payload.chapter_id
+    if _field_present(payload, "event_type") and payload.event_type is not None:
+        update_data["event_type"] = payload.event_type
+    if _field_present(payload, "sort_order") and payload.sort_order is not None:
+        update_data["sort_order"] = payload.sort_order
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
@@ -1603,10 +1689,15 @@ async def create_plot_hole(
 ) -> ManuscriptPlotHoleResponse:
     """Create a new plot hole entry."""
     try:
+        title = _require_non_empty_text(payload.title, "title")
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    try:
         helper = _get_helper(db)
         hole_id = helper.create_plot_hole(
             project_id=project_id,
-            title=payload.title.strip(),
+            title=title,
             description=payload.description,
             severity=payload.severity,
             scene_id=payload.scene_id,
@@ -1658,9 +1749,28 @@ async def update_plot_hole(
     _: None = Depends(rbac_rate_limit("writing.manuscripts.update")),
 ) -> ManuscriptPlotHoleResponse:
     """Update a plot hole with optimistic locking."""
-    update_data = payload.model_dump(exclude_none=True)
-    if "title" in update_data:
-        update_data["title"] = update_data["title"].strip()
+    update_data: dict[str, Any] = {}
+    if _field_present(payload, "title"):
+        try:
+            update_data["title"] = _require_non_empty_text(payload.title, "title")
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if _field_present(payload, "description"):
+        update_data["description"] = payload.description
+    if _field_present(payload, "severity") and payload.severity is not None:
+        update_data["severity"] = payload.severity
+    if _field_present(payload, "status") and payload.status is not None:
+        update_data["status"] = payload.status
+    if _field_present(payload, "resolution"):
+        update_data["resolution"] = payload.resolution
+    if _field_present(payload, "scene_id"):
+        update_data["scene_id"] = payload.scene_id
+    if _field_present(payload, "chapter_id"):
+        update_data["chapter_id"] = payload.chapter_id
+    if _field_present(payload, "plot_line_id"):
+        update_data["plot_line_id"] = payload.plot_line_id
+    if _field_present(payload, "detected_by") and payload.detected_by is not None:
+        update_data["detected_by"] = payload.detected_by
     if not update_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided for update"
