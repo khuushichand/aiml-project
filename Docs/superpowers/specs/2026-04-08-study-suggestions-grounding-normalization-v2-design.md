@@ -341,6 +341,15 @@ This is intentionally hybrid:
 
 If the implementation keeps the compatibility name `correct_count`, the spec should require one deterministic mapping from stored flashcard ratings into that value and use it consistently across backend and UI summaries.
 
+Reconciliation rule:
+
+- `flashcard_reviews` rows keyed by `review_session_id` are the canonical source of truth
+- `flashcard_review_sessions` aggregate columns are cache and summary accelerators
+- review-time writes should update both the review log and the aggregate row in one transaction when possible
+- snapshot generation and session completion must detect missing, impossible, or stale aggregate values
+  - examples: `cards_reviewed` missing, `correct_count > cards_reviewed`, aggregate totals lower than reconstructed review count
+- when aggregate and reconstruction disagree, the system must prefer reconstructed values for suggestion generation and may repair the session aggregate row as part of that flow
+
 ### `flashcard_adapter.py`
 
 This phase must explicitly improve flashcard evidence quality before expecting better ranking.
@@ -373,6 +382,23 @@ Refactor snapshot service responsibilities to:
 
 The snapshot service should no longer own the majority of quiz extraction logic directly.
 
+### `ChaChaNotes_DB.py` suggestion payload sanitization
+
+Phase 1 must explicitly update the suggestion-payload sanitizer contract so persisted V2 snapshots round-trip correctly.
+
+Required additions to the safe persisted payload contract:
+
+- `topic_key`
+- `normalization_version`
+- `evidence_reasons`
+- any other V2 fields introduced for deterministic identity that are permission-safe by construction
+
+Constraints:
+
+- keep the current deny-by-default behavior for unknown free-text fields
+- do not broaden the sanitizer into a generic pass-through
+- add persistence tests proving a V2 payload survives `create_suggestion_snapshot` and `get_suggestion_snapshot` without silently dropping identity fields
+
 ### `actions.py`
 
 Update topic selection and fingerprint resolution rules:
@@ -393,6 +419,18 @@ Action handling must preserve two separate concepts:
 The external request contract may continue to send `selected_topic_ids`, `selected_topic_edits`, and `manual_topic_labels`.
 The server must resolve both semantic and prompt-oriented representations before dispatching generation.
 
+Direct-link storage contract:
+
+- the canonical duplicate-identity key is:
+  - `snapshot_id`
+  - `target_service`
+  - `target_type`
+  - `selection_fingerprint`
+- at most one active direct generation link may exist for that identity
+- pending reservations also occupy that identity
+- `force_regenerate` may create a new artifact, but it must supersede or deactivate the prior active direct link for that identity before the replacement becomes active
+- phase 1 should not keep multiple active direct rows that differ only by `target_id`
+
 New follow-up fingerprints should include:
 
 - `snapshot_id`
@@ -409,6 +447,11 @@ For legacy snapshots:
 - continue using normalized labels as the fallback fingerprint input
 
 Edited labels for snapshot-backed topics must not change duplicate identity on their own. If the user wants a semantically identical selection regenerated with different phrasing, that must go through `force_regenerate`.
+
+Phase 1 should keep refreshed-lineage reuse read-only at the link layer:
+
+- do not persist child-snapshot alias rows into `suggestion_generation_links` in phase 1
+- if alias caching is needed later, it should use an explicit alias concept or separate schema so it does not compete with direct-link uniqueness
 
 ## UI Impact
 
@@ -454,12 +497,15 @@ Refreshing a legacy snapshot into a V2 child snapshot should prefer reuse over d
 Chosen behavior:
 
 - direct lookup still checks the current snapshot id plus its native fingerprint first
-- if that misses and the snapshot has an ancestor chain, action resolution should perform a second equivalence lookup across the refreshed-from lineage
+- if that misses and the snapshot has an ancestor chain, action resolution should perform a second equivalence lookup by walking only the current snapshot's `refreshed_from_snapshot_id` ancestor chain up to the root
 - that lineage lookup should compare action contract plus semantic topic identity
   - use `topic_key` when both sides have it
   - fall back to normalized legacy labels when an ancestor snapshot predates V2
-- if an ancestor hit is found, return `opened_existing` instead of creating a duplicate artifact
-- the system may persist a new child-snapshot alias link pointing at the reused target so later lookups stay fast
+- if an ancestor hit is found, validate the target artifact before returning `opened_existing`
+  - quizzes must still exist and be launchable
+  - flashcard decks must still exist and be launchable
+  - stale or deleted targets must be ignored, and stale link rows may be soft-deleted as cleanup
+- if a validated ancestor hit is found, return `opened_existing` instead of creating a duplicate artifact
 
 This lineage-equivalence reuse should apply only to semantic selections. Manual-only additions or `force_regenerate` requests should continue to create new outputs.
 
@@ -481,10 +527,14 @@ Add or extend tests for:
 - namespace collision protection, for example identical slugs in different domain dictionaries
 - alias collapse across source labels, tags, and derived labels
 - `normalization_version` propagation into snapshot payloads and fingerprints
+- V2 payload sanitizer round-trip preserving `topic_key`, `normalization_version`, and `evidence_reasons`
 - legacy snapshot compatibility in follow-up action resolution
 - refreshed-child lineage equivalence opening an existing ancestor artifact instead of generating a duplicate
+- refreshed-lineage lookup ignoring stale or deleted targets
 - semantic fingerprint stability when display labels are edited but selected `topic_key`s stay constant
+- direct-link uniqueness under pending reservation, reopen, and `force_regenerate`
 - flashcard provenance downgrade behavior
+- flashcard aggregate reconciliation preferring review-log reconstruction when cached aggregates drift
 - quiz weakness vs adjacency ordering
 - snapshot payload safety guarantees
 - frozen-label allowlist enforcement
@@ -496,13 +546,14 @@ Add or extend tests for:
 Phase 1 should land in this order:
 
 1. introduce new topic types and compatibility-safe payload schema
-2. add flashcard session aggregate and provenance storage plus legacy reconstruction helpers
-3. refactor adapters to emit structured evidence
-4. refactor topic pipeline to emit `topic_key` and `normalization_version`
-5. upgrade snapshot serialization
-6. upgrade action fingerprinting with legacy and refreshed-lineage fallback
-7. add UI compatibility handling
-8. add targeted tests and grounding audit fixtures
+2. update suggestion snapshot sanitization so V2 identity fields persist safely
+3. add flashcard session aggregate and provenance storage plus legacy reconstruction helpers
+4. refactor adapters to emit structured evidence
+5. refactor topic pipeline to emit `topic_key` and `normalization_version`
+6. upgrade snapshot serialization
+7. upgrade action fingerprinting with direct-link uniqueness plus legacy and refreshed-lineage fallback
+8. add UI compatibility handling
+9. add targeted tests and grounding audit fixtures
 
 This order keeps the system working at every step and avoids breaking frozen history.
 
@@ -513,6 +564,7 @@ Phase 1 is successful when:
 - repeated semantically equivalent labels map to the same `topic_key`
 - old snapshots still render and generate follow-up artifacts successfully
 - new snapshots carry richer, stable topic identity
+- persisted V2 snapshots round-trip without dropping `topic_key` or `normalization_version`
 - a checked-in flashcard grounding audit fixture set exists and passes
 - grounded flashcard fixtures produce at least one grounded or weakly grounded topic in the top 3
 - exploratory/manual flashcard fixtures produce zero falsely grounded topics

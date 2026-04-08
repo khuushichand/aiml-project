@@ -199,7 +199,7 @@ Preferred protocol is OpenAI-compatible multimodal chat/completions.
 
 For `llamacpp`, this is the primary remote mode.
 
-For `chatllm`, the remote path should use OpenAI-compatible transport when available and may fall back to a backend-native adapter only when an OpenAI-compatible deployment is not possible for that runtime.
+For `chatllm`, v1 remote mode is also limited to OpenAI-compatible transport. Backend-native remote protocols are explicitly deferred to follow-up work so the first implementation slice has one concrete HTTP contract.
 
 ### Managed Mode
 
@@ -233,13 +233,15 @@ The backend `available()` result should mean "this backend can service an OCR re
 That means:
 
 - `remote`
-  - available when required remote config exists and the backend can pass a bounded reachability check
+  - available when required remote config exists
 - `cli`
   - available when required binary/model config exists and local paths validate
 - `managed`
   - available when:
     - a healthy managed process is already present, or
     - startup is allowed and startup config is valid
+
+`available()` must stay cheap and local. It must not perform network I/O or heavyweight subprocess checks because the OCR registry uses it during normal backend resolution and auto selection.
 
 Discovery should be richer than `available()` and distinguish:
 
@@ -270,6 +272,7 @@ Suggested settings:
 - `LLAMACPP_OCR_PROMPT_PRESET_DEFAULT`
 - `LLAMACPP_OCR_MAX_TOKENS`
 - `LLAMACPP_OCR_TEMPERATURE`
+- `LLAMACPP_OCR_MAX_PAGE_CONCURRENCY`
 
 Remote:
 
@@ -305,13 +308,13 @@ Suggested settings:
 - `CHATLLM_OCR_PROMPT_PRESET_DEFAULT`
 - `CHATLLM_OCR_MAX_TOKENS`
 - `CHATLLM_OCR_TEMPERATURE`
+- `CHATLLM_OCR_MAX_PAGE_CONCURRENCY`
 
 Remote:
 
 - `CHATLLM_OCR_URL`
 - `CHATLLM_OCR_MODEL`
 - `CHATLLM_OCR_API_KEY` if needed
-- `CHATLLM_OCR_REMOTE_PROTOCOL=openai|native`
 
 Managed:
 
@@ -339,6 +342,25 @@ Examples:
 - `["--host", "{host}", "--port", "{port}"]`
 
 This keeps execution shell-free and allows controlled placeholder substitution without shell interpolation.
+
+### Effective OCR Concurrency
+
+The PDF pipeline already uses `OCR_PAGE_CONCURRENCY` as a global upper bound. These new backends need an additional backend-local cap so heavy runtimes do not get overscheduled.
+
+Effective page concurrency should therefore be:
+
+- `min(global OCR_PAGE_CONCURRENCY, backend profile max_page_concurrency)`
+
+Defaults:
+
+- `llamacpp` remote: `1`
+- `llamacpp` managed: `1`
+- `llamacpp` cli: `1`
+- `chatllm` remote: `1`
+- `chatllm` managed: `1`
+- `chatllm` cli: `1`
+
+Higher values should be an explicit operator override after validating model and host capacity.
 
 ## Prompting And Output Contract
 
@@ -404,6 +426,8 @@ The call path remains:
 
 No new request schema or PDF pipeline branch should be required beyond selecting the new backend names.
 
+The only pipeline-level change expected for this feature is applying the backend-local concurrency cap before dispatching per-page OCR work.
+
 ## Discovery And Auto Selection
 
 ## Discovery
@@ -437,22 +461,45 @@ Both backends should be eligible for:
 Selection rules:
 
 - `OCR.backend_priority` remains the authoritative override for both auto modes.
+- runtime wrapper backends must also be explicitly opted into auto participation through server-owned capability flags:
+  - `LLAMACPP_OCR_AUTO_ELIGIBLE=true|false`
+  - `LLAMACPP_OCR_AUTO_HIGH_QUALITY_ELIGIBLE=true|false`
+  - `CHATLLM_OCR_AUTO_ELIGIBLE=true|false`
+  - `CHATLLM_OCR_AUTO_HIGH_QUALITY_ELIGIBLE=true|false`
 - Without an override, use these defaults:
   - `auto`: `tesseract`, `nemotron_parse`, `points`, `deepseek`, `hunyuan`, `dots`, `dolphin`, `llamacpp`, `chatllm`
   - `auto_high_quality`: `llamacpp`, `chatllm`, `nemotron_parse`, `hunyuan`, `deepseek`, `points`, `dots`, `dolphin`, `tesseract`
 
-These defaults keep plain `auto` conservative while still making both new backends eligible, and they let `auto_high_quality` prefer the server-curated multimodal runtime backends first.
+These defaults keep plain `auto` conservative while still making both new backends eligible, and they let `auto_high_quality` prefer the server-curated multimodal runtime backends first. A backend participates in either auto mode only when both conditions are true:
+
+- the corresponding auto-eligibility flag is enabled
+- the backend is locally available under the cheap `available()` contract
 
 ## Managed Runtime Design
 
 Managed runtime ownership should be OCR-local for v1.
 
-Suggested behavior:
+Required behavior:
 
 - one managed process per backend profile
 - module-level handle guarded by a lock
 - health/readiness check before reuse
-- explicit cleanup on shutdown if the repository later wires OCR-local cleanup into app lifespan hooks
+- explicit cleanup on application shutdown for the owning process
+- v1 support is limited to single-API-process deployments for managed mode
+
+For multi-worker deployments, operators should use:
+
+- `remote` to point at a separately managed endpoint
+- `cli` if one-shot local invocation is acceptable
+
+### Llama.cpp Ownership Boundary
+
+The repository already has a general-purpose llama.cpp manager. To avoid two subsystems fighting over one local server:
+
+- `llamacpp` remote mode is the supported way to reuse an existing general llama.cpp endpoint, including one started by the existing Local_LLM admin surface
+- `llamacpp` managed mode, if enabled, owns a separate OCR-private local process
+- the OCR-private managed process must use a distinct configured port and is not shared with the existing Local_LLM manager in v1
+- OCR discovery reports OCR-private managed state only; reuse of a general llama.cpp server is represented through remote-mode configuration and reachability
 
 For `llamacpp`, the managed runtime implementation should reuse the same safety patterns already present in `LlamaCpp_Handler`:
 
@@ -463,6 +510,24 @@ For `llamacpp`, the managed runtime implementation should reuse the same safety 
 - bounded startup timeout
 
 For `chatllm`, the same operational behaviors apply even if the exact startup command differs.
+
+### ChatLLM V1 Runtime Contract
+
+Because the repository has no pre-existing ChatLLM integration, v1 needs one explicit contract:
+
+- remote mode must target an OpenAI-compatible endpoint
+- managed and CLI modes must accept server-configured argv templates with placeholder substitution for:
+  - model path
+  - prompt
+  - image path
+- managed mode must expose a healthcheck URL
+- CLI mode must emit the result on stdout
+
+Stdout parsing contract:
+
+- if `ocr_output_format=json`, try parsing full stdout as JSON first, then line-delimited JSON from the end of stdout
+- otherwise treat stdout as text or markdown
+- on parse failure, preserve raw stdout and degrade with warnings instead of hard-failing the PDF job
 
 ## Error Handling
 
@@ -539,17 +604,20 @@ This feature should be tested as an adapter and contract feature, not as a model
    - process absent with autostart enabled
    - startup timeout
    - readiness failure
+   - effective page concurrency is capped at backend profile max
 
 6. Output normalization tests
    - `text`
    - `markdown`
    - valid `json`
    - invalid `json` with fallback and warnings
+   - ChatLLM CLI stdout parsing contract
 
 7. PDF pipeline tests
    - integration through `process_pdf_task(...)`
    - structured output lands under `analysis_details.ocr.structured`
    - existing replacement or append logic still works
+   - effective concurrency is the min of global and backend-local caps
 
 ### Manual Or Optional Integration Coverage
 
@@ -581,6 +649,8 @@ Phase the work in this order:
 5. Add PDF pipeline integration tests and docs.
 
 This sequence keeps the largest unknown, ChatLLM runtime details, from blocking the initial helper and llama.cpp path.
+
+Managed mode should be treated as single-process only in the first implementation plan. If that constraint becomes unacceptable, the plan should either drop managed mode from the first slice or add explicit cross-process coordination work rather than leaving the behavior implicit.
 
 ## Acceptance Criteria
 
