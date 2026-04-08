@@ -319,19 +319,19 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 4: CRUD and Run Lifecycle Endpoints
 ### Files Reviewed
-* `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py`
-* `tldw_Server_API/app/api/v1/schemas/evaluation_schema.py`
-* `tldw_Server_API/app/core/Evaluations/audit_adapter.py`
-* `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py`
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py`
+- `tldw_Server_API/app/api/v1/schemas/evaluation_schema.py`
+- `tldw_Server_API/app/core/Evaluations/audit_adapter.py`
+- `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py`
 ### Baseline Notes
-* `evaluations_crud.py` and `evaluation_schema.py` are baseline-stable relative to `ec30354a2`.
-* `audit_adapter.py` and `unified_evaluation_service.py` have working-tree deltas, but the Slice 4 review surface here only needs the CRUD/run flow, audit, and backend-selection behavior they expose.
+- `evaluations_crud.py` and `evaluation_schema.py` are baseline-stable relative to `ec30354a2`.
+- `audit_adapter.py` and `unified_evaluation_service.py` have working-tree deltas, but the Slice 4 review surface here only needs the CRUD/run flow, audit, and backend-selection behavior they expose.
 ### Control and Data Flow Notes
-* Evaluation creation and reads flow through `create_evaluation()`, `list_evaluations()`, and `get_evaluation()` in `evaluations_crud.py`, which all normalize to the stable authenticated user id before calling `UnifiedEvaluationService`.
-* Run creation and retrieval flow through `create_run()`, `list_runs()`, `get_run()`, and `cancel_run()`. `create_run()` also forwards `webhook_user_id` into the service, which then emits run-start audit and webhook events from `unified_evaluation_service.py`.
-* Pagination is cursor-based in the CRUD router (`limit` + `after`) for both evaluations and runs, while `evaluation_schema.py` also defines a separate history request model that uses `limit` + `offset`. That history model is not exercised by the CRUD handlers in this slice.
-* Audit touchpoints are present for evaluation create/update/delete, run start/cancel, and export in `audit_adapter.py`, but the reviewed CRUD file does not expose an export endpoint, so export wiring is not verifiable end-to-end from this slice alone.
-* User isolation is consistently passed via `created_by=stable_user_id` on CRUD reads/writes, and the service-level audit/webhook calls carry the same stable user identity through `log_*` helpers.
+- Evaluation creation and reads flow through `create_evaluation()`, `list_evaluations()`, and `get_evaluation()` in `evaluations_crud.py`, which all normalize to the stable authenticated user id before calling `UnifiedEvaluationService`.
+- Run creation and retrieval flow through `create_run()`, `list_runs()`, `get_run()`, and `cancel_run()`. `create_run()` also forwards `webhook_user_id` into the service, which then emits run-start audit and webhook events from `unified_evaluation_service.py`.
+- Pagination is cursor-based in the CRUD router (`limit` + `after`) for both evaluations and runs, while `evaluation_schema.py` also defines a separate history request model that uses `limit` + `offset`. That history model is not exercised by the CRUD handlers in this slice.
+- Audit touchpoints are present for evaluation create/update/delete, run start/cancel, and export in `audit_adapter.py`, but the reviewed CRUD file does not expose an export endpoint, so export wiring is not verifiable end-to-end from this slice alone.
+- User isolation is consistently passed via `created_by=stable_user_id` on CRUD reads/writes, and the service-level audit/webhook calls carry the same stable user identity through `log_*` helpers.
 ### Findings
 1. Severity: Medium
    Confidence: High
@@ -343,17 +343,17 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Recommended tests: Add a regression that forces `svc.list_runs()` to raise and asserts the router still returns a 500 error response instead of leaking an `AttributeError`.
    Verification note: A targeted probe patched `get_unified_evaluation_service_for_user()` with a stub that raises `ValueError("boom")`; calling `list_runs()` produced `AttributeError: 'Query' object has no attribute 'HTTP_500_INTERNAL_SERVER_ERROR'`, confirming the error-path breakage.
 ### Open Questions
-* `evaluation_schema.py` defines `EvaluationHistoryRequest` with `limit`/`offset`, but this slice only exposes cursor-based evaluation/run listing. Confirm the intended history endpoint and whether the two pagination styles are deliberately split across different routes.
-* `audit_adapter.py` exposes `log_evaluation_exported*`, but no export caller is present in the reviewed CRUD/service files. Confirm the export route wiring in the later slice before treating the audit hook as covered.
+- `evaluation_schema.py` defines `EvaluationHistoryRequest` with `limit`/`offset`, but this slice only exposes cursor-based evaluation/run listing. Confirm the intended history endpoint and whether the two pagination styles are deliberately split across different routes.
+- `audit_adapter.py` exposes `log_evaluation_exported*`, but no export caller is present in the reviewed CRUD/service files. Confirm the export route wiring in the later slice before treating the audit hook as covered.
 ### Verification Run
-* Hotspot scan: `source .venv/bin/activate && rg -n "status|history|page|limit|offset|user_id|owner|audit|export|run_id|evaluation_id" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py tldw_Server_API/app/core/Evaluations/audit_adapter.py`
-* Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_crud_create_run_api.py`
-* Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluation_integration.py`
-* Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_stage2_user_isolation_and_usage_accounting.py`
-* Required tests: `python -m pytest -q tldw_Server_API/tests/DB_Management/test_evaluations_unified_and_crud.py`
-* Result: all four required suites passed. The hotspot scan hit the expected CRUD/audit/history/pagination/user-id/export/run-id terms, and the targeted failure probe reproduced the `list_runs()` error-path `AttributeError`.
+- Hotspot scan: `source .venv/bin/activate && rg -n "status|history|page|limit|offset|user_id|owner|audit|export|run_id|evaluation_id" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py tldw_Server_API/app/core/Evaluations/audit_adapter.py`
+- Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_crud_create_run_api.py`
+- Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluation_integration.py`
+- Required tests: `python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_stage2_user_isolation_and_usage_accounting.py`
+- Required tests: `python -m pytest -q tldw_Server_API/tests/DB_Management/test_evaluations_unified_and_crud.py`
+- Result: all four required suites passed. The hotspot scan hit the expected CRUD/audit/history/pagination/user-id/export/run-id terms, and the targeted failure probe reproduced the `list_runs()` error-path `AttributeError`.
 ### Slice Status
-reviewed
+- reviewed
 
 ## Slice 5: Retrieval and Recipe-Driven Evaluation Surfaces
 ### Files Reviewed
