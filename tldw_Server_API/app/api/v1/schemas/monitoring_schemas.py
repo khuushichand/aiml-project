@@ -76,8 +76,10 @@ class AlertsListResponse(BaseModel):
 
 
 class MarkReadResponse(BaseModel):
-    status: str
-    id: int
+    status: str = Field(
+        description="Minimal mutation acknowledgement only; re-list alerts for authoritative merged state."
+    )
+    id: int = Field(description="Runtime alert row id for the mutated monitoring alert")
 
 
 class NotificationSettings(BaseModel):

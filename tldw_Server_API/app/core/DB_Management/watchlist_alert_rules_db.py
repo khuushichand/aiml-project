@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import (
+    resolve_trusted_database_path,
+)
+
 
 @dataclass
 class AlertRule:
@@ -41,9 +45,13 @@ CREATE INDEX IF NOT EXISTS idx_alert_rules_user_job
 """
 
 
+def _trusted_db_path(db_path: str) -> str:
+    return str(resolve_trusted_database_path(db_path, label="watchlist alert rules db"))
+
+
 def ensure_watchlist_alert_rules_table(db_path: str) -> None:
     """Create the watchlist alert rules table if it does not exist."""
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         conn.executescript(ALERT_RULES_TABLE_SQL)
 
 
@@ -52,7 +60,7 @@ def list_watchlist_alert_rules(
     user_id: str,
     job_id: int | None = None,
 ) -> list[AlertRule]:
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         if job_id is not None:
             rows = conn.execute(
@@ -87,7 +95,7 @@ def create_watchlist_alert_rule(
 ) -> AlertRule:
     now = datetime.now(timezone.utc).isoformat()
     serialized_condition_value = _serialize_condition_value(condition_value)
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         cur = conn.execute(
             """
             INSERT INTO watchlist_alert_rules
@@ -120,7 +128,7 @@ def create_watchlist_alert_rule(
 
 
 def get_watchlist_alert_rule(db_path: str, rule_id: int, user_id: str) -> AlertRule | None:
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT * FROM watchlist_alert_rules WHERE id = ? AND user_id = ?",
@@ -156,7 +164,7 @@ def update_watchlist_alert_rule(
         "severity": updates.get("severity", current_rule.severity),
         "job_id": updates.get("job_id", current_rule.job_id),
     }
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         cur = conn.execute(
             """
             UPDATE watchlist_alert_rules
@@ -182,7 +190,7 @@ def update_watchlist_alert_rule(
 
 
 def delete_watchlist_alert_rule(db_path: str, rule_id: int, user_id: str) -> bool:
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(_trusted_db_path(db_path)) as conn:
         cur = conn.execute(
             "DELETE FROM watchlist_alert_rules WHERE id = ? AND user_id = ?",
             (rule_id, user_id),

@@ -30,6 +30,7 @@ from .base import (
     FTSQuery,
     QueryResult,
 )
+from .fts_translator import FTSQueryTranslator
 
 logger = _loguru_logger
 
@@ -557,7 +558,11 @@ class SQLiteBackend(DatabaseBackend):
 
         # Add MATCH clause
         query_parts.append(f"WHERE {self.escape_identifier(fts_query.table)} MATCH ?")
-        params.append(fts_query.query_text)
+        normalized_query = (
+            FTSQueryTranslator.normalize_query(fts_query.query_text, "sqlite")
+            or fts_query.query_text
+        )
+        params.append(normalized_query)
 
         # Add additional filters
         for key, value in fts_query.filters.items():

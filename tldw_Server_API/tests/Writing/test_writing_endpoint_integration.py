@@ -352,6 +352,155 @@ def test_writing_snapshot_import_merge_preserves_existing(client_with_writing_db
     assert "Merged Theme" in theme_names
 
 
+def test_writing_snapshot_import_replace_rolls_back_on_restore_failure(
+    client_with_writing_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_writing_db
+
+    keep_session_resp = client.post(
+        "/api/v1/writing/sessions",
+        json={"name": "Keep Session", "payload": {"text": "keep"}},
+    )
+    assert keep_session_resp.status_code == 201, keep_session_resp.text
+    keep_session_id = keep_session_resp.json()["id"]
+    assert client.post(
+        "/api/v1/writing/templates",
+        json={"name": "Keep Template", "payload": {"inst_pre": "[K]"}},
+    ).status_code == 201
+    assert client.post(
+        "/api/v1/writing/themes",
+        json={"name": "Keep Theme", "class_name": "keep-theme", "css": ".keep-theme{}", "order": 1},
+    ).status_code == 201
+
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    original_add = writing_endpoints.CharactersRAGDB.add_writing_session
+    original_restore = writing_endpoints._restore_soft_deleted_writing_session
+    add_called_for_existing_id = False
+    restore_called = False
+
+    def track_add(self, name, payload, *, schema_version=1, session_id=None, version_parent_id=None):
+        nonlocal add_called_for_existing_id
+        if session_id == keep_session_id:
+            add_called_for_existing_id = True
+        return original_add(
+            self,
+            name,
+            payload,
+            schema_version=schema_version,
+            session_id=session_id,
+            version_parent_id=version_parent_id,
+        )
+
+    def fail_restore(*args, **kwargs):
+        nonlocal restore_called
+        restore_called = True
+        original_restore(*args, **kwargs)
+        raise RuntimeError("restore failed after mutation")
+
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "add_writing_session", track_add)
+    monkeypatch.setattr(writing_endpoints, "_restore_soft_deleted_writing_session", fail_restore)
+
+    resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "replace",
+            "snapshot": {
+                "sessions": [
+                    {
+                        "id": keep_session_id,
+                        "name": "Restored Session",
+                        "payload": {"text": "new"},
+                        "schema_version": 1,
+                    }
+                ],
+                "templates": [],
+                "themes": [],
+            },
+        },
+    )
+
+    assert resp.status_code == 500, resp.text
+    sessions = client.get("/api/v1/writing/sessions").json()["sessions"]
+    templates = client.get("/api/v1/writing/templates").json()["templates"]
+    themes = client.get("/api/v1/writing/themes").json()["themes"]
+    assert restore_called is True
+    assert add_called_for_existing_id is False
+    assert {item["name"] for item in sessions} == {"Keep Session"}
+    assert {item["name"] for item in templates} == {"Keep Template"}
+    assert {item["name"] for item in themes} == {"Keep Theme"}
+
+
+def test_writing_snapshot_import_rejects_blank_session_name(
+    client_with_writing_db: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client = client_with_writing_db
+    assert (
+        client.post(
+            "/api/v1/writing/sessions",
+            json={"name": "Keep Session", "payload": {"text": "keep"}},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/writing/templates",
+            json={"name": "Keep Template", "payload": {"inst_pre": "[K]"}},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v1/writing/themes",
+            json={"name": "Keep Theme", "class_name": "keep-theme", "css": ".keep-theme{}", "order": 1},
+        ).status_code
+        == 201
+    )
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    soft_delete_calls: list[tuple[str, str]] = []
+
+    def track_soft_delete_session(self, session_id, expected_version):
+        soft_delete_calls.append(("session", str(session_id)))
+        raise AssertionError("replace-mode session soft-delete should not run for blank import")
+
+    def track_soft_delete_template(self, name, expected_version):
+        soft_delete_calls.append(("template", str(name)))
+        raise AssertionError("replace-mode template soft-delete should not run for blank import")
+
+    def track_soft_delete_theme(self, name, expected_version):
+        soft_delete_calls.append(("theme", str(name)))
+        raise AssertionError("replace-mode theme soft-delete should not run for blank import")
+
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_session", track_soft_delete_session)
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_template", track_soft_delete_template)
+    monkeypatch.setattr(writing_endpoints.CharactersRAGDB, "soft_delete_writing_theme", track_soft_delete_theme)
+
+    resp = client.post(
+        "/api/v1/writing/snapshot/import",
+        json={
+            "mode": "replace",
+            "snapshot": {
+                "sessions": [{"name": "   ", "payload": {"text": "ignored"}, "schema_version": 1}],
+                "templates": [],
+                "themes": [],
+            },
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "session name" in resp.json()["detail"].lower()
+    assert soft_delete_calls == []
+    sessions = client.get("/api/v1/writing/sessions").json()["sessions"]
+    templates = client.get("/api/v1/writing/templates").json()["templates"]
+    themes = client.get("/api/v1/writing/themes").json()["themes"]
+    assert {item["name"] for item in sessions} == {"Keep Session"}
+    assert {item["name"] for item in templates} == {"Keep Template"}
+    assert {item["name"] for item in themes} == {"Keep Theme"}
+
+
 def test_writing_capabilities_basic(client_with_writing_db: TestClient):
     client = client_with_writing_db
 
@@ -437,6 +586,43 @@ def test_writing_wordclouds_empty_result(client_with_writing_db: TestClient):
     assert data["status"] in ("ready", "queued", "running", "failed")
     if data["status"] == "ready":
         assert data["result"]["words"] == []
+
+
+def test_get_wordcloud_returns_404_for_unknown_id(client_with_writing_db: TestClient):
+    client = client_with_writing_db
+
+    resp = client.get("/api/v1/writing/wordclouds/does-not-exist")
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json() == {"detail": "Wordcloud not found"}
+
+
+def test_get_wordcloud_returns_failed_result(client_with_writing_db: TestClient, monkeypatch: pytest.MonkeyPatch):
+    client = client_with_writing_db
+    from tldw_Server_API.app.api.v1.endpoints import writing as writing_endpoints
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("wordcloud failed")
+
+    monkeypatch.setattr(writing_endpoints, "_compute_wordcloud", boom)
+
+    create_resp = client.post("/api/v1/writing/wordclouds", json={"text": "alpha beta"})
+    assert create_resp.status_code == 200, create_resp.text
+    payload = create_resp.json()
+    assert payload["id"]
+    assert payload["status"] == "failed"
+    assert payload["cached"] is False
+    assert payload["error"] == "wordcloud failed"
+    assert payload["result"] is None
+
+    get_resp = client.get(f"/api/v1/writing/wordclouds/{payload['id']}")
+    assert get_resp.status_code == 200, get_resp.text
+    fetched = get_resp.json()
+    assert fetched["id"] == payload["id"]
+    assert fetched["status"] == "failed"
+    assert fetched["cached"] is False
+    assert fetched["error"] == "wordcloud failed"
+    assert fetched["result"] is None
 
 
 def test_writing_capabilities_provider_tokenizers(client_with_writing_db: TestClient, monkeypatch):

@@ -88,16 +88,23 @@ async def test_monitoring_alerts_include_backend_overlay_and_authoritative_actio
         assert items[0]["snoozed_until"] == "2026-03-10T11:00:00Z"
         assert items[0]["escalated_severity"] == "critical"
 
+        read_resp = client.post(f"/api/v1/monitoring/alerts/{alert_id}/read")
+        assert read_resp.status_code == 200, read_resp.text
+        assert read_resp.json() == {"status": "ok", "id": alert_id}
+
         acknowledge_resp = client.post(f"/api/v1/monitoring/alerts/{alert_id}/acknowledge")
         assert acknowledge_resp.status_code == 200, acknowledge_resp.text
+        assert acknowledge_resp.json() == {"status": "ok", "id": alert_id}
 
         dismiss_resp = client.delete(f"/api/v1/monitoring/alerts/{alert_id}")
         assert dismiss_resp.status_code == 200, dismiss_resp.text
+        assert dismiss_resp.json() == {"status": "ok", "id": alert_id}
 
         refreshed_resp = client.get("/api/v1/monitoring/alerts")
         assert refreshed_resp.status_code == 200, refreshed_resp.text
         refreshed_item = refreshed_resp.json()["items"][0]
         assert refreshed_item["is_read"] is True
+        assert refreshed_item["read_at"] is not None
         assert refreshed_item["acknowledged_at"] is not None
         assert refreshed_item["dismissed_at"] is not None
 

@@ -51,8 +51,8 @@ def client(test_app):
 
 
 @pytest.fixture
-def mock_repo(repo):
-    """Patch _get_repo and security helpers to return our test repo."""
+def mock_repo(repo, tmp_path):
+    """Patch repo and security helpers while keeping the real audit service wiring."""
     async def _noop_verify(*args, **kwargs):
         pass
 
@@ -61,16 +61,16 @@ def mock_repo(repo):
             pass
         return _noop
 
+    shared_audit_path = tmp_path / "audit_shared.db"
+
     with patch("tldw_Server_API.app.api.v1.endpoints.sharing._get_repo", return_value=repo), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing.rbac_rate_limit", _no_rate_limit), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._verify_workspace_ownership", _noop_verify), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._validate_user_has_share_access", _noop_verify), \
          patch("tldw_Server_API.app.api.v1.endpoints.sharing._get_token_service") as mock_ts, \
-         patch("tldw_Server_API.app.api.v1.endpoints.sharing._get_audit_service") as mock_as:
+         patch("tldw_Server_API.app.core.DB_Management.db_path_utils.DatabasePaths.get_shared_audit_db_path", return_value=shared_audit_path):
         from tldw_Server_API.app.core.Sharing.share_token_service import ShareTokenService
         mock_ts.return_value = ShareTokenService(repo)
-        from tldw_Server_API.app.core.Sharing.share_audit_service import ShareAuditService
-        mock_as.return_value = ShareAuditService(repo)
         yield repo
 
 
@@ -345,3 +345,20 @@ class TestAdmin:
         resp = client.get("/api/v1/sharing/admin/audit")
         assert resp.status_code == 200
         assert "events" in resp.json()
+
+    def test_admin_audit_log_returns_unified_backed_rows(self, client, mock_repo, sharing_db):
+        create = client.post("/api/v1/sharing/workspaces/ws-1/share", json={
+            "share_scope_type": "team",
+            "share_scope_id": 10,
+        })
+        assert create.status_code == 200
+
+        sharing_db.execute("DELETE FROM share_audit_log")
+        sharing_db.commit()
+
+        resp = client.get("/api/v1/sharing/admin/audit")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["total"] >= 1
+        assert isinstance(payload["events"][0]["id"], int)
+        assert payload["events"][0]["event_type"].startswith("share.")

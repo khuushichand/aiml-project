@@ -66,6 +66,19 @@ async def test_evaluation_adapter_propagates_failures(monkeypatch):
         )
 
 
+def test_evaluations_local_shutdown_helper_stops_loop(monkeypatch):
+    calls = {"local": 0}
+
+    def _local_shutdown() -> None:
+        calls["local"] += 1
+
+    monkeypatch.setattr(eval_adapter, "_stop_sync_loop", _local_shutdown)
+
+    eval_adapter.shutdown_local_evaluations_audit_loop()
+
+    assert calls == {"local": 1}
+
+
 def test_evaluations_audit_cache_size_clamped(monkeypatch):
     monkeypatch.setenv("EVALUATIONS_AUDIT_MAX_CACHED_SERVICES", "0")
     assert _parse_cache_size("EVALUATIONS_AUDIT_MAX_CACHED_SERVICES", 20) == 1
