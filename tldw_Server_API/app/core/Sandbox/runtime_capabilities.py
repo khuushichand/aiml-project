@@ -45,6 +45,7 @@ def collect_runtime_preflights(
     from .runners.seatbelt_runner import SeatbeltRunner
     from .runners.vz_linux_runner import VZLinuxRunner
     from .runners.vz_macos_runner import VZMacOSRunner
+    from .runners.worktree_runner import WorktreeRunner
 
     requested_policy = str(network_policy or "deny_all").strip().lower() or "deny_all"
 
@@ -66,4 +67,5 @@ def collect_runtime_preflights(
         RuntimeType.seatbelt: SeatbeltRunner().preflight(network_policy=requested_policy),
         RuntimeType.vz_linux: VZLinuxRunner().preflight(network_policy=requested_policy),
         RuntimeType.vz_macos: VZMacOSRunner().preflight(network_policy=requested_policy),
+        RuntimeType.worktree: WorktreeRunner().preflight(network_policy=requested_policy),
     }

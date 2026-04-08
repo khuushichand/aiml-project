@@ -1,6 +1,7 @@
 # settings.py
 # Description: Pydantic settings for user registration system with persistent JWT secret management
 #
+from __future__ import annotations
 # Imports
 import contextlib
 import json

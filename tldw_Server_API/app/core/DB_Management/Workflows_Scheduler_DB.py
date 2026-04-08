@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     misfire_grace_sec INTEGER DEFAULT 300,
     coalesce BOOLEAN NOT NULL DEFAULT TRUE,
     jitter_sec INTEGER NOT NULL DEFAULT 0,
+    -- ACP schedule config (when set, schedule fires acp_run instead of workflow_run)
+    acp_config_json TEXT,
     -- History
     last_run_at TIMESTAMPTZ,
     next_run_at TIMESTAMPTZ,
@@ -81,6 +83,8 @@ CREATE TABLE IF NOT EXISTS workflow_schedules (
     misfire_grace_sec INTEGER DEFAULT 300,
     coalesce INTEGER NOT NULL DEFAULT 1,
     jitter_sec INTEGER NOT NULL DEFAULT 0,
+    -- ACP schedule config (when set, schedule fires acp_run instead of workflow_run)
+    acp_config_json TEXT,
     -- History
     last_run_at TEXT,
     next_run_at TEXT,
@@ -111,6 +115,7 @@ class WorkflowSchedule:
     misfire_grace_sec: int
     coalesce: bool
     jitter_sec: int
+    acp_config_json: str | None
     last_run_at: str | None
     next_run_at: str | None
     last_status: str | None
@@ -231,6 +236,7 @@ class WorkflowsSchedulerDB:
                     "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TIMESTAMPTZ",
                     "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
                     "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
+                    "acp_config_json": "ALTER TABLE workflow_schedules ADD COLUMN acp_config_json TEXT",
                 }
             else:
                 column_sql = {
@@ -242,6 +248,7 @@ class WorkflowsSchedulerDB:
                     "next_run_at": "ALTER TABLE workflow_schedules ADD COLUMN next_run_at TEXT",
                     "last_status": "ALTER TABLE workflow_schedules ADD COLUMN last_status TEXT",
                     "jitter_sec": "ALTER TABLE workflow_schedules ADD COLUMN jitter_sec INTEGER NOT NULL DEFAULT 0",
+                    "acp_config_json": "ALTER TABLE workflow_schedules ADD COLUMN acp_config_json TEXT",
                 }
 
             for column, statement in column_sql.items():
@@ -288,6 +295,7 @@ class WorkflowsSchedulerDB:
         concurrency_mode: str = "skip",
         misfire_grace_sec: int = 300,
         coalesce: bool = True,
+        acp_config_json: str | None = None,
     ) -> None:
         now = _utcnow_iso()
         params = (
@@ -307,6 +315,7 @@ class WorkflowsSchedulerDB:
             int(misfire_grace_sec),
             1 if coalesce else 0,
             0,
+            acp_config_json,
             None,
             None,
             None,
@@ -316,8 +325,8 @@ class WorkflowsSchedulerDB:
         sql = (
             "INSERT INTO workflow_schedules("
             "id,tenant_id,user_id,workflow_id,name,cron,timezone,inputs_json,run_mode,validation_mode,enabled,require_online,"
-            "concurrency_mode,misfire_grace_sec,coalesce,jitter_sec,last_run_at,next_run_at,last_status,created_at,updated_at"
-            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            "concurrency_mode,misfire_grace_sec,coalesce,jitter_sec,acp_config_json,last_run_at,next_run_at,last_status,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
         with self.backend.transaction() as conn:
             self.backend.execute(sql, params, connection=conn)
@@ -340,6 +349,13 @@ class WorkflowsSchedulerDB:
             elif k == "coalesce":
                 fields.append("coalesce = ?")
                 params.append(1 if bool(v) else 0)
+            elif k == "acp_config_json":
+                fields.append("acp_config_json = ?")
+                # Accept dict (serialize) or str/None (store as-is)
+                if isinstance(v, dict):
+                    params.append(json.dumps(v))
+                else:
+                    params.append(v)
             else:
                 fields.append(f"{k} = ?")
                 params.append(v)
@@ -371,7 +387,9 @@ class WorkflowsSchedulerDB:
             validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
             require_online=bool(r.get("require_online") in (1, True, "1")),
             concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
-            coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
+            coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0),
+            acp_config_json=r.get("acp_config_json"),
+            last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
             last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")
         )
 
@@ -401,7 +419,9 @@ class WorkflowsSchedulerDB:
                     validation_mode=r.get("validation_mode") or "block", enabled=bool(r.get("enabled") in (1, True, "1")),
                     require_online=bool(r.get("require_online") in (1, True, "1")),
                     concurrency_mode=(r.get("concurrency_mode") or "skip"), misfire_grace_sec=int(r.get("misfire_grace_sec") or 300),
-                    coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0), last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
+                    coalesce=bool(r.get("coalesce") in (1, True, "1")), jitter_sec=int(r.get("jitter_sec") or 0),
+                    acp_config_json=r.get("acp_config_json"),
+                    last_run_at=r.get("last_run_at"), next_run_at=r.get("next_run_at"),
                     last_status=r.get("last_status"), created_at=r.get("created_at"), updated_at=r.get("updated_at")
                 )
             )
