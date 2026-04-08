@@ -129,16 +129,33 @@ def _seed_project_and_chapter_analyses(client: TestClient, project_id: str, chap
     assert resp.status_code == 200, resp.text
 
 
-def _assert_project_and_chapter_analyses_stale(client: TestClient, project_id: str) -> None:
-    """Assert the cached project and chapter analyses are both marked stale."""
+def _seed_scene_analysis(client: TestClient, scene_id: str) -> None:
+    """Create a scene analysis so delete flows can stale-mark it."""
+    with patch(
+        f"{_LLM_MODULE}.perform_chat_api_call_async",
+        new_callable=AsyncMock,
+        return_value=_mock_llm_response(_pacing_json()),
+    ):
+        resp = client.post(f"{PREFIX}/scenes/{scene_id}/analyze", json={"analysis_types": ["pacing"]})
+    assert resp.status_code == 200, resp.text
+
+
+def _assert_project_and_chapter_analyses_stale(
+    client: TestClient,
+    project_id: str,
+    *,
+    expected_scopes: set[str] | None = None,
+) -> None:
+    """Assert the cached analyses for a project are marked stale."""
+    expected_scopes = expected_scopes or {"chapter", "project"}
     resp = client.get(
         f"{PREFIX}/projects/{project_id}/analyses",
         params={"include_stale": True},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["total"] == 2
-    assert {analysis["scope_type"] for analysis in data["analyses"]} == {"chapter", "project"}
+    assert data["total"] == len(expected_scopes)
+    assert {analysis["scope_type"] for analysis in data["analyses"]} == expected_scopes
     assert all(analysis["stale"] is True for analysis in data["analyses"])
 
 
@@ -358,6 +375,7 @@ def test_stale_after_scene_delete(client: TestClient):
     """Deleting a scene should stale chapter and project analyses."""
     project_id, chapter_id, scene_id = _create_project_chapter_scene(client)
     _seed_project_and_chapter_analyses(client, project_id, chapter_id)
+    _seed_scene_analysis(client, scene_id)
 
     resp = client.get(f"{PREFIX}/scenes/{scene_id}")
     assert resp.status_code == 200
@@ -369,7 +387,16 @@ def test_stale_after_scene_delete(client: TestClient):
     )
     assert resp.status_code == 204, resp.text
 
-    _assert_project_and_chapter_analyses_stale(client, project_id)
+    _assert_project_and_chapter_analyses_stale(
+        client,
+        project_id,
+        expected_scopes={"scene", "chapter", "project"},
+    )
+
+    resp = client.get(f"{PREFIX}/projects/{project_id}/analyses")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
 
 
 def test_analyze_scene_rejects_unknown_analysis_type(client: TestClient):

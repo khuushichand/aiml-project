@@ -881,6 +881,7 @@ class ManuscriptDBHelper:
                 self._propagate_word_counts(conn, row["chapter_id"], row["project_id"])
                 self._mark_scene_family_analyses_stale_in_txn(
                     conn,
+                    scene_id=scene_id,
                     chapter_id=row["chapter_id"],
                     project_id=row["project_id"],
                 )
