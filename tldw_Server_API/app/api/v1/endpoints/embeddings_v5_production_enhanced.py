@@ -27,7 +27,7 @@ from datetime import datetime
 from enum import Enum
 from fnmatch import fnmatch
 from functools import lru_cache
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from typing import Any
 
 import numpy as np
@@ -1218,6 +1218,24 @@ def get_cache_key(
     return hashlib.sha256(key_string.encode()).hexdigest()
 
 
+_SENSITIVE_QUERY_KEYS = frozenset({
+    "access_token", "api_key", "apikey", "auth", "bearer",
+    "credential", "key", "passwd", "password", "secret", "token",
+})
+
+
+def _sanitize_query(query: str) -> str:
+    """Remove known sensitive query params, keep the rest sorted for determinism."""
+    params = parse_qs(query, keep_blank_values=True)
+    filtered = {
+        k: v for k, v in params.items()
+        if k.lower() not in _SENSITIVE_QUERY_KEYS
+    }
+    if not filtered:
+        return ""
+    return urlencode(sorted(filtered.items()), doseq=True)
+
+
 def _normalize_cache_backend_identity(config: dict[str, Any], provider: str) -> str | None:
     """Derive stable backend identity for cache partitioning."""
     if provider != "local_api":
@@ -1232,7 +1250,8 @@ def _normalize_cache_backend_identity(config: dict[str, Any], provider: str) -> 
         host = parsed.hostname
         if parsed.port is not None:
             host = f"{host}:{parsed.port}"
-        return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
+        sanitized_query = _sanitize_query(parsed.query)
+        return urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), sanitized_query, ""))
     return api_url.rstrip("/")
 
 
