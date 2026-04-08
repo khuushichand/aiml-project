@@ -132,6 +132,18 @@ class BlocklistLintResponse(BaseModel):
 
 class ModerationTestRequest(BaseModel):
     user_id: Optional[str] = Field(None, description="User ID to apply effective policy")
+    dependent_user_id: Optional[str] = Field(
+        None,
+        description="Dependent user ID to simulate for guardian overlay; defaults to user_id when omitted",
+    )
+    chat_type: Optional[str] = Field(
+        None,
+        description="Chat type to simulate for guardian overlay; defaults to 'regular' when omitted",
+    )
+    apply_guardian_overlay: bool = Field(
+        False,
+        description="Apply guardian-supervised policy overlay using live-chat simulation rules",
+    )
     phase: Literal['input', 'output'] = Field('input', description="Moderation phase to test")
     text: str = Field(..., description="Sample text to test against moderation policy")
 

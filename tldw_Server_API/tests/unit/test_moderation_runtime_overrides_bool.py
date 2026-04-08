@@ -37,6 +37,27 @@ def test_update_settings_can_clear_runtime_overrides():
 
 
 @pytest.mark.unit
+def test_update_settings_persist_failure_does_not_mutate_runtime_override(monkeypatch, tmp_path):
+    svc = ModerationService()
+    svc._runtime_overrides_path = str(tmp_path / "runtime_overrides.json")
+    svc._runtime_override = {"pii_enabled": False}
+    original_override = dict(svc._runtime_override)
+
+    def _raise_disk_full(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Moderation.moderation_service.os.fsync",
+        _raise_disk_full,
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        svc.update_settings(pii_enabled=True, persist=True)
+
+    assert svc._runtime_override == original_override
+
+
+@pytest.mark.unit
 def test_runtime_overrides_ignore_invalid_string():
     svc = ModerationService()
     with tempfile.NamedTemporaryFile(mode="w", delete=False) as tmp:

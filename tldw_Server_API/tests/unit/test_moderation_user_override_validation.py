@@ -87,6 +87,49 @@ def test_set_user_override_rejects_non_boolean_rule_is_regex(tmp_path):
 
 
 @pytest.mark.unit
+def test_set_user_override_persist_failure_does_not_mutate_live_state(monkeypatch, tmp_path):
+    svc = ModerationService()
+    overrides_path = tmp_path / "overrides.json"
+    svc._user_overrides_path = str(overrides_path)
+    svc._user_overrides = {"user1": {"input_action": "warn", "output_action": "redact"}}
+    original_override = json.loads(json.dumps(svc._user_overrides["user1"]))
+
+    def _raise_disk_full(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ModerationService, "_write_json_atomic", _raise_disk_full, raising=False)
+
+    res = svc.set_user_override("user1", {"input_action": "block"})
+
+    assert res["ok"] is False
+    assert res["error_type"] == "persistence"
+    assert "disk full" in (res.get("error") or "")
+    assert svc._user_overrides["user1"] == original_override
+
+
+@pytest.mark.unit
+def test_delete_user_override_persist_failure_does_not_mutate_live_state(monkeypatch, tmp_path):
+    svc = ModerationService()
+    overrides_path = tmp_path / "overrides.json"
+    svc._user_overrides_path = str(overrides_path)
+    svc._user_overrides = {"user1": {"input_action": "warn", "output_action": "redact"}}
+    original_override = json.loads(json.dumps(svc._user_overrides["user1"]))
+
+    def _raise_disk_full(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ModerationService, "_write_json_atomic", _raise_disk_full, raising=False)
+
+    res = svc.delete_user_override("user1")
+
+    assert res["ok"] is False
+    assert res["persisted"] is False
+    assert res.get("error_type") == "persistence"
+    assert "disk full" in (res.get("error") or "")
+    assert svc._user_overrides["user1"] == original_override
+
+
+@pytest.mark.unit
 def test_load_user_overrides_drops_invalid_rules_but_keeps_valid_entries(tmp_path):
     overrides_path = tmp_path / "overrides.json"
     overrides_path.write_text(

@@ -38,6 +38,7 @@ def _build_app(
     principal: Optional[AuthPrincipal],
     *,
     fail_with_401: bool = False,
+    moderation_service: object | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(moderation_mod.router, prefix="/api/v1")
@@ -64,7 +65,18 @@ def _build_app(
         def list_user_overrides(self) -> dict:
             return {}
 
-    moderation_mod.get_moderation_service = lambda: _StubModerationService()  # type: ignore[assignment]
+        def update_settings(self, **_: object) -> dict:
+            return {
+                "pii_enabled": None,
+                "categories_enabled": None,
+                "effective": {
+                    "pii_enabled": False,
+                    "categories_enabled": [],
+                },
+            }
+
+    service = moderation_service or _StubModerationService()
+    moderation_mod.get_moderation_service = lambda: service  # type: ignore[assignment]
 
     return app
 
@@ -110,3 +122,91 @@ async def test_moderation_users_200_for_admin_with_permission():
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("overrides") == {}
+
+
+@pytest.mark.asyncio
+async def test_moderation_settings_put_403_without_admin_or_permission():
+    principal = _make_principal(
+        is_admin=False,
+        roles=["user"],
+        permissions=[],
+    )
+    app = _build_app(principal=principal)
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/moderation/settings",
+            json={"pii_enabled": True, "persist": True},
+        )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_moderation_settings_put_500_for_runtime_persistence_failure():
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[SYSTEM_CONFIGURE],
+    )
+
+    class _PersistFailModerationService:
+        def list_user_overrides(self) -> dict:
+            return {}
+
+        def update_settings(self, **_: object) -> dict:
+            return {
+                "ok": False,
+                "persisted": False,
+                "error": "disk full",
+                "error_type": "persistence",
+            }
+
+    app = _build_app(
+        principal=principal,
+        moderation_service=_PersistFailModerationService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/moderation/settings",
+            json={"pii_enabled": True, "persist": True},
+        )
+
+    assert resp.status_code == 500
+    assert resp.json().get("detail") == "Failed to update moderation settings"
+
+
+@pytest.mark.asyncio
+async def test_moderation_settings_put_400_for_validation_failure():
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[SYSTEM_CONFIGURE],
+    )
+
+    class _ValidationFailModerationService:
+        def list_user_overrides(self) -> dict:
+            return {}
+
+        def update_settings(self, **_: object) -> dict:
+            return {
+                "ok": False,
+                "persisted": False,
+                "error": "categories_enabled contains invalid value",
+                "error_type": "validation",
+            }
+
+    app = _build_app(
+        principal=principal,
+        moderation_service=_ValidationFailModerationService(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.put(
+            "/api/v1/moderation/settings",
+            json={"categories_enabled": ["bad"], "persist": False},
+        )
+
+    assert resp.status_code == 400
+    assert resp.json().get("detail") == "categories_enabled contains invalid value"
