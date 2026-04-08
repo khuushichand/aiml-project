@@ -470,12 +470,59 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 
 ## Slice 6: Benchmark, Dataset, and Synthetic Evaluation Surfaces
 ### Files Reviewed
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py`
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py`
+- `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_synthetic.py`
+- `tldw_Server_API/app/api/v1/schemas/synthetic_eval_schemas.py`
+- `tldw_Server_API/app/core/Evaluations/benchmark_registry.py`
+- `tldw_Server_API/app/core/Evaluations/benchmark_loaders.py`
+- `tldw_Server_API/app/core/Evaluations/benchmark_utils.py`
+- `tldw_Server_API/app/core/Evaluations/synthetic_eval_service.py`
+- `tldw_Server_API/app/core/Evaluations/synthetic_eval_repository.py`
+- `tldw_Server_API/app/core/Evaluations/synthetic_eval_generation.py`
 ### Baseline Notes
+- The benchmark, dataset, and synthetic surfaces are all present in the current tree and mounted under the unified evaluations namespace.
+- The benchmark surface is split between registry metadata, benchmark-specific loaders, and the `run_benchmark` endpoint, so a mismatch in any one of those layers can leave a listed benchmark unrunnable.
+- The synthetic surface is a thin router over `SyntheticEvalWorkflowService`; the real behavior lives in the service, repository, and structured-generation helpers.
 ### Control and Data Flow Notes
+- `run_benchmark()` resolves a registry entry and evaluator, then loads data through `load_benchmark_dataset(benchmark_name, limit=request.limit)` before filtering categories, scoring batches, and optionally persisting the summary.
+- `get_dataset()` is the only dataset route that calls `svc.db.get_dataset(...)` directly; create/list/delete stay on the unified service abstraction.
+- Synthetic generation, queue listing, review, and promotion all flow through `SyntheticEvalWorkflowService`, which delegates persistence to `SyntheticEvalRepository` and uses `build_dataset_snapshot_ref()` when promoting approved drafts into a dataset.
 ### Findings
+1. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: the benchmark runner only knows about the hard-coded loader map in `load_benchmark_dataset()`, but the registry advertises additional runnable benchmarks such as `simpleqa_verified`, `mask`, and `vending_bench`. `run_benchmark()` never passes `config.dataset_source` or `config.dataset_format` into the loader, so those registry entries fall into the generic path, log "No source specified for unknown benchmark", and return an empty dataset. The endpoint then 404s even though the benchmark is listed.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py:111`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py:128`, `tldw_Server_API/app/core/Evaluations/benchmark_registry.py:114`, `tldw_Server_API/app/core/Evaluations/benchmark_registry.py:258`, `tldw_Server_API/app/core/Evaluations/benchmark_registry.py:275`, `tldw_Server_API/app/core/Evaluations/benchmark_loaders.py:404`, `tldw_Server_API/app/core/Evaluations/benchmark_loaders.py:432`, `tldw_Server_API/app/core/Evaluations/benchmark_loaders.py:436`
+   Recommended fix: route benchmark runs through the registry config, or extend `load_benchmark_dataset()` so it can resolve the registry's `dataset_source` and `dataset_format` for every advertised benchmark. Keep the benchmark list and the run path backed by the same source of truth.
+   Recommended tests: add a benchmark-run API test that exercises `simpleqa_verified` or `mask`, plus a loader test that proves the registry-backed source is actually consumed instead of falling back to the empty generic path.
+   Verification note: a direct runtime probe returned `0` rows for `simpleqa_verified`, `mask`, and `vending_bench`, and the loader logged "No source specified for unknown benchmark" for each of them.
+2. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Mixed
+   Why it matters: the dataset read route bypasses the unified evaluation service and calls `svc.db.get_dataset(...)` with `include_samples`, `sample_limit`, and `sample_offset` kwargs directly. In the focused permissions test, the fake DB only implemented `get_dataset(dataset_id, created_by)`, so the route raised a `TypeError` and returned a 500 instead of the expected 200. That makes the read path brittle against alternate DB adapters and existing test doubles.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py:152`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py:163`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:95`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:118`, `tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py:160`
+   Recommended fix: add a service-level dataset read helper and call that from the route, or make the route use the same compatibility layer as create/list/delete so DB adapter signatures are normalized in one place.
+   Recommended tests: keep a strict fake DB test for the route signature, and add a happy-path integration test that proves `GET /datasets/{dataset_id}` still returns samples when the real DB implementation is used.
+   Verification note: the focused pytest run failed at `test_dataset_routes_require_read_vs_manage_permissions` with `FakeDB.get_dataset() got an unexpected keyword argument 'include_samples'`, which is the direct symptom of the brittle call.
 ### Open Questions
+- None.
 ### Verification Run
+- `source .venv/bin/activate && rg -n "registry|loader|dataset|permission|synthetic|generate|review|job|yaml|config" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_synthetic.py tldw_Server_API/app/core/Evaluations/benchmark_registry.py tldw_Server_API/app/core/Evaluations/synthetic_eval_service.py`
+  Result: confirmed the benchmark registry/loader split, the dataset route's direct DB call, and the synthetic service delegation path.
+- `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_synthetic_eval_api.py tldw_Server_API/tests/Evaluations/test_synthetic_eval_service.py tldw_Server_API/tests/Evaluations/unit/test_evals_cli_benchmark_commands.py`
+  Result: `27 passed, 1 failed`; the failing case was `test_dataset_routes_require_read_vs_manage_permissions`, which hit the direct DB signature mismatch on `get_dataset()`.
+- `source .venv/bin/activate && python - <<'PY'`
+  `from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset`
+  `for name in ['simpleqa_verified', 'mask', 'vending_bench']:`
+  `    rows = load_benchmark_dataset(name, limit=1)`
+  `    print(name, len(rows), rows[:1])`
+  `PY`
+  Result: each benchmark returned `0` rows and logged the missing-source error, confirming the advertised benchmark/run mismatch.
 ### Slice Status
+- reviewed
 
 ## Slice 7: Embeddings A/B and Webhook Surfaces
 ### Files Reviewed
