@@ -233,7 +233,7 @@ from tldw_Server_API.app.api.v1.API_Deps.billing_deps import (
     get_billing_org_id,
     require_within_limit,
 )
-from tldw_Server_API.app.core.Billing.enforcement import LimitCategory, enforcement_enabled
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory, enforcement_enabled, get_billing_enforcer
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
@@ -4465,12 +4465,15 @@ def _build_streaming_commit_cb(
         if billing_enforcer is not None and billing_org_id is not None:
             try:
                 billing_enforcer.record_actual(int(total))
-                from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
                 get_billing_enforcer().apply_usage_delta(
                     billing_org_id, LimitCategory.LLM_TOKENS_MONTH, int(total),
                 )
-            except Exception:
-                pass  # fail-open; cache expires in 60s anyway
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(
+                    "Billing streaming token recording failed (fail-open): "
+                    "org_id=%s, tokens=%s, error=%s",
+                    billing_org_id, total, exc,
+                )
 
         # RG governor: return the coroutine for the caller to await.
         if rg_handle_id and request is not None:

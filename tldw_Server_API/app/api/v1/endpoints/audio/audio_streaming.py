@@ -1266,6 +1266,7 @@ async def websocket_transcribe(
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
+        _billing_minutes_accumulator = 0.0  # fractional minutes pending billing flush
         # Bounded fail-open budget in minutes if DB is unavailable while streaming
         FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
         failopen_remaining = FAIL_OPEN_CAP_MINUTES
@@ -1362,17 +1363,21 @@ async def websocket_transcribe(
                         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
                         raise _QuotaExceeded("daily_minutes") from None
-            # Billing: update in-memory usage cache for org-level enforcement
+            # Billing: accumulate fractional minutes; flush to cache when >= 1
+            nonlocal _billing_minutes_accumulator
             if _ws_billing_org_id is not None:
-                try:
-                    _enforcer = get_billing_enforcer()
-                    _enforcer.apply_usage_delta(
-                        _ws_billing_org_id,
-                        LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
-                        max(1, int(minutes_chunk + 0.5)),
-                    )
-                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
-                    pass  # fail-open
+                _billing_minutes_accumulator += minutes_chunk
+                if _billing_minutes_accumulator >= 1.0:
+                    _flush = int(_billing_minutes_accumulator)
+                    _billing_minutes_accumulator -= _flush
+                    try:
+                        get_billing_enforcer().apply_usage_delta(
+                            _ws_billing_org_id,
+                            LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                            _flush,
+                        )
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                        pass  # fail-open
 
         async def _on_heartbeat() -> None:
             """
@@ -1510,6 +1515,16 @@ async def websocket_transcribe(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"metrics increment failed (audio stream_outer_handler_error): error={m_err}")
     finally:
+        # Billing: flush any remaining fractional minutes before closing
+        if _ws_billing_org_id is not None and _billing_minutes_accumulator >= 0.5:
+            try:
+                get_billing_enforcer().apply_usage_delta(
+                    _ws_billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    max(1, int(_billing_minutes_accumulator + 0.5)),
+                )
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                pass
         try:
             await websocket.close()
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:

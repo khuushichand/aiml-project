@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -1068,11 +1069,10 @@ async def create_transcription(
         # Billing: record actual transcription minutes to org-level enforcement
         if enforcement_enabled() and billing_org_id is not None and minutes_est > 0:
             try:
-                import math as _math
                 get_billing_enforcer().apply_usage_delta(
                     billing_org_id,
                     LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
-                    max(1, int(_math.ceil(minutes_est))),
+                    max(1, int(math.ceil(minutes_est))),
                 )
             except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
                 pass  # fail-open
