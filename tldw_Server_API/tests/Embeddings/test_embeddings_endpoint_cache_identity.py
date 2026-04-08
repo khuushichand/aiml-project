@@ -20,21 +20,21 @@ def test_local_api_backend_identity_strips_credentials_and_query():
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
 
     clean_url = "http://backend-one.example:8080/v1"
-    secret_url = "http://user:pass@backend-one.example:8080/v1?token=abc#fragment"
+    credentialed_url = "http://alice:s3cret@backend-one.example:8080/v1?token=abc#fragment"
 
     clean_identity = mod._normalize_cache_backend_identity({"api_url": clean_url}, "local_api")
-    secret_identity = mod._normalize_cache_backend_identity({"api_url": secret_url}, "local_api")
+    credentialed_identity = mod._normalize_cache_backend_identity({"api_url": credentialed_url}, "local_api")
 
     assert clean_identity == "http://backend-one.example:8080/v1"
-    assert secret_identity == clean_identity
-    assert "user" not in secret_identity
-    assert "pass" not in secret_identity
-    assert "token" not in secret_identity
+    assert credentialed_identity == clean_identity
+    assert "alice" not in credentialed_identity
+    assert "s3cret" not in credentialed_identity
+    assert "token" not in credentialed_identity
 
     clean_cache_key = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=clean_identity)
-    secret_cache_key = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=secret_identity)
+    credentialed_cache_key = mod.get_cache_key("cache me", "local_api", "test-model", backend_identity=credentialed_identity)
 
-    assert secret_cache_key == clean_cache_key
+    assert credentialed_cache_key == clean_cache_key
 
 
 @pytest.mark.asyncio

@@ -91,13 +91,13 @@ async def test_generate_embeddings_batch_returns_partial_response_on_partial_enq
 
 @pytest.mark.asyncio
 async def test_generate_embeddings_batch_raises_when_all_enqueues_fail_before_any_success(monkeypatch):
-    class _MissingIdAdapter:
+    class _AlwaysFailingAdapter:
         def create_job(self, **kwargs):
             raise RuntimeError("enqueue failed")
 
     monkeypatch.setattr(media_embeddings, "_embeddings_jobs_backend", lambda: "jobs")
     monkeypatch.setattr(media_embeddings, "_resolve_model_provider", lambda *_: ("model-a", "provider-a"))
-    monkeypatch.setattr(media_embeddings, "EmbeddingsJobsAdapter", _MissingIdAdapter)
+    monkeypatch.setattr(media_embeddings, "EmbeddingsJobsAdapter", _AlwaysFailingAdapter)
 
     with pytest.raises(HTTPException) as excinfo:
         await media_embeddings.generate_embeddings_batch(

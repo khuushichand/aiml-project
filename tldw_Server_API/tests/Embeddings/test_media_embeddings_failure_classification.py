@@ -4,7 +4,7 @@ from tldw_Server_API.app.api.v1.endpoints import embeddings_v5_production_enhanc
 
 
 @pytest.mark.asyncio
-async def test_storage_failure_after_successful_primary_generation_returns_storage_error_and_skips_fallback(monkeypatch):
+async def test_storage_failure_after_successful_primary_generation_returns_storage_error_and_skips_fallback(monkeypatch, tmp_path):
     calls: list[tuple[str, str]] = []
 
     async def fake_create_embeddings_batch_async(*, texts, provider, model_id, metadata):
@@ -27,7 +27,7 @@ async def test_storage_failure_after_successful_primary_generation_returns_stora
     )
     monkeypatch.setattr(media_embeddings, "chunk_media_content", lambda *_args, **_kwargs: [{"text": "hello", "index": 0, "start": 0, "end": 5}])
     monkeypatch.setattr(media_embeddings, "ChromaDBManager", FakeChromaDBManager)
-    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})  # nosec B108
+    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": str(tmp_path / "user-db")})
 
     result = await media_embeddings.generate_embeddings_for_media(
         media_id=9,
@@ -49,7 +49,7 @@ async def test_storage_failure_after_successful_primary_generation_returns_stora
 
 
 @pytest.mark.asyncio
-async def test_generation_failure_can_fall_back_and_succeed(monkeypatch):
+async def test_generation_failure_can_fall_back_and_succeed(monkeypatch, tmp_path):
     calls: list[tuple[str, str]] = []
     stores: list[str] = []
 
@@ -75,7 +75,7 @@ async def test_generation_failure_can_fall_back_and_succeed(monkeypatch):
     )
     monkeypatch.setattr(media_embeddings, "chunk_media_content", lambda *_args, **_kwargs: [{"text": "hello", "index": 0, "start": 0, "end": 5}])
     monkeypatch.setattr(media_embeddings, "ChromaDBManager", FakeChromaDBManager)
-    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})  # nosec B108
+    monkeypatch.setattr(media_embeddings, "_user_embedding_config", lambda: {"USER_DB_BASE_DIR": str(tmp_path / "user-db")})
 
     result = await media_embeddings.generate_embeddings_for_media(
         media_id=10,
