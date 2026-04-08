@@ -253,3 +253,363 @@ async def test_media_ingest_job_second_submit_reuses_existing_media_id_without_r
             assert processor_calls == [source_url]
         finally:
             app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_cross_user_dedupe_reuses_transcript_without_reprocessing(
+    monkeypatch,
+    tmp_path,
+):
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.media_db.api import (
+        create_media_database,
+        get_full_media_details_rich,
+    )
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    _set_jobs_db(monkeypatch, tmp_path)
+    _allow_url_policy(monkeypatch)
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users.db'}")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_databases"))
+    await reset_db_pool()
+
+    source_url = "https://www.youtube.com/watch?v=crossuser123"
+    processor_calls: list[str] = []
+    analyze_calls: list[str] = []
+
+    async def _fake_process_videos(**kwargs):
+        processor_calls.extend(kwargs.get("inputs") or [])
+        call_no = len(processor_calls)
+        return {
+            "results": [
+                {
+                    "status": "Success",
+                    "input_ref": source_url,
+                    "processing_source": source_url,
+                    "media_type": "video",
+                    "content": "Reusable transcript content.",
+                    "segments": [],
+                    "analysis": f"processor summary {call_no}",
+                    "analysis_details": {"transcription_language": "en"},
+                    "metadata": {
+                        "title": "Reusable Cross-User Video",
+                        "author": "Test Author",
+                        "source_url": source_url,
+                        "url": source_url,
+                        "model": "whisper-test",
+                        "provider": "whisper",
+                        "source": "youtube",
+                    },
+                    "warnings": None,
+                }
+            ],
+            "errors_count": 0,
+            "errors": [],
+        }
+
+    def _fake_analyze(
+        _api_name,
+        input_data,
+        _custom_prompt=None,
+        _api_key=None,
+        *,
+        system_message=None,
+    ):
+        analyze_calls.append(f"{input_data}|{system_message}")
+        return "generated fresh summary"
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_videos",
+        _fake_process_videos,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib.analyze",
+        _fake_analyze,
+        raising=True,
+    )
+
+    job_manager = JobManager()
+    captured_details: list[dict[str, object]] = []
+
+    try:
+        for user_id in ("1", "2"):
+            row = job_manager.create_job(
+                domain="media_ingest",
+                queue="default",
+                job_type="media_ingest_item",
+                payload={
+                    "batch_id": f"batch-cross-{user_id}",
+                    "media_type": "video",
+                    "source": source_url,
+                    "source_kind": "url",
+                    "input_ref": source_url,
+                    "options": {
+                        "media_type": "video",
+                        "transcription_model": "whisper-test",
+                        "perform_analysis": True,
+                        "api_name": "openai",
+                        "custom_prompt": "Summarize this transcript.",
+                        "perform_chunking": False,
+                    },
+                },
+                owner_user_id=user_id,
+            )
+            job = job_manager.get_job(int(row.get("id")))
+            assert job is not None
+            result = await worker._handle_job(job, job_manager, worker._ProgressState())
+            assert result.get("media_id")
+
+            db = create_media_database(
+                client_id=f"test-user-{user_id}",
+                db_path=str(DatabasePaths.get_media_db_path(user_id)),
+            )
+            try:
+                details = get_full_media_details_rich(db, int(result["media_id"]))
+                assert details is not None
+                captured_details.append(details)
+            finally:
+                db.close_connection()
+
+        assert processor_calls == [source_url]
+        assert captured_details[0]["processing"]["safe_metadata"]["video_lite"]["summary"] == (
+            "processor summary 1"
+        )
+        assert captured_details[1]["content"]["text"] == "Reusable transcript content."
+        assert captured_details[1]["processing"]["safe_metadata"]["video_lite"]["summary"] == (
+            "generated fresh summary"
+        )
+        assert analyze_calls == ["Reusable transcript content.|None"]
+    finally:
+        await reset_db_pool()
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_cross_user_dedupe_prefers_transcript_artifact_over_media_content(
+    monkeypatch,
+    tmp_path,
+):
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.media_db.api import (
+        create_media_database,
+        get_full_media_details_rich,
+    )
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    _set_jobs_db(monkeypatch, tmp_path)
+    _allow_url_policy(monkeypatch)
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users.db'}")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_databases"))
+    await reset_db_pool()
+
+    source_url = "https://www.youtube.com/watch?v=artifact-first"
+    processor_calls: list[str] = []
+
+    async def _fake_process_videos(**kwargs):
+        processor_calls.extend(kwargs.get("inputs") or [])
+        return {
+            "results": [
+                {
+                    "status": "Success",
+                    "input_ref": source_url,
+                    "processing_source": source_url,
+                    "media_type": "video",
+                    "content": "media row content that should not be reused",
+                    "segments": [],
+                    "summary": "processor summary 1",
+                    "metadata": {
+                        "title": "Artifact First Video",
+                        "author": "Test Author",
+                        "source_url": source_url,
+                        "url": source_url,
+                        "model": "whisper-test",
+                        "provider": "whisper",
+                        "source": "youtube",
+                    },
+                    "normalized_stt": {
+                        "text": "canonical transcript artifact text",
+                        "segments": [],
+                        "metadata": {
+                            "model": "whisper-test",
+                            "provider": "whisper",
+                            "language": "en",
+                        },
+                    },
+                    "warnings": None,
+                }
+            ],
+            "errors_count": 0,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_videos",
+        _fake_process_videos,
+        raising=True,
+    )
+
+    job_manager = JobManager()
+    captured_details: list[dict[str, object]] = []
+
+    try:
+        for user_id in ("1", "2"):
+            row = job_manager.create_job(
+                domain="media_ingest",
+                queue="default",
+                job_type="media_ingest_item",
+                payload={
+                    "batch_id": f"batch-artifact-{user_id}",
+                    "media_type": "video",
+                    "source": source_url,
+                    "source_kind": "url",
+                    "input_ref": source_url,
+                    "options": {
+                        "media_type": "video",
+                        "transcription_model": "whisper-test",
+                        "perform_analysis": False,
+                        "perform_chunking": False,
+                    },
+                },
+                owner_user_id=user_id,
+            )
+            job = job_manager.get_job(int(row.get("id")))
+            assert job is not None
+            result = await worker._handle_job(job, job_manager, worker._ProgressState())
+            assert result.get("media_id")
+
+            db = create_media_database(
+                client_id=f"artifact-user-{user_id}",
+                db_path=str(DatabasePaths.get_media_db_path(user_id)),
+            )
+            try:
+                details = get_full_media_details_rich(db, int(result["media_id"]))
+                assert details is not None
+                captured_details.append(details)
+            finally:
+                db.close_connection()
+
+        assert processor_calls == [source_url]
+        assert captured_details[0]["content"]["text"] == "media row content that should not be reused"
+        assert captured_details[1]["content"]["text"] == "canonical transcript artifact text"
+    finally:
+        await reset_db_pool()
+
+
+@pytest.mark.asyncio
+async def test_media_ingest_cross_user_dedupe_skips_reuse_when_clip_options_differ(
+    monkeypatch,
+    tmp_path,
+):
+    from tldw_Server_API.app.core.AuthNZ.database import reset_db_pool
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    _set_jobs_db(monkeypatch, tmp_path)
+    _allow_url_policy(monkeypatch)
+    monkeypatch.setenv("PRIVILEGE_METADATA_VALIDATE_ON_STARTUP", "0")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'users.db'}")
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(tmp_path / "user_databases"))
+    await reset_db_pool()
+
+    source_url = "https://www.youtube.com/watch?v=clip-diff"
+    processor_calls: list[str] = []
+
+    async def _fake_process_videos(**kwargs):
+        processor_calls.extend(kwargs.get("inputs") or [])
+        call_no = len(processor_calls)
+        return {
+            "results": [
+                {
+                    "status": "Success",
+                    "input_ref": source_url,
+                    "processing_source": source_url,
+                    "media_type": "video",
+                    "content": f"transcript {call_no}",
+                    "segments": [],
+                    "summary": f"summary {call_no}",
+                    "metadata": {
+                        "title": "Clip Differ Video",
+                        "author": "Test Author",
+                        "source_url": source_url,
+                        "url": source_url,
+                        "model": "whisper-test",
+                        "provider": "whisper",
+                        "source": "youtube",
+                    },
+                    "warnings": None,
+                }
+            ],
+            "errors_count": 0,
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib.process_videos",
+        _fake_process_videos,
+        raising=True,
+    )
+
+    job_manager = JobManager()
+
+    try:
+        row1 = job_manager.create_job(
+            domain="media_ingest",
+            queue="default",
+            job_type="media_ingest_item",
+            payload={
+                "batch_id": "batch-clip-1",
+                "media_type": "video",
+                "source": source_url,
+                "source_kind": "url",
+                "input_ref": source_url,
+                "options": {
+                    "media_type": "video",
+                    "transcription_model": "whisper-test",
+                    "perform_analysis": False,
+                    "perform_chunking": False,
+                    "start_time": "0",
+                    "end_time": "60",
+                    "timestamp_option": False,
+                },
+            },
+            owner_user_id="1",
+        )
+        job1 = job_manager.get_job(int(row1.get("id")))
+        assert job1 is not None
+        await worker._handle_job(job1, job_manager, worker._ProgressState())
+
+        row2 = job_manager.create_job(
+            domain="media_ingest",
+            queue="default",
+            job_type="media_ingest_item",
+            payload={
+                "batch_id": "batch-clip-2",
+                "media_type": "video",
+                "source": source_url,
+                "source_kind": "url",
+                "input_ref": source_url,
+                "options": {
+                    "media_type": "video",
+                    "transcription_model": "whisper-test",
+                    "perform_analysis": False,
+                    "perform_chunking": False,
+                    "start_time": "10",
+                    "end_time": "60",
+                    "timestamp_option": False,
+                },
+            },
+            owner_user_id="2",
+        )
+        job2 = job_manager.get_job(int(row2.get("id")))
+        assert job2 is not None
+        await worker._handle_job(job2, job_manager, worker._ProgressState())
+
+        assert processor_calls == [source_url, source_url]
+    finally:
+        await reset_db_pool()

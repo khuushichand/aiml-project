@@ -115,3 +115,52 @@ async def test_process_batch_media_precheck_skips_existing_url_even_without_mode
     assert len(results) == 1
     assert results[0]["status"] == "Skipped"
     assert results[0]["db_id"] == existing_id
+
+
+def test_shared_transcript_dedupe_candidates_use_source_hash_for_file_inputs() -> None:
+    form_data = SimpleNamespace(
+        transcription_model="whisper-test",
+        transcription_language=None,
+        start_time=None,
+        end_time=None,
+        timestamp_option=False,
+        diarize=False,
+        vad_use=False,
+    )
+
+    candidates = ingestion_persistence._shared_transcript_dedupe_candidates(
+        source_path_or_url="/tmp/local-video.mp4",
+        source_hash="hash-123",
+        form_data=form_data,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0][0] == "source_hash"
+    assert candidates[0][1].startswith("hash-123|")
+    assert '"transcription_model":"whisper-test"' in candidates[0][1]
+
+
+def test_shared_transcript_dedupe_candidates_separate_clip_variants() -> None:
+    base_kwargs = {
+        "transcription_model": "whisper-test",
+        "transcription_language": None,
+        "end_time": "60",
+        "timestamp_option": False,
+        "diarize": False,
+        "vad_use": False,
+    }
+    form_data_a = SimpleNamespace(start_time="0", **base_kwargs)
+    form_data_b = SimpleNamespace(start_time="10", **base_kwargs)
+
+    candidates_a = ingestion_persistence._shared_transcript_dedupe_candidates(
+        source_path_or_url="https://www.youtube.com/watch?v=clip-variant",
+        source_hash=None,
+        form_data=form_data_a,
+    )
+    candidates_b = ingestion_persistence._shared_transcript_dedupe_candidates(
+        source_path_or_url="https://www.youtube.com/watch?v=clip-variant",
+        source_hash=None,
+        form_data=form_data_b,
+    )
+
+    assert candidates_a != candidates_b
