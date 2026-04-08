@@ -1,6 +1,7 @@
 # config.py
 # Description: Configuration settings for the tldw server application.
 #
+from __future__ import annotations
 # Imports
 import configparser
 import contextlib

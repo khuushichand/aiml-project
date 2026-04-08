@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a private overlay product repo for a YouTube-first extension launcher and lightweight hosted transcript workspace, backed by a new idempotent `video-lite` orchestration contract in `tldw_server`, with eager summary generation owned by the backend workspace lifecycle.
+**Goal:** Build a private overlay product repo for a YouTube-first extension launcher and lightweight hosted transcript workspace, backed by a new idempotent `video-lite` orchestration contract in `tldw_server`, with summary state owned by first-ingest processing and full-app re-request flows rather than the lightweight workspace.
 
 **Architecture:** Keep backend auth/subscription/orchestration logic in `tldw_server`, but deliver the store-facing extension and hosted app from a separate private sibling repo. That private repo should reuse selected frontend surfaces from the existing app through an explicit upstream sync plus patch-overlay workflow, with private-only patches for branding, lightweight routes, launcher behavior, upgrade flow, and a hosted workspace that reads one backend-owned transcript-plus-summary contract.
 
@@ -28,7 +28,7 @@
 - Create: `tldw_Server_API/app/api/v1/schemas/video_lite_schemas.py`
   - Request/response models for normalized source lookup, access-gated source-state responses, workspace payloads, summary lifecycle, and upgrade intent metadata.
 - Create: `tldw_Server_API/app/services/video_lite_service.py`
-  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce auth/subscription gating, shape lightweight workspace payloads, and generate or reuse eager summaries.
+  - Canonical orchestration logic: normalize source, reuse or start ingest, query source state, enforce auth/subscription gating, and shape lightweight workspace payloads around transcript and persisted summary state.
 - Create: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
   - Endpoint coverage for idempotency, launcher states, entitlement states, and unsupported-source behavior.
 - Modify: `tldw_Server_API/app/api/v1/endpoints/media/__init__.py`
@@ -70,7 +70,7 @@ Historical baseline note:
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/login.tsx`
   - Product login entry that preserves lightweight return intent.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
-  - Branded `Transcript` / `Summary` / `Chat` workspace backed by backend transcript and eager-summary state.
+  - Branded `Transcript` / `Summary` / `Chat` workspace backed by backend transcript and persisted summary state.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
   - Client for the backend `video-lite` source and workspace contracts.
 - Create: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-intent.ts`
@@ -696,25 +696,25 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add \
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: update paid-only launcher routing"
 ```
 
-## Task 12: Add Eager Summary Generation And Workspace Rendering
+## Task 12: Align Workspace Summary Rendering With First-Ingest Summary State
 
 **Files:**
-- Modify: `tldw_Server_API/app/services/video_lite_service.py`
+- Modify: `tldw_Server_API/app/api/v1/endpoints/media/video_lite.py`
 - Modify: `tldw_Server_API/tests/Media/test_video_lite_endpoint.py`
-- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/lib/video-lite-client.ts`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/pages/lite/video/[sourceKey].tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/web/components/VideoWorkspacePage.tsx`
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/web/VideoWorkspacePage.test.tsx`
+- Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/tests/web/video-lite-runtime.test.tsx`
 
-- [ ] **Step 1: Write the failing eager-summary tests**
+- [ ] **Step 1: Write the failing first-ingest summary tests**
 
 ```python
-def test_video_lite_generates_summary_once_when_transcript_ready(...):
+def test_video_lite_source_resolve_does_not_trigger_summary_generation(...):
     ...
 ```
 
 ```tsx
-it("renders summary processing and summary ready states from backend workspace data", async () => {
+it("does not re-request source state when the workspace becomes ready", async () => {
   ...
 })
 ```
@@ -727,16 +727,17 @@ Run backend:
 Run frontend:
 `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
 
-Expected: FAIL because eager summary generation and workspace-backed rendering are not implemented yet.
+Expected: FAIL because the launcher and hosted page still auto-trigger summary work instead of treating summary state as a first-ingest/full-app concern.
 
-- [ ] **Step 3: Implement eager summary generation and caching in the backend**
+- [ ] **Step 3: Remove lightweight auto-generation and keep backend reads read-only**
 
 ```python
-async def ensure_workspace_summary(...):
-    ...
+@router.post("/video-lite/source", response_model=VideoLiteSourceStateResponse)
+async def resolve_video_lite_source(...):
+    return await resolve_video_lite_source_state(...)
 ```
 
-Use one background-trigger path only. Transcript readiness should enqueue at most one summary job per normalized source or transcript hash using a dedupe key or equivalent lock. `GET /video-lite/workspace/...` must remain read-only and should not spawn duplicate LLM work during polling.
+`POST /video-lite/source` should normalize and gate access only. `GET /video-lite/workspace/...` should fetch transcript and summary state only. Neither lightweight endpoint should enqueue, regenerate, or retry summary work; first-ingest processing and explicit full-app re-request remain the only summary-generation triggers.
 
 - [ ] **Step 4: Update the hosted page to fetch backend workspace state**
 
@@ -755,29 +756,30 @@ Run backend:
 Run frontend:
 `cd /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private && bun test tests/web/VideoWorkspacePage.test.tsx -v`
 
-Expected: PASS for one-time summary generation, summary reuse on reopen, and hosted rendering of `processing`, `ready`, and `failed` summary states.
+Expected: PASS for read-only source/workspace behavior and hosted rendering of `not_requested`, `processing`, `ready`, and `failed` summary states.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add tldw_Server_API/app/services/video_lite_service.py \
+        tldw_Server_API/app/api/v1/endpoints/media/video_lite.py \
         tldw_Server_API/tests/Media/test_video_lite_endpoint.py \
         Docs/superpowers/specs/2026-04-05-video-transcript-saas-extension-design.md \
         Docs/superpowers/plans/2026-04-05-video-transcript-saas-extension-implementation-plan.md
-git commit -m "feat: add eager video-lite summaries"
+git commit -m "fix: align video-lite summary triggers with ingest lifecycle"
 git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private add \
-  web/lib/video-lite-client.ts \
   web/pages/lite/video/[sourceKey].tsx \
   web/components/VideoWorkspacePage.tsx \
-  tests/web/VideoWorkspacePage.test.tsx
-git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "feat: render eager video-lite summaries"
+  tests/web/VideoWorkspacePage.test.tsx \
+  tests/web/video-lite-runtime.test.tsx
+git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "fix: keep lite summary state read-only"
 ```
 
 ## Task 13: Verify The Remaining Delta Work
 
 **Files:**
 - Modify: `/Users/macbook-dev/Documents/GitHub/tldw-video-lite-private/docs/verification.md`
-  - Add the remaining contract and eager-summary verification steps.
+  - Add the remaining contract and summary-state verification steps.
 
 - [ ] **Step 1: Run backend verification for the active delta**
 
@@ -789,7 +791,7 @@ source .venv/bin/activate && python -m pytest \
   tldw_Server_API/tests/Resource_Governance/test_video_lite_route_map_coverage.py -v
 ```
 
-Expected: PASS for source-state, launcher-entitlement, workspace-state, eager-summary, and RG coverage.
+Expected: PASS for source-state, launcher-entitlement, workspace-state, and RG coverage.
 
 - [ ] **Step 2: Run Bandit on the touched backend paths**
 
@@ -835,7 +837,7 @@ git -C /Users/macbook-dev/Documents/GitHub/tldw-video-lite-private commit -m "do
 - Make launcher routing depend on identity-aware access state from the backend contract, not on source normalization alone.
 - Use the exact `launcher_access` enum values locked in Task `10`; do not invent parallel frontend-only variants.
 - Keep `/lite/upgrade` as a branded wrapper over the existing checkout or subscription primitives rather than sending users straight into a generic billing surface.
-- Generate the default summary server-side as part of workspace readiness; do not make the hosted page the system of record for summary generation.
+- Keep summary generation outside the lightweight source/workspace endpoints; the hosted page should render only the summary state already persisted by first ingest or full-app re-request flows.
 - Keep workspace reads read-only; do not let polling create duplicate summarization work.
 - Do not add a client-triggered summary create, regenerate, or retry control in V1.
 - Preserve source key and target-tab intent through login and upgrade flows.

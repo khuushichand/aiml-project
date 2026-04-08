@@ -534,7 +534,6 @@ class MCPProtocol:
         self.rate_limiter = get_rate_limiter()
         self.protocol_version = "2024-11-05"
         self.metrics = get_metrics_collector()
-        self.telemetry = get_telemetry_manager()
         # Strict tool name validation regex
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
         # Idempotency manager for write-capable tools
@@ -546,7 +545,8 @@ class MCPProtocol:
         self._governance_store: Any | None = None
         self._governance_lock = asyncio.Lock()
 
-        # Method handlers
+        # Method handlers — telemetry is accessed via a property so that
+        # a shutdown/re-init cycle is picked up automatically.
         self.handlers: dict[str, Callable] = {
             "initialize": self._handle_initialize,
             "ping": self._handle_ping,
@@ -561,6 +561,12 @@ class MCPProtocol:
         }
 
         logger.info("MCP Protocol handler initialized")
+
+    @property
+    def telemetry(self):
+        """Always return the *current* global telemetry manager so that a
+        shutdown/re-init cycle is picked up automatically."""
+        return get_telemetry_manager()
 
     async def _rbac_check(self, user_id: Optional[str], resource: Resource, action: Action, resource_id: Optional[str] = None) -> bool:
         if not user_id:
