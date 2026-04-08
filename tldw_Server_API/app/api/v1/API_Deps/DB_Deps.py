@@ -190,7 +190,7 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
                 )
             else:
                 db_path = _get_db_path_for_user(user_id)
-                init_target = str(db_path)
+                init_target = str(db_path.resolve())
                 factory = MediaDbFactory.for_sqlite_path(
                     db_path=str(db_path),
                     client_id=str(current_user.id),

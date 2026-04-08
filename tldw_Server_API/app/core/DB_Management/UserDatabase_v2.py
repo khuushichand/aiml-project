@@ -122,17 +122,21 @@ class UserDatabase:
         )
 
     def _describe_backend_target(self) -> str:
-        config = self.backend.config
-        if self.backend.backend_type == BackendType.SQLITE:
+        config = getattr(self.backend, "config", None)
+        if not config:
+            return "<no-config>"
+
+        backend_type = getattr(self.backend, "backend_type", None)
+        if backend_type == BackendType.SQLITE:
             raw_path = (config.sqlite_path or "").strip()
             if not raw_path:
                 return "<sqlite-default>"
             if raw_path == ":memory:":
                 return raw_path
-            if raw_path.startswith("file:"):
+            if raw_path.lower().startswith("file:"):
                 return raw_path
             return str(Path(raw_path).resolve())
-        if self.backend.backend_type == BackendType.POSTGRESQL:
+        elif backend_type == BackendType.POSTGRESQL:
             host = config.pg_host or "localhost"
             port = config.pg_port or 5432
             database = config.pg_database or "<postgres>"

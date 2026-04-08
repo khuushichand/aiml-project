@@ -162,8 +162,9 @@ def test_workflows_scheduler_injected_sqlite_backend_logs_one_success_line(monke
 
     WorkflowsSchedulerDB(backend=_FakeBackend())
 
+    expected_path = str(Path("/tmp/injected-workflows.db").resolve())
     assert recorder.info_calls == [
-        "WorkflowsSchedulerDB using SQLite path: /tmp/injected-workflows.db"
+        f"WorkflowsSchedulerDB using SQLite path: {expected_path}"
     ]
 
 

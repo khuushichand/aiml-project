@@ -210,7 +210,7 @@ class WorkflowsSchedulerDB:
         sqlite_path = getattr(cfg, "sqlite_path", None)
         if backend_type != BackendType.SQLITE or not sqlite_path:
             return None
-        return str(sqlite_path)
+        return str(Path(sqlite_path).resolve())
 
     def _ensure_schema(self) -> None:
         with self.backend.transaction() as conn:
