@@ -53,6 +53,10 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
 )
+from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
+    ensure_chacha_rls,
+    ensure_prompt_studio_rls,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     managed_media_database,
 )
@@ -135,6 +139,18 @@ def _claims_rebuild_db_session(
         initialize=False,
     ) as db:
         yield user_id, db_path, db
+
+
+def _run_pg_rls_auto_ensure(backend: Any) -> tuple[bool, bool]:
+    """Apply both PostgreSQL RLS installers and log the combined result."""
+    prompt_ok = ensure_prompt_studio_rls(backend)
+    chacha_ok = ensure_chacha_rls(backend)
+    logger.info(
+        "PG RLS ensure invoked (prompt_studio_applied={}, chacha_applied={})",
+        prompt_ok,
+        chacha_ok,
+    )
+    return prompt_ok, chacha_ok
 
 
 def _apply_shutdown_transition_gate(app: FastAPI, readiness_state: Any | None) -> None:
@@ -3418,18 +3434,15 @@ async def lifespan(app: FastAPI):
     try:
         _ensure_rls = _shared_env_flag_enabled("RAG_ENSURE_PG_RLS")
         if _ensure_rls:
-            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, DatabaseError
             from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-            from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
-                ensure_chacha_rls,
-                ensure_prompt_studio_rls,
-            )
 
             _cfg = DatabaseConfig.from_env()
             _backend = DatabaseBackendFactory.create_backend(_cfg)
-            _ps_ok = ensure_prompt_studio_rls(_backend)
-            _cc_ok = ensure_chacha_rls(_backend)
-            logger.info(f"PG RLS ensure invoked (prompt_studio_applied={_ps_ok}, chacha_applied={_cc_ok})")
+            try:
+                _run_pg_rls_auto_ensure(_backend)
+            except DatabaseError as e:
+                logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
         else:
             logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
