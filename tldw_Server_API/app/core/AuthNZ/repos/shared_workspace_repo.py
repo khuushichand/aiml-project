@@ -432,38 +432,59 @@ class SharedWorkspaceRepo:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        conditions = []
-        params: list[Any] = []
-        if owner_user_id is not None:
-            conditions.append("owner_user_id = ?")
-            params.append(owner_user_id)
-        if resource_type is not None:
-            conditions.append("resource_type = ?")
-            params.append(resource_type)
-        if resource_id is not None:
-            conditions.append("resource_id = ?")
-            params.append(resource_id)
-
-        where = " AND ".join(conditions) if conditions else "1=1"
-        params.extend([limit, offset])
-
         rows = await self.db_pool.fetchall(
-            f"""
+            """
             SELECT id, event_type, actor_user_id, resource_type, resource_id,
                    owner_user_id, share_id, token_id, metadata_json,
                    ip_address, user_agent, created_at
             FROM share_audit_log
-            WHERE {where}
+            WHERE (? IS NULL OR owner_user_id = ?)
+              AND (? IS NULL OR resource_type = ?)
+              AND (? IS NULL OR resource_id = ?)
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
             """,
-            tuple(params),
+            (
+                owner_user_id,
+                owner_user_id,
+                resource_type,
+                resource_type,
+                resource_id,
+                resource_id,
+                limit,
+                offset,
+            ),
         )
         result = []
         for r in rows:
             d = self._row_to_dict(r)
             d["metadata"] = _load_json_dict(d.get("metadata_json"))
             result.append(d)
+        return result
+
+    async def list_legacy_audit_events_for_migration(
+        self,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        rows = await self.db_pool.fetchall(
+            """
+            SELECT id, event_type, actor_user_id, resource_type, resource_id,
+                   owner_user_id, share_id, token_id, metadata_json,
+                   ip_address, user_agent, created_at
+            FROM share_audit_log
+            WHERE id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(after_id), int(limit)),
+        )
+        result = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            data["metadata"] = _load_json_dict(data.get("metadata_json"))
+            result.append(data)
         return result
 
     # ── sharing_config ──

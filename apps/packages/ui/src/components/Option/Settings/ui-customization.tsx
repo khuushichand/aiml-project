@@ -87,7 +87,7 @@ const SidebarShortcutSelector = ({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 space-y-3">
+    <div className="panel-card p-4 space-y-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-text">{title}</h3>
@@ -197,7 +197,7 @@ const HeaderShortcutSelector = ({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 space-y-3">
+    <div className="panel-card p-4 space-y-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <h3 className="text-sm font-semibold text-text">{title}</h3>
@@ -304,7 +304,7 @@ export const UiCustomizationSettings = () => {
       </div>
 
       <div className="space-y-4">
-        <div className="rounded-xl border border-border bg-surface p-4">
+        <div className="panel-card p-4">
           <Checkbox
             checked={personaBuddyShellEnabled}
             onChange={(event) =>

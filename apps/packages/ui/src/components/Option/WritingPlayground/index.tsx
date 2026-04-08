@@ -24,6 +24,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useStorage } from "@plasmohq/storage/hook"
 import {
+  Activity,
   Columns2,
   Copy,
   Download,
@@ -91,6 +92,12 @@ import { WritingPlaygroundShell } from "./WritingPlaygroundShell"
 import { WritingPlaygroundLibraryPanel } from "./WritingPlaygroundLibraryPanel"
 import { WritingPlaygroundEditorPanel } from "./WritingPlaygroundEditorPanel"
 import { WritingPlaygroundInspectorPanel } from "./WritingPlaygroundInspectorPanel"
+import { CharacterWorldTab } from "./CharacterWorldTab"
+import { ResearchTab } from "./ResearchTab"
+import { AIAgentTab } from "./AIAgentTab"
+import { FeedbackTab } from "./FeedbackTab"
+import { MOOD_COLORS } from "./feedback-constants"
+import { WritingAnalysisModalHost } from "./WritingAnalysisModalHost"
 import { WritingPlaygroundDiagnosticsPanel } from "./WritingPlaygroundDiagnosticsPanel"
 import { WritingWorldInfoImportControls } from "./WritingWorldInfoImportControls"
 import {
@@ -113,7 +120,8 @@ import {
   useWritingGenerationSettings,
   useWritingContextComposition,
   useWritingInspectorPanels,
-  useWritingImportExport
+  useWritingImportExport,
+  useWritingFeedback
 } from "./hooks"
 import {
   ADVANCED_NUMBER_PARAMS,
@@ -171,6 +179,7 @@ export const WritingPlayground = () => {
     setFocusMode,
     activeNodeId,
     setActiveNodeId,
+    setAnalysisModalOpen,
   } = useWritingPlaygroundStore()
   // TODO Phase 2: React to activeNodeId changes to load scene content into editor
   const [selectedModel, setSelectedModel] = useStorage<string>("selectedModel")
@@ -413,6 +422,16 @@ export const WritingPlayground = () => {
     handleSnapshotImport, handleSessionImport,
     sessionImportDisabled, snapshotImportDisabled, snapshotExportDisabled
   } = importExport
+
+  // =====================================================================
+  // Hook 7: Writing Feedback (mood + echo chamber)
+  // =====================================================================
+  const feedback = useWritingFeedback({
+    editorText,
+    isOnline,
+    isGenerating,
+    selectedModel: selectedModel ?? undefined,
+  })
 
   // --- Diagnostics ---
   const showOffline = !isOnline
@@ -2055,6 +2074,11 @@ export const WritingPlayground = () => {
     </div>
   )
 
+  const charactersTabContent = <CharacterWorldTab isOnline={isOnline} />
+  const researchTabContent = <ResearchTab isOnline={isOnline} />
+  const agentTabContent = <AIAgentTab isOnline={isOnline} />
+  const feedbackTabContent = <FeedbackTab {...feedback} />
+
   const inspectorDrawerContent = (
     <div className="p-3">
       <WritingPlaygroundInspectorPanel
@@ -2064,7 +2088,11 @@ export const WritingPlayground = () => {
           sampling: t("option:writingPlayground.sidebarSampling", "Sampling"),
           context: t("option:writingPlayground.sidebarContext", "Context"),
           setup: t("option:writingPlayground.sidebarSetup", "Setup"),
-          inspect: t("option:writingPlayground.sidebarInspect", "Analysis")
+          inspect: t("option:writingPlayground.sidebarInspect", "Analysis"),
+          characters: t("option:writingPlayground.sidebarCharacters", "Characters"),
+          research: t("option:writingPlayground.sidebarResearch", "Research"),
+          agent: t("option:writingPlayground.sidebarAgent", "Agent"),
+          feedback: t("option:writingPlayground.sidebarFeedback", "Feedback")
         }}
         tabBadges={{
           inspect: responseInspectorRowsAll.length > 0 ? (<Tag color="blue" className="!m-0 !px-1 !text-[10px]">{responseInspectorRowsAll.length}</Tag>) : null
@@ -2103,6 +2131,10 @@ export const WritingPlayground = () => {
         context={contextTabContent}
         setup={setupTabContent}
         inspect={inspectTabContent}
+        characters={charactersTabContent}
+        research={researchTabContent}
+        agent={agentTabContent}
+        feedback={feedbackTabContent}
       />
     </div>
   )
@@ -2206,6 +2238,16 @@ export const WritingPlayground = () => {
                         trigger={["click"]}
                         disabled={isGenerating}>
                         <Button size="small" icon={<MoreHorizontal className="h-3.5 w-3.5" />}>{t("option:writingPlayground.moreActions", "More")}</Button>
+                      </Dropdown>
+                      <Dropdown menu={{
+                        items: [
+                          { key: "pulse", label: t("option:writingPlayground.analysisStoryPulse", "Story Pulse"), onClick: () => setAnalysisModalOpen("pulse") },
+                          { key: "plot", label: t("option:writingPlayground.analysisPlotTracker", "Plot Tracker"), onClick: () => setAnalysisModalOpen("plot") },
+                          { key: "timeline", label: t("option:writingPlayground.analysisEventLine", "Event Line"), onClick: () => setAnalysisModalOpen("timeline") },
+                          { key: "web", label: t("option:writingPlayground.analysisConnectionWeb", "Connection Web"), onClick: () => setAnalysisModalOpen("web") },
+                        ]
+                      }} trigger={["click"]}>
+                        <Button size="small" icon={<Activity className="h-3.5 w-3.5" />}>{t("option:writingPlayground.analysisButton", "Analysis")}</Button>
                       </Dropdown>
                       <Button size="small" icon={searchOpen ? <X className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />} onClick={() => setSearchOpen((open) => !open)} title={searchOpen ? t("option:writingPlayground.searchClose", "Close search") : t("option:writingPlayground.searchToggle", "Find")} />
                     </div>
@@ -2342,6 +2384,14 @@ export const WritingPlayground = () => {
               {generationTokenCount > 0 && (<span>{t("option:writingPlayground.generationTokensLabel", "{{count}} tokens", { count: generationTokenCount })}</span>)}
               {generationTokensPerSec > 0 && (<span>{t("option:writingPlayground.generationRateLabel", "{{rate}} tok/s", { rate: generationTokensPerSec >= 10 ? generationTokensPerSec.toFixed(1) : generationTokensPerSec.toFixed(2) })}</span>)}
               {isGenerating && generationElapsed > 0 && (<span>{generationElapsed}s</span>)}
+              {feedback.moodEnabled && feedback.currentMood && (
+                <Tag
+                  color={MOOD_COLORS[feedback.currentMood]}
+                  className="!text-xs !m-0"
+                >
+                  {feedback.currentMood}
+                </Tag>
+              )}
               <div className="flex-1" />
               {saveStatusLabel && (<span>{saveStatusLabel}</span>)}
               <span className="text-text-muted/60">{t("option:writingPlayground.shortcutsHint", "Ctrl+Enter to generate")}</span>
@@ -2441,6 +2491,7 @@ export const WritingPlayground = () => {
       ) : null}
       <input ref={sessionFileInputRef} type="file" accept=".json,application/json" onChange={handleSessionImport} data-testid="writing-session-import" className="hidden" />
       <input ref={snapshotFileInputRef} type="file" accept=".json,application/json" onChange={handleSnapshotImport} data-testid="writing-snapshot-import" className="hidden" />
+      <WritingAnalysisModalHost />
     </div>
   )
 }

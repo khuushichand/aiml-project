@@ -20,7 +20,6 @@ from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
     get_or_create_audit_service_for_user_id_optional,
-    shutdown_all_audit_services,
 )
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -266,21 +265,20 @@ def log_webhook_unregistration(*, user_id: str, webhook_id: str | None, url: str
     _schedule(_emit(user_id=user_id, event_type=event, action="webhook_unregister", resource_type="webhook", resource_id=str(webhook_id) if webhook_id else None, result=res, metadata={"url": url, "events": events, "error": error}))
 
 
+def shutdown_local_evaluations_audit_loop() -> None:
+    """Shutdown the adapter-local sync loop."""
+    _stop_sync_loop()
+
+
 async def shutdown_evaluations_audit_services() -> None:
-    """Shutdown shared audit services used by this adapter."""
-    try:
-        await shutdown_all_audit_services()
-    finally:
-        _stop_sync_loop()
+    """Backward-compatible async wrapper for adapter-local cleanup."""
+    shutdown_local_evaluations_audit_loop()
 
 
 def _shutdown_on_exit() -> None:
     """Atexit handler for best-effort local cleanup without late logging."""
-    # Application shutdown hooks should perform full async audit shutdown.
-    # At interpreter exit, invoking async shutdown can emit log lines after
-    # stdio/log sinks are already closing, which causes noisy teardown errors.
     with contextlib.suppress(Exception):
-        _stop_sync_loop()
+        shutdown_local_evaluations_audit_loop()
 
 
 atexit.register(_shutdown_on_exit)

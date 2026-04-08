@@ -8,7 +8,8 @@ import { useSetting } from "@/hooks/useSetting"
 import {
   HEADER_SHORTCUTS_EXPANDED_SETTING,
   HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING,
-  HEADER_SHORTCUT_SELECTION_SETTING
+  HEADER_SHORTCUT_SELECTION_SETTING,
+  HEADER_SHORTCUT_IDS
 } from "@/services/settings/ui-settings"
 import { Search } from "lucide-react"
 import { cn } from "@/libs/utils"
@@ -16,6 +17,7 @@ import {
   getHeaderShortcutGroups,
   type HeaderShortcutItem
 } from "./header-shortcut-items"
+import { useConnectionActions } from "@/hooks/useConnectionState"
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -69,7 +71,8 @@ export function HeaderShortcuts({
   const [displayModePreference, setDisplayModePreference] = useSetting(
     HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING
   )
-  const [shortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const [shortcutSelection, setShortcutSelection] = useSetting(HEADER_SHORTCUT_SELECTION_SETTING)
+  const { setUserPersona } = useConnectionActions()
 
   /* ---------- open state ---------- */
   const isControlled = typeof expanded === "boolean"
@@ -116,6 +119,11 @@ export function HeaderShortcuts({
   const shortcutSelectionSet = useMemo(
     () => new Set(shortcutSelection),
     [shortcutSelection]
+  )
+
+  const isFiltered = useMemo(
+    () => !HEADER_SHORTCUT_IDS.every((id) => shortcutSelectionSet.has(id)),
+    [shortcutSelectionSet]
   )
 
   const resolvedGroups = useMemo(() => {
@@ -358,8 +366,8 @@ export function HeaderShortcuts({
 
       {/* Modal */}
       <div
-        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] max-w-[960px] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
-        style={{ maxHeight: "80vh" }}
+        className="fixed left-1/2 top-[15vh] z-50 flex w-[calc(100%-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-modal"
+        style={{ maxWidth: "var(--content-max-width)", maxHeight: "80vh" }}
         role="dialog"
         aria-modal="true"
         aria-label={t("option:header.showShortcuts", "Shortcuts")}
@@ -625,6 +633,18 @@ export function HeaderShortcuts({
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {isFiltered && (
+              <button
+                type="button"
+                onClick={() => {
+                  void setUserPersona("explorer")
+                  void setShortcutSelection([...HEADER_SHORTCUT_IDS]).catch(() => {})
+                }}
+                className="text-xs text-primary hover:text-primaryStrong"
+              >
+                {t("option:header.launcherShowAllFeatures", "Show all features")}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDisplayModeToggle}

@@ -119,7 +119,7 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
   const { t } = useTranslation(["option", "common"])
   const navigate = useNavigate()
   const isOnline = useServerOnline()
-  const recentlyIngestedDocIds = useQuickIngestStore(s => s.recentlyIngestedDocIds)
+  const recentlyIngestedDocs = useQuickIngestStore(s => s.recentlyIngestedDocs)
 
   const [activeTab, setActiveTab] = React.useState<DocumentPickerTab>(initialTab)
   const [searchQuery, setSearchQuery] = React.useState("")
@@ -335,21 +335,25 @@ export const DocumentPickerModal: React.FC<DocumentPickerModalProps> = ({
       </div>
 
       {/* Recently ingested from QuickIngest */}
-      {recentlyIngestedDocIds.length > 0 && !searchQuery && (
+      {recentlyIngestedDocs.length > 0 && !searchQuery && (
         <div className="mb-3">
           <p className="mb-1.5 text-xs font-medium text-text-muted">
             {t("option:documentWorkspace.recentlyIngested", "Recently ingested")}
           </p>
           <div className="space-y-1">
-            {recentlyIngestedDocIds.slice(0, 3).map((id) => (
+            {recentlyIngestedDocs.slice(0, 3).map((doc) => (
               <button
-                key={id}
+                key={doc.id}
                 type="button"
-                onClick={() => handleOpen({ id })}
+                onClick={() => {
+                  const normalized = doc.type?.toLowerCase()
+                  const resolvedType = normalized === "document" ? "pdf" : normalized === "ebook" ? "epub" : normalized
+                  handleOpen({ id: doc.id, type: resolvedType, title: doc.title })
+                }}
                 className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-surface2 transition-colors"
               >
                 <FileText className="h-4 w-4 flex-shrink-0 text-primary" />
-                <span className="truncate">Document #{id}</span>
+                <span className="truncate">{doc.title || `Document #${doc.id}`}</span>
                 <span className="ml-auto text-xs text-text-muted">
                   {t("option:documentWorkspace.justIngested", "Just ingested")}
                 </span>

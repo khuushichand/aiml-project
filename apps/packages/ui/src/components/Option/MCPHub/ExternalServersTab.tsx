@@ -616,8 +616,8 @@ export const ExternalServersTab = ({
 
             <Space>
               <Space orientation="vertical">
-                <label htmlFor="mcp-external-server-transport">
-                  Transport{" "}
+                <span className="flex items-center gap-1">
+                  <label htmlFor="mcp-external-server-transport">Transport</label>
                   <Tooltip title="How to communicate with the server. Use 'stdio' for local processes, 'websocket' for remote servers.">
                     <button
                       type="button"
@@ -627,7 +627,7 @@ export const ExternalServersTab = ({
                       <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
                     </button>
                   </Tooltip>
-                </label>
+                </span>
                 <select
                   id="mcp-external-server-transport"
                   aria-label="Transport"
@@ -737,8 +737,8 @@ export const ExternalServersTab = ({
                     </Space>
                     <Space>
                       <Space orientation="vertical">
-                        <label htmlFor="mcp-external-slot-secret-kind">
-                          Secret Kind{" "}
+                        <span className="flex items-center gap-1">
+                          <label htmlFor="mcp-external-slot-secret-kind">Secret Kind</label>
                           <Tooltip title="The type of credential needed. 'bearer_token' for API keys, 'api_key' for simple keys, 'client_secret' for OAuth.">
                             <button
                               type="button"
@@ -748,7 +748,7 @@ export const ExternalServersTab = ({
                               <QuestionCircleOutlined style={{ color: "rgba(0,0,0,0.45)" }} />
                             </button>
                           </Tooltip>
-                        </label>
+                        </span>
                         <select
                           id="mcp-external-slot-secret-kind"
                           aria-label="Secret Kind"

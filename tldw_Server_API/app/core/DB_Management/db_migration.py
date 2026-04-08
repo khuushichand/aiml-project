@@ -275,22 +275,19 @@ class DatabaseMigrator:
                 else:
                     continue
             except Exception as e:
-                logger.error(f"Failed to load migration from {filepath}: {e}")
-                continue
+                raise MigrationError(
+                    f"Invalid migration set: {filepath.name}"
+                ) from e
 
             if not migration:
                 continue
 
             previous = seen_versions.get(migration.version)
             if previous:
-                logger.warning(
-                    "Skipping migration {} from {}; version {} already provided by {}",
-                    migration.name,
-                    filepath.name,
-                    migration.version,
-                    previous.name,
+                raise MigrationError(
+                    "Duplicate migration version "
+                    f"{migration.version}: {previous.name} and {filepath.name}"
                 )
-                continue
 
             migrations.append(migration)
             seen_versions[migration.version] = filepath
@@ -414,11 +411,22 @@ class DatabaseMigrator:
                 raise MigrationError(
                     f"Migration {migration.name} (v{migration.version}) does not define down_sql; downgrade is not supported."
                 )
-        assert sql is not None  # For type checkers
+        if sql is None:
+            raise MigrationError(
+                f"Migration {migration.name} (v{migration.version}) does not define executable SQL."
+            )
         start_time = datetime.now(timezone.utc)
 
         with self._get_connection() as conn:
             try:
+                # Clean up any prior failed attempt for this version so retries work
+                if direction == "up":
+                    conn.execute(
+                        "DELETE FROM schema_migrations WHERE version = ? AND success = 0",
+                        (migration.version,),
+                    )
+                    conn.commit()
+
                 # Execute migration SQL
                 if direction == "up" and migration.idempotent:
                     statements = [stmt.strip() for stmt in sql.split(";") if stmt.strip()]
@@ -495,7 +503,7 @@ class DatabaseMigrator:
                 if direction == "up":
                     try:
                         conn.execute("""
-                            INSERT INTO schema_migrations
+                            INSERT OR REPLACE INTO schema_migrations
                             (version, name, checksum, applied_at, execution_time,
                              success, error_message)
                             VALUES (?, ?, ?, ?, ?, 0, ?)
@@ -574,15 +582,15 @@ class DatabaseMigrator:
                 "migrations_applied": []
             }
 
+        self._validate_migration_plan(
+            current_version=current_version,
+            target_version=target_version,
+            available_versions=available_versions,
+            direction=direction,
+            to_apply=to_apply,
+        )
+
         if not to_apply:
-            missing_versions: list[int] = []
-            if direction == "up":
-                available_set = set(available_versions)
-                missing_versions = [
-                    version
-                    for version in range(current_version + 1, target_version + 1)
-                    if version not in available_set
-                ]
             return {
                 "status": "no_migrations",
                 "current_version": current_version,
@@ -590,7 +598,7 @@ class DatabaseMigrator:
                 "migrations_applied": [],
                 "migrations_dir": self.migrations_dir,
                 "available_versions": available_versions,
-                "missing_versions": missing_versions,
+                "missing_versions": [],
             }
 
         # Create backup before migration
@@ -635,6 +643,56 @@ class DatabaseMigrator:
                 logger.info(f"Migration failed. Backup available at: {backup_path}")
 
             raise MigrationError(f"Migration failed: {e}") from e
+
+    @staticmethod
+    def _get_missing_versions(
+        start_version: int,
+        end_version: int,
+        available_versions: list[int],
+    ) -> list[int]:
+        available_set = set(available_versions)
+        return [
+            version
+            for version in range(start_version, end_version + 1)
+            if version not in available_set
+        ]
+
+    def _validate_migration_plan(
+        self,
+        *,
+        current_version: int,
+        target_version: int,
+        available_versions: list[int],
+        direction: str,
+        to_apply: list[Migration],
+    ) -> None:
+        if direction == "up":
+            missing_versions = self._get_missing_versions(
+                current_version + 1,
+                target_version,
+                available_versions,
+            )
+        else:
+            missing_versions = self._get_missing_versions(
+                target_version + 1,
+                current_version,
+                available_versions,
+            )
+
+        if missing_versions:
+            raise MigrationError(f"Missing migration versions: {missing_versions}")
+
+        if direction == "down":
+            missing_down_sql = [
+                migration.version
+                for migration in to_apply
+                if migration.down_sql is None or not str(migration.down_sql).strip()
+            ]
+            if missing_down_sql:
+                raise MigrationError(
+                    "Cannot downgrade; missing down_sql for migration versions: "
+                    f"{missing_down_sql}"
+                )
 
     def rollback_to_backup(self, backup_path: str):
         """Restore database from backup"""

@@ -349,9 +349,10 @@ export function ChatSidebar({
     <div
       data-testid="chat-sidebar"
       className={cn(
-        "flex flex-col h-screen w-64 border-r border-border bg-surface2",
+        "flex flex-col h-screen border-r border-border bg-surface2",
         className
       )}
+      style={{ width: "var(--sidebar-width)" }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border">

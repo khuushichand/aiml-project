@@ -11,8 +11,11 @@ import os
 from configparser import ConfigParser
 from dataclasses import dataclass
 
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
+    DatabaseBackend,
     DatabaseConfig,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -159,6 +162,28 @@ except Exception:  # pragma: no cover
     _cache_lock = None  # type: ignore
 
 
+def _close_backend_pool(backend: DatabaseBackend | None) -> None:
+    """Best-effort close for pooled shared content backends."""
+    if backend is None:
+        return
+
+    try:
+        pool = backend.get_pool()
+        pool.close_all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to close superseded content backend pool: {}", exc)
+
+
+def clear_cached_backend() -> None:
+    """Clear and close the currently cached shared content backend."""
+    global _cached_backend, _cached_backend_signature
+
+    old_backend = _cached_backend
+    _cached_backend = None
+    _cached_backend_signature = None
+    _close_backend_pool(old_backend)
+
+
 def get_content_backend(config: ConfigParser):
     """Return a DatabaseBackend instance for content storage if supported.
 
@@ -191,15 +216,21 @@ def get_content_backend(config: ConfigParser):
         with _cache_lock:
             if _cached_backend and _cached_backend_signature == signature:
                 return _cached_backend
+            old_backend = _cached_backend
             backend = DatabaseBackendFactory.create_backend(settings.database_config)
             _cached_backend = backend
             _cached_backend_signature = signature
+            if old_backend is not None and old_backend is not backend:
+                _close_backend_pool(old_backend)
             return backend
 
     # Fallback without lock (environments without threading)
     if _cached_backend and _cached_backend_signature == signature:
         return _cached_backend
+    old_backend = _cached_backend
     backend = DatabaseBackendFactory.create_backend(settings.database_config)
     _cached_backend = backend
     _cached_backend_signature = signature
+    if old_backend is not None and old_backend is not backend:
+        _close_backend_pool(old_backend)
     return backend

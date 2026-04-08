@@ -432,6 +432,32 @@ def test_topic_monitoring_reload_updates_paths(tmp_path: Path, monkeypatch: pyte
     assert len(items) == 1
 
 
+def test_topic_monitoring_reload_refreshes_dedupe_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_file = tmp_path / "alerts.db"
+    wl_file = tmp_path / "watchlists.json"
+    wl_file.write_text(json.dumps({"watchlists": []}), encoding="utf-8")
+
+    monkeypatch.setenv("MONITORING_ALERTS_DB", str(db_file))
+    monkeypatch.setenv("MONITORING_WATCHLISTS_FILE", str(wl_file))
+    monkeypatch.setenv("MONITORING_ENABLED", "true")
+    monkeypatch.setenv("TOPIC_MONITOR_DEDUP_SECONDS", "300")
+    monkeypatch.setenv("TOPIC_MONITOR_SIMHASH_DISTANCE", "3")
+
+    _reset_topic_monitoring_service()
+    svc = get_topic_monitoring_service()
+
+    assert svc._dedup_window_seconds == 300
+    assert svc._simhash_distance == 3
+
+    monkeypatch.setenv("TOPIC_MONITOR_DEDUP_SECONDS", "30")
+    monkeypatch.setenv("TOPIC_MONITOR_SIMHASH_DISTANCE", "1")
+
+    svc.reload()
+
+    assert svc._dedup_window_seconds == 30
+    assert svc._simhash_distance == 1
+
+
 def test_topic_monitoring_dedupe_prunes_stale_streams(tmp_path, monkeypatch):
     import tldw_Server_API.app.core.Monitoring.topic_monitoring_service as tms
 

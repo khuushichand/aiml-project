@@ -1028,8 +1028,10 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
-            logger.warning(
-                "Single-user mode received a non-matching API key; falling back to AuthNZ API key lookup."
+            logger.warning("Single-user mode received a non-matching API key.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing API Key",
             )
     except HTTPException:
         # Preserve explicit auth failures (e.g., IP allowlist rejection).

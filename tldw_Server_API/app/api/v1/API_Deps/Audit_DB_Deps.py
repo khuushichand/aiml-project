@@ -3,6 +3,7 @@ Manages user-specific audit service instances for dependency injection.
 """
 
 import asyncio
+import concurrent.futures
 import os
 import threading
 import time
@@ -251,6 +252,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
 
     if owner_loop and owner_loop is not current_loop:
         future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
+        _track_scheduled_stop_future(future)
 
         def _log_result(fut):
             exc = fut.exception()
@@ -276,6 +278,38 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
 
 _services_stopping: set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
+_scheduled_stop_futures: set[concurrent.futures.Future[Any]] = set()
+_scheduled_stop_lock = threading.Lock()
+
+
+def _track_scheduled_stop_future(future: concurrent.futures.Future[Any]) -> None:
+    """Track a cross-loop audit stop future until completion."""
+    with _scheduled_stop_lock:
+        _scheduled_stop_futures.add(future)
+
+    def _cleanup(done_future: concurrent.futures.Future[Any]) -> None:
+        with _scheduled_stop_lock:
+            _scheduled_stop_futures.discard(done_future)
+
+    future.add_done_callback(_cleanup)
+
+
+async def _drain_scheduled_audit_stops(timeout: Optional[float] = None) -> None:
+    """Wait for any tracked cross-loop audit stop futures to finish."""
+    with _scheduled_stop_lock:
+        futures = [future for future in _scheduled_stop_futures if not future.done()]
+
+    if not futures:
+        return
+
+    waiter = asyncio.gather(
+        *(asyncio.wrap_future(future) for future in futures),
+        return_exceptions=True,
+    )
+    if timeout is None or timeout <= 0:
+        await waiter
+    else:
+        await asyncio.wait_for(waiter, timeout=timeout)
 
 
 def _handle_cache_eviction(user_id: Optional[Union[int, str]], service: UnifiedAuditService, reason: str) -> None:
@@ -838,6 +872,14 @@ async def shutdown_all_audit_services():
 
     if services:
         await asyncio.gather(*[_stop_service(s) for s in services], return_exceptions=True)
+
+    try:
+        await _drain_scheduled_audit_stops(timeout=shutdown_timeout_s if shutdown_timeout_s > 0 else None)
+    except asyncio.TimeoutError:
+        timeout_count += 1
+        logger.error(
+            f"Scheduled audit stop drain timed out after {shutdown_timeout_s:.2f}s"
+        )
 
     if timeout_count or error_count:
         logger.warning(

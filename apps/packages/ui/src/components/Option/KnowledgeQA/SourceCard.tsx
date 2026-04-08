@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useMemo } from "react"
+import { useTranslation } from "react-i18next"
 import {
   FileText,
   Globe,
@@ -121,6 +122,7 @@ export function SourceCard({
   density = "default",
   className,
 }: SourceCardProps) {
+  const { t } = useTranslation("knowledge")
   const [copiedState, setCopiedState] = React.useState<"text" | "citation" | null>(null)
   const [isExpanded, setIsExpanded] = React.useState(false)
   const [overflowOpen, setOverflowOpen] = React.useState(false)
@@ -164,7 +166,6 @@ export function SourceCard({
   const isDocumentType =
     contentFacet === "pdf" ||
     rawMediaType.includes("pdf") ||
-    rawMediaType.includes("epub") ||
     rawMediaType.includes("ebook") ||
     rawMediaType === "document"
 
@@ -653,6 +654,7 @@ export function SourceCard({
                     <button
                       type="button"
                       role="menuitem"
+                      aria-label={t("sourceCard.openInWorkspace", "Open in Document Workspace")}
                       onClick={() => {
                         window.open(
                           `/document-workspace?open=${resolvedMediaId}`,
@@ -664,7 +666,7 @@ export function SourceCard({
                       className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-text-subtle hover:bg-hover hover:text-text transition-colors"
                     >
                       <BookOpen className="w-3.5 h-3.5" />
-                      Open in Document Workspace
+                      {t("sourceCard.openInWorkspace", "Open in Document Workspace")}
                     </button>
                   </>
                 )}

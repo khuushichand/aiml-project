@@ -185,8 +185,17 @@ class UnifiedEvaluationService:
         self.webhook_manager = None
         if self.enable_webhooks:
             try:
+                from tldw_Server_API.app.core.Evaluations.db_adapter import create_adapter_from_backend
                 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookManager
-                self.webhook_manager = WebhookManager(db_path=effective_db_path)
+
+                backend = getattr(self.db, "backend", None)
+                backend_type = getattr(self.db, "backend_type", None)
+                backend_type_value = getattr(backend_type, "value", backend_type)
+
+                if backend is not None and backend_type_value == "postgresql":
+                    self.webhook_manager = WebhookManager(adapter=create_adapter_from_backend(backend))
+                else:
+                    self.webhook_manager = WebhookManager(db_path=effective_db_path)
             except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                 self.webhook_manager = None
 

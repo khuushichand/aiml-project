@@ -632,12 +632,23 @@ class ACPSessionBudgetResponse(BaseModel):
     budget_remaining: int | None = Field(default=None, description="Tokens remaining in budget")
 
 
+class ACPHealthRouteStatus(BaseModel):
+    """Route-gating status for ACP endpoints."""
+    stable_only: bool = Field(..., description="Whether the server is in stable-only route mode")
+    acp_enabled: bool = Field(..., description="Whether ACP routes are currently enabled")
+    note: str | None = Field(
+        default=None,
+        description="Helpful note when ACP might be hidden by route gating",
+    )
+
+
 class ACPHealthResponse(BaseModel):
     """ACP dependency chain health check response."""
     timestamp: str = Field(..., description="ISO 8601 timestamp")
     runner: dict[str, Any] = Field(default_factory=dict, description="Runner binary status")
     agents: list[dict[str, Any]] = Field(default_factory=list, description="Downstream agent statuses")
     runner_probe: dict[str, Any] = Field(default_factory=dict, description="Runner process probe result")
+    routes: ACPHealthRouteStatus | None = Field(default=None, description="Route-gating status")
     overall: str = Field(default="unknown", description="ok | degraded | unavailable")
     message: str | None = Field(default=None, description="Human-readable status message")
 
@@ -662,4 +673,89 @@ class ACPErrorResponse(BaseModel):
     )
     data: dict[str, Any] | None = Field(
         default=None, description="Additional error context"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Async Fire-and-Forget API
+# -----------------------------------------------------------------------------
+
+
+class ACPAsyncPromptRequest(BaseModel):
+    """Request body for async prompt submission."""
+    prompt: str | list[dict[str, Any]] = Field(
+        ..., description="Prompt text or message list"
+    )
+    cwd: str = Field(default=".", description="Working directory for the agent")
+    agent_type: str | None = Field(
+        default=None, description="Agent type identifier"
+    )
+    model: str | None = Field(default=None, description="Model override")
+    token_budget: int | None = Field(
+        default=None, description="Maximum token budget"
+    )
+    persona_id: str | None = Field(
+        default=None, description="Persona context for session creation"
+    )
+    workspace_id: str | None = Field(
+        default=None, description="Workspace context for session creation"
+    )
+    sandbox_enabled: bool = Field(
+        default=False, description="Whether to enable sandbox mode"
+    )
+
+
+class ACPAsyncPromptResponse(BaseModel):
+    """Response for async prompt submission."""
+    task_id: str = Field(..., description="Unique identifier for the background task")
+    poll_url: str = Field(
+        ..., description="Relative URL to poll for task status"
+    )
+    status: str = Field(default="queued", description="Initial task status")
+
+
+class ACPTaskStatusResponse(BaseModel):
+    """Response for polling task status."""
+    task_id: str = Field(..., description="Task identifier")
+    status: str = Field(
+        ...,
+        description="Task status: queued, running, completed, failed",
+    )
+    result: Any | None = Field(default=None, description="Task result when completed")
+    usage: dict[str, Any] = Field(
+        default_factory=dict, description="Token usage information"
+    )
+    error: str | None = Field(default=None, description="Error message if failed")
+    duration_ms: int | None = Field(
+        default=None, description="Execution duration in milliseconds"
+    )
+
+
+class ACPRollbackRequest(BaseModel):
+    """Request body for rolling back sandbox state to a checkpoint."""
+    to_sequence: int | None = Field(
+        default=None,
+        description="Target event sequence number; the nearest checkpoint at or before this sequence is used.",
+    )
+    to_snapshot_id: str | None = Field(
+        default=None,
+        description="Direct snapshot ID to restore. Takes precedence over to_sequence if both provided.",
+    )
+
+
+class ACPRollbackResponse(BaseModel):
+    """Response from a rollback operation."""
+    restored: bool = Field(..., description="Whether the rollback succeeded")
+    snapshot_id: str = Field(..., description="The snapshot ID that was restored")
+    sequence: int | None = Field(
+        default=None, description="The event sequence the snapshot corresponds to, if resolved from to_sequence"
+    )
+
+
+class ACPCheckpointListResponse(BaseModel):
+    """Response listing available checkpoints for a session."""
+    session_id: str = Field(..., description="The session these checkpoints belong to")
+    checkpoints: dict[int, str] = Field(
+        default_factory=dict,
+        description="Mapping of event sequence numbers to snapshot IDs",
     )

@@ -59,11 +59,11 @@ export function BasicSettings() {
         <label className="text-sm font-medium">Search Sources</label>
         <div className="space-y-2">
           {[
-            { value: "media_db", label: "Documents & Media" },
-            { value: "notes", label: "Notes" },
-            { value: "characters", label: "Character Cards" },
-            { value: "chats", label: "Chat History" },
-            { value: "kanban", label: "Kanban" },
+            { value: "media_db", label: "Your Documents" },
+            { value: "notes", label: "Your Notes" },
+            { value: "characters", label: "Characters & Profiles" },
+            { value: "chats", label: "Conversations" },
+            { value: "kanban", label: "Boards" },
           ].map((source) => (
             <label key={source.value} className="flex items-center gap-2">
               <input

@@ -729,7 +729,10 @@ export const DocumentWorkspacePage: React.FC = () => {
   const autoOpenHandledRef = useRef(false)
 
   useEffect(() => {
-    if (!autoOpenId) return
+    if (!autoOpenId) {
+      autoOpenHandledRef.current = false
+      return
+    }
     if (autoOpenHandledRef.current) return
     // Wait until we are not already loading another document
     if (loadingDocumentId !== null) return

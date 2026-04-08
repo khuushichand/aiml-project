@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -30,8 +31,11 @@ from tldw_Server_API.app.core.AuthNZ.repos.admin_monitoring_repo import (
     AuthnzAdminMonitoringRepo,
 )
 from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB
 
 router = APIRouter()
+
+_RUNTIME_ALERT_ID_PREFIX = "alert:"
 
 
 _MONITORING_NONCRITICAL_EXCEPTIONS = (
@@ -117,6 +121,45 @@ def _event_response_from_row(row: dict[str, Any]) -> AdminAlertEventResponse:
         details=_parse_event_details(row.get("details_json")),
         created_at=row.get("created_at"),
     )
+
+
+def _warn_if_overlay_identity_has_no_runtime_row(
+    alert_identity: str,
+    monitoring_db: TopicMonitoringDB,
+) -> None:
+    if not alert_identity.startswith(_RUNTIME_ALERT_ID_PREFIX):
+        logger.info("monitoring admin overlay mutation for overlay-only identity {}", alert_identity)
+        return
+
+    raw_alert_id = alert_identity[len(_RUNTIME_ALERT_ID_PREFIX):]
+    try:
+        alert_id = int(raw_alert_id)
+    except ValueError:
+        logger.warning(
+            "monitoring admin overlay mutation uses malformed runtime alert identity {}",
+            alert_identity,
+        )
+        return
+
+    if monitoring_db.get_alert(alert_id) is None:
+        logger.warning(
+            "monitoring admin overlay mutation references missing runtime alert {}",
+            alert_identity,
+        )
+
+
+async def _emit_overlay_identity_diagnostic(alert_identity: str) -> None:
+    try:
+        monitoring_db = TopicMonitoringDB(
+            os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+        )
+        await asyncio.to_thread(
+            _warn_if_overlay_identity_has_no_runtime_row,
+            alert_identity,
+            monitoring_db,
+        )
+    except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("monitoring overlay diagnostic skipped for {}: {}", alert_identity, exc)
 
 
 @router.on_event("startup")
@@ -236,6 +279,7 @@ async def assign_alert(
             assignee = await users_repo.get_user_by_id(payload.assigned_to_user_id)
             if assignee is None:
                 raise HTTPException(status_code=404, detail="unknown_user")
+        await _emit_overlay_identity_diagnostic(alert_identity)
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
         event_action = "assigned" if payload.assigned_to_user_id is not None else "unassigned"
@@ -286,6 +330,7 @@ async def snooze_alert(
 ) -> AdminAlertStateMutationResponse:
     """Snooze a monitoring alert in authoritative overlay state."""
     try:
+        await _emit_overlay_identity_diagnostic(alert_identity)
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
         state = await repo.upsert_alert_state(
@@ -330,6 +375,7 @@ async def escalate_alert(
 ) -> AdminAlertStateMutationResponse:
     """Escalate a monitoring alert in authoritative overlay state."""
     try:
+        await _emit_overlay_identity_diagnostic(alert_identity)
         repo = await _get_monitoring_repo()
         actor_id = _principal_actor_id(principal)
         state = await repo.upsert_alert_state(

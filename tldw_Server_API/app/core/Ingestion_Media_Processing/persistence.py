@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_run_write_total
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled,
     is_explicit_pytest_runtime,
@@ -1229,6 +1230,32 @@ def _normalize_dedupe_url_for_db(value: str) -> str:
         return raw
     normalized = normalize_media_dedupe_url(raw)
     return str(normalized).strip() if normalized else raw
+
+
+def _merge_video_lite_summary_safe_metadata(
+    safe_meta: dict[str, Any],
+    *,
+    process_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Reserve a stable lightweight-summary slot separate from generic analysis content."""
+    summary_value = process_result.get("summary")
+    if summary_value is None:
+        return safe_meta
+
+    summary_text = str(summary_value).strip()
+    if not summary_text:
+        return safe_meta
+
+    merged = dict(safe_meta)
+    existing_block = merged.get("video_lite")
+    if isinstance(existing_block, dict):
+        video_lite_meta = dict(existing_block)
+    else:
+        video_lite_meta = {}
+    video_lite_meta["summary"] = summary_text
+    video_lite_meta["summary_status"] = "ready"
+    merged["video_lite"] = video_lite_meta
+    return merged
 
 
 def _build_url_match_clause(
@@ -3038,6 +3065,10 @@ async def persist_primary_av_item(
                 for kk in ("DOI", "ArXiv", "PMID", "PMCID"):
                     if ext.get(kk):
                         safe_meta[kk.lower()] = ext.get(kk)
+            safe_meta = _merge_video_lite_summary_safe_metadata(
+                safe_meta,
+                process_result=process_result,
+            )
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             safe_meta = {}
 
@@ -3258,8 +3289,8 @@ async def persist_primary_av_item(
                 )
                 serialized_artifact = json.dumps(artifact, default=str)
 
-                def _upsert_worker() -> None:
-                    _with_media_db_session(
+                def _upsert_worker() -> dict[str, Any]:
+                    return _with_media_db_session(
                         db_path=db_path,
                         client_id=client_id,
                         operation=lambda db: upsert_transcript(
@@ -3270,10 +3301,20 @@ async def persist_primary_av_item(
                         ),
                     )
 
-                await loop.run_in_executor(None, _upsert_worker)
+                write_payload = await loop.run_in_executor(None, _upsert_worker)
+                with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                    emit_stt_run_write_total(
+                        provider=provider_name,
+                        write_result=(write_payload or {}).get("write_result", "created"),
+                    )
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                emit_stt_run_write_total(
+                    provider=locals().get("provider_name"),
+                    write_result="failed",
+                )
             logger.debug(
                 "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
@@ -3549,7 +3590,6 @@ async def process_batch_media(
                                 SELECT id
                                 FROM Media
                                 WHERE {url_clause}
-                                  AND transcription_model = ?
                                   AND source_hash = ?
                                   AND is_trash = 0
                                   AND deleted = 0
@@ -3560,7 +3600,7 @@ async def process_batch_media(
                             )  # nosec B608
                             cursor = db.execute_query(
                                 pre_check_query,
-                                (*url_params, model_for_check, source_hash),
+                                (*url_params, source_hash),
                             )
                             existing_record = cursor.fetchone()
                             if not existing_record:
@@ -3569,7 +3609,6 @@ async def process_batch_media(
                                     FROM Media m
                                     JOIN DocumentVersions dv ON dv.media_id = m.id
                                     WHERE {url_clause_alias}
-                                      AND m.transcription_model = ?
                                       AND m.is_trash = 0
                                       AND m.deleted = 0
                                       AND dv.deleted = 0
@@ -3582,7 +3621,7 @@ async def process_batch_media(
                                 hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                                 cursor = db.execute_query(
                                     pre_check_query,
-                                    (*url_params_alias, model_for_check, hash_fragment),
+                                    (*url_params_alias, hash_fragment),
                                 )
                                 existing_record = cursor.fetchone()
                         else:
@@ -3591,7 +3630,6 @@ async def process_batch_media(
                                 FROM Media m
                                 JOIN DocumentVersions dv ON dv.media_id = m.id
                                 WHERE {url_clause_alias}
-                                  AND m.transcription_model = ?
                                   AND m.is_trash = 0
                                   AND m.deleted = 0
                                   AND dv.deleted = 0
@@ -3604,7 +3642,7 @@ async def process_batch_media(
                             hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                             cursor = db.execute_query(
                                 pre_check_query,
-                                (*url_params_alias, model_for_check, hash_fragment),
+                                (*url_params_alias, hash_fragment),
                             )
                             existing_record = cursor.fetchone()
                         return existing_record
@@ -3620,14 +3658,13 @@ async def process_batch_media(
                         should_process = False
                         reason = (
                             f"Media exists (ID: {existing_id}) with the same filename "
-                            f"and source hash for transcription model ('{model_for_check}'). "
+                            "and source hash. "
                             "Overwrite is False."
                         )
                     else:
                         should_process = True
                         reason = (
-                            "Media not found with this filename and source hash "
-                            "for transcription model."
+                            "Media not found with this filename and source hash."
                         )
                 elif not is_url and not source_hash:
                     should_process = True
@@ -3640,16 +3677,16 @@ async def process_batch_media(
                                           SELECT id
                                           FROM Media
                                           WHERE {url_clause}
-                                            AND transcription_model = ?
                                             AND is_trash = 0
                                             AND deleted = 0
+                                          LIMIT 1
                                           """
                         pre_check_query = pre_check_query_template.format(
                             url_clause=url_clause
                         )  # nosec B608
                         cursor = db.execute_query(
                             pre_check_query,
-                            (*url_params, model_for_check),
+                            url_params,
                         )
                         return cursor.fetchone()
 
@@ -3664,13 +3701,12 @@ async def process_batch_media(
                         should_process = False
                         reason = (
                             f"Media exists (ID: {existing_id}) with the same URL/identifier "
-                            f"and transcription model ('{model_for_check}'). Overwrite is False."
+                            "for this user. Overwrite is False."
                         )
                     else:
                         should_process = True
                         reason = (
-                            "Media not found with this URL/identifier and "
-                            "transcription model."
+                            "Media not found with this URL/identifier."
                         )
             except (DatabaseError, sqlite3.Error) as check_err:
                 logger.error(

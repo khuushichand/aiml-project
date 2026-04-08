@@ -765,21 +765,32 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
     }
   }, [session.tracking])
 
-  // Track recently ingested document IDs for the DocumentPickerModal
-  const addRecentlyIngestedDocId = useQuickIngestStore(s => s.addRecentlyIngestedDocId)
+  // Track recently ingested documents for the DocumentPickerModal
+  const addRecentlyIngestedDocs = useQuickIngestStore(s => s.addRecentlyIngestedDocs)
+  const recordedIngestRef = useRef(false)
 
   useEffect(() => {
-    if (state.currentStep !== 5) return
-    for (const item of state.results) {
-      if (
-        item.status === "ok" &&
-        item.mediaId != null &&
-        ["pdf", "ebook", "document"].includes(item.type)
-      ) {
-        addRecentlyIngestedDocId(Number(item.mediaId))
-      }
+    if (state.currentStep !== 5) { recordedIngestRef.current = false; return }
+    if (recordedIngestRef.current) return
+    recordedIngestRef.current = true
+    const newDocs = state.results
+      .filter(
+        (item) =>
+          item.status === "ok" &&
+          item.mediaId != null &&
+          ["pdf", "ebook", "document"].includes(item.type)
+      )
+      .map((item) => {
+        const id = Number(item.mediaId)
+        return Number.isFinite(id) && id > 0
+          ? { id, type: item.type, title: item.title || undefined }
+          : null
+      })
+      .filter((d): d is NonNullable<typeof d> => d != null)
+    if (newDocs.length > 0) {
+      addRecentlyIngestedDocs(newDocs)
     }
-  }, [state.currentStep, state.results, addRecentlyIngestedDocId])
+  }, [state.currentStep, state.results, addRecentlyIngestedDocs])
 
   useEffect(() => {
     if (!open || !state.isMinimized) return
@@ -1356,10 +1367,12 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
 
   // Navigation callbacks for WizardResultsStep CTAs
   const navigate = useNavigate()
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   const handleSearchKnowledge = useCallback(() => {
     onClose()
-    window.setTimeout(() => navigate("/knowledge"), 150)
+    window.setTimeout(() => { if (mountedRef.current) navigate("/knowledge") }, 150)
   }, [navigate, onClose])
 
   const handleOpenWorkspace = useCallback(
@@ -1368,11 +1381,11 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       const mediaId = item.mediaId
       if (mediaId != null) {
         window.setTimeout(
-          () => navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`),
+          () => { if (mountedRef.current) navigate(`${DOCUMENT_WORKSPACE_PATH}?open=${mediaId}`) },
           150
         )
       } else {
-        window.setTimeout(() => navigate(DOCUMENT_WORKSPACE_PATH), 150)
+        window.setTimeout(() => { if (mountedRef.current) navigate(DOCUMENT_WORKSPACE_PATH) }, 150)
       }
     },
     [navigate, onClose]

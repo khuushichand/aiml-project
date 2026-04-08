@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import tempfile
+import time
 from pathlib import Path as PathLib
 from typing import Any, Optional
 
@@ -42,9 +43,23 @@ from tldw_Server_API.app.core.Audio.dictation_error_taxonomy import (
 from tldw_Server_API.app.core.Audio.error_payloads import _http_error_detail
 from tldw_Server_API.app.core.Audio.quota_helpers import EXPECTED_DB_EXC
 from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_audio_model_to_whisper
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_policy import (
+    apply_transcript_text_policy,
+    build_audio_retention_decision,
+    redact_timed_segments,
+    resolve_effective_stt_policy,
+    retain_stt_audio_artifact,
+)
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+from tldw_Server_API.app.core.Metrics.stt_metrics import (
+    emit_stt_error_total,
+    emit_stt_redaction_total,
+    emit_stt_request_total,
+    observe_stt_latency_seconds,
+)
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Usage.audio_quota import (
     add_daily_minutes,
@@ -477,6 +492,38 @@ async def create_transcription(
     Transcribes audio into the input language.
     """
     rid = ensure_request_id(request)
+    request_started_at = time.perf_counter()
+    metrics_provider = "other"
+    metrics_model = str(model or "").strip()
+
+    def _emit_request_metrics(*, status_label: str) -> None:
+        emit_stt_request_total(
+            endpoint="audio.transcriptions",
+            provider=metrics_provider,
+            model=metrics_model,
+            status=status_label,
+        )
+
+    def _emit_error_metrics(*, status_label: str, reason: str) -> None:
+        _emit_request_metrics(status_label=status_label)
+        emit_stt_error_total(
+            endpoint="audio.transcriptions",
+            provider=metrics_provider,
+            reason=reason,
+        )
+
+    def _emit_success_metrics(*, redaction_outcome: str) -> None:
+        _emit_request_metrics(status_label="ok")
+        emit_stt_redaction_total(
+            endpoint="audio.transcriptions",
+            redaction_outcome=redaction_outcome,
+        )
+        observe_stt_latency_seconds(
+            endpoint="audio.transcriptions",
+            provider=metrics_provider,
+            model=metrics_model,
+            value=max(0.0, time.perf_counter() - request_started_at),
+        )
 
     # Validate file presence
     if not file:
@@ -596,6 +643,15 @@ async def create_transcription(
     # Save uploaded file to temporary location and proceed with processing
     temp_audio_path = None
     canonical_path = None
+    try:
+        effective_stt_policy = await resolve_effective_stt_policy(
+            principal=principal,
+            user_id=int(current_user.id) if getattr(current_user, "id", None) is not None else None,
+            db=db,
+        )
+    except Exception:
+        _emit_error_metrics(status_label="internal_error", reason="policy_resolution_failed")
+        raise
     try:
         first_chunk = await file.read(upload_chunk_size)
         file_extension = _resolve_audio_upload_suffix(
@@ -730,6 +786,8 @@ async def create_transcription(
 
         stt_registry = get_stt_provider_registry()
         provider, provider_model_name, provider_variant = stt_registry.resolve_provider_for_model(model or "")
+        metrics_provider = str(provider or "").strip().lower() or metrics_provider
+        metrics_model = str(provider_model_name or model or "").strip() or metrics_model
         provider_envelope = _stt_provider_envelope(stt_registry, provider)
         provider_availability = _stt_provider_availability(
             stt_registry,
@@ -979,6 +1037,25 @@ async def create_transcription(
         except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Custom vocabulary postprocessing failed; continuing without it: {exc}")
 
+        raw_transcribed_text = transcribed_text
+        raw_timed_segments = _normalize_timed_segments(segments_for_timing)
+
+        transcribed_text = apply_transcript_text_policy(
+            raw_transcribed_text,
+            policy=effective_stt_policy,
+            is_partial=False,
+        )
+        timed_segments = redact_timed_segments(
+            raw_timed_segments,
+            policy=effective_stt_policy,
+        )
+        if not effective_stt_policy.redact_pii:
+            redaction_outcome = "not_requested"
+        elif transcribed_text != raw_transcribed_text or timed_segments != raw_timed_segments:
+            redaction_outcome = "applied"
+        else:
+            redaction_outcome = "skipped"
+
         try:
             await _add_daily_minutes(current_user.id, minutes_est)
         except EXPECTED_DB_EXC as e:
@@ -1001,8 +1078,24 @@ async def create_transcription(
                 pass  # fail-open
 
         timed_segments = _normalize_timed_segments(segments_for_timing)
+        retention_decision = build_audio_retention_decision(effective_stt_policy)
+        if not retention_decision.delete_after_success and canonical_path:
+            try:
+                await retain_stt_audio_artifact(
+                    user_id=int(current_user.id),
+                    source_path=canonical_path,
+                    original_filename=file.filename,
+                    policy=effective_stt_policy,
+                    org_id=effective_stt_policy.org_id,
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Failed to retain STT audio artifact; continuing with delete-after-success fallback. error={}",
+                    exc,
+                )
 
         if response_format == "text":
+            _emit_success_metrics(redaction_outcome=redaction_outcome)
             return Response(content=transcribed_text, media_type="text/plain")
 
         if response_format == "srt":
@@ -1041,6 +1134,7 @@ async def create_transcription(
                     srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
             else:
                 srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{transcribed_text}\n"
+            _emit_success_metrics(redaction_outcome=redaction_outcome)
             return Response(content=srt_content, media_type="text/plain")
 
         if response_format == "vtt":
@@ -1073,6 +1167,7 @@ async def create_transcription(
                 vtt_content = "\n".join(lines_vtt).rstrip() + "\n"
             else:
                 vtt_content = f"WEBVTT\n\n00:00:00.000 --> 00:00:10.000\n{transcribed_text}\n"
+            _emit_success_metrics(redaction_outcome=redaction_outcome)
             return Response(content=vtt_content, media_type="text/vtt")
 
         response_data: dict[str, Any] = {"text": transcribed_text}
@@ -1151,11 +1246,36 @@ async def create_transcription(
             response_data["task"] = task_normalized
             response_data["duration"] = duration
 
+        _emit_success_metrics(redaction_outcome=redaction_outcome)
         return JSONResponse(content=response_data)
 
-    except HTTPException:
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        detail_status = str(
+            detail.get("status")
+            or detail.get("detail_status")
+            or ""
+        ).strip().lower()
+        if exc.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            _emit_error_metrics(status_label="quota_exceeded", reason="quota")
+        elif exc.status_code == status.HTTP_402_PAYMENT_REQUIRED:
+            _emit_error_metrics(status_label="quota_exceeded", reason="quota")
+        elif exc.status_code in {
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        }:
+            _emit_error_metrics(status_label="bad_request", reason="validation_error")
+        elif exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            _emit_error_metrics(status_label="model_unavailable", reason="model_unavailable")
+        elif detail_status in {"provider_unavailable", "transient_failure"}:
+            _emit_error_metrics(status_label="provider_error", reason="provider_error")
+        else:
+            _emit_error_metrics(status_label="internal_error", reason="internal")
         raise
     except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
+        _emit_error_metrics(status_label="internal_error", reason="internal")
         logger.error(f"Error during transcription: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1215,6 +1335,8 @@ async def create_translation(
         description="Sampling temperature (currently ignored by all providers).",
     ),
     current_user: User = Depends(get_request_user),
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    db: Any = Depends(get_db_transaction),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
 ):
     """
@@ -1255,6 +1377,8 @@ async def create_translation(
         seg_embeddings_provider=None,
         seg_embeddings_model=None,
         current_user=current_user,
+        principal=principal,
+        db=db,
     )
 
 

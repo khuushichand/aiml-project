@@ -1,6 +1,7 @@
 # migrations.py
 # Description: Database migrations for AuthNZ module tables
 #
+from __future__ import annotations
 # Imports
 import contextlib
 import json
@@ -150,7 +151,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
             key_prefix TEXT,
             name TEXT,
             description TEXT,
-            scope TEXT DEFAULT 'read',
+            scope TEXT,
             status TEXT DEFAULT 'active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
@@ -182,7 +183,7 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
         add_col('key_id', "key_id TEXT")
         add_col('key_prefix', "key_prefix TEXT")
         add_col('description', "description TEXT")
-        add_col('scope', "scope TEXT DEFAULT 'read'")
+        add_col('scope', "scope TEXT")
         add_col('status', "status TEXT DEFAULT 'active'")
         add_col('last_used_at', "last_used_at TIMESTAMP")
         add_col('last_used_ip', "last_used_ip TEXT")
@@ -492,6 +493,147 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
 
     conn.commit()
     logger.info("Migration 011: Created enhanced authentication tables")
+
+
+def migration_084_scope_account_lockouts_by_attempt_type(conn: sqlite3.Connection) -> None:
+    """Rebuild account_lockouts so lockouts are scoped by attempt_type."""
+    logger.info("Migration 084: START scope account_lockouts by attempt_type")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_lockouts_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            identifier TEXT NOT NULL,
+            attempt_type TEXT NOT NULL,
+            locked_until TIMESTAMP NOT NULL,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(identifier, attempt_type)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO account_lockouts_new
+            (identifier, attempt_type, locked_until, reason, created_at)
+        SELECT
+            identifier,
+            'login',
+            locked_until,
+            reason,
+            COALESCE(created_at, CURRENT_TIMESTAMP)
+        FROM account_lockouts
+        """
+    )
+    conn.execute("DROP TABLE IF EXISTS account_lockouts")
+    conn.execute("ALTER TABLE account_lockouts_new RENAME TO account_lockouts")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lockouts_identifier_attempt_type "
+        "ON account_lockouts(identifier, attempt_type)"
+    )
+    conn.commit()
+    logger.info("Migration 084: COMPLETE scope account_lockouts by attempt_type")
+
+
+def migration_085_remove_api_keys_scope_default(conn: sqlite3.Connection) -> None:
+    """Rebuild api_keys so omitted scope no longer defaults to read."""
+    logger.info("Migration 085: START remove api_keys.scope default")
+
+    pragma_rows = conn.execute("PRAGMA table_info(api_keys)").fetchall()
+    if not pragma_rows:
+        logger.info("Migration 085: api_keys table not present; skipping")
+        return
+
+    desired_defs = {
+        "id": "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        "user_id": "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE",
+        "key_hash": "key_hash TEXT UNIQUE NOT NULL",
+        "key_id": "key_id TEXT",
+        "key_prefix": "key_prefix TEXT",
+        "name": "name TEXT",
+        "description": "description TEXT",
+        "scope": "scope TEXT",
+        "status": "status TEXT DEFAULT 'active'",
+        "created_at": "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        "expires_at": "expires_at TIMESTAMP",
+        "last_used_at": "last_used_at TIMESTAMP",
+        "last_used_ip": "last_used_ip TEXT",
+        "usage_count": "usage_count INTEGER DEFAULT 0",
+        "rate_limit": "rate_limit INTEGER",
+        "allowed_ips": "allowed_ips TEXT",
+        "metadata": "metadata TEXT",
+        "rotated_from": "rotated_from INTEGER REFERENCES api_keys(id)",
+        "rotated_to": "rotated_to INTEGER REFERENCES api_keys(id)",
+        "revoked_at": "revoked_at TIMESTAMP",
+        "revoked_by": "revoked_by INTEGER",
+        "revoke_reason": "revoke_reason TEXT",
+        "is_virtual": "is_virtual INTEGER DEFAULT 0",
+        "parent_key_id": "parent_key_id INTEGER REFERENCES api_keys(id)",
+        "org_id": "org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL",
+        "team_id": "team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL",
+        "llm_budget_day_tokens": "llm_budget_day_tokens INTEGER",
+        "llm_budget_month_tokens": "llm_budget_month_tokens INTEGER",
+        "llm_budget_day_usd": "llm_budget_day_usd REAL",
+        "llm_budget_month_usd": "llm_budget_month_usd REAL",
+        "llm_allowed_endpoints": "llm_allowed_endpoints TEXT",
+        "llm_allowed_providers": "llm_allowed_providers TEXT",
+        "llm_allowed_models": "llm_allowed_models TEXT",
+    }
+
+    pragma_by_name = {row[1]: row for row in pragma_rows}
+    current_columns = [row[1] for row in pragma_rows]
+
+    def _fallback_definition(column_name: str) -> str:
+        row = pragma_by_name[column_name]
+        column_type = row[2] or "TEXT"
+        not_null = bool(row[3])
+        default = row[4]
+        primary_key = bool(row[5])
+
+        parts = [column_name, column_type]
+        if primary_key:
+            parts.append("PRIMARY KEY")
+        elif not_null:
+            parts.append("NOT NULL")
+        if default is not None and column_name != "scope":
+            parts.append(f"DEFAULT {default}")
+        return " ".join(parts)
+
+    column_defs = [desired_defs.get(name, _fallback_definition(name)) for name in current_columns]
+
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS api_keys_new (
+            {', '.join(column_defs)}
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT INTO api_keys_new ({', '.join(current_columns)})
+        SELECT {', '.join(current_columns)}
+        FROM api_keys
+        """
+    )
+    conn.execute("DROP TABLE IF EXISTS api_keys")
+    conn.execute("ALTER TABLE api_keys_new RENAME TO api_keys")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+    if "key_id" in current_columns:
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
+    if "status" in current_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+    if "expires_at" in current_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+    if "is_virtual" in current_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+    if "org_id" in current_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+    if "team_id" in current_columns:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
+
+    conn.commit()
+    logger.info("Migration 085: COMPLETE remove api_keys.scope default")
 
 
 def migration_012_create_rbac_tables(conn: sqlite3.Connection) -> None:
@@ -4241,6 +4383,37 @@ def migration_082_harden_admin_webhooks_and_create_admin_settings(conn: sqlite3.
     logger.info("Migration 082: Hardened admin_webhooks schema and created admin_settings")
 
 
+def migration_083_create_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Create org_stt_settings table for org-scoped STT policy."""
+    logger.info("Migration 083: START org_stt_settings table")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS org_stt_settings (
+            org_id INTEGER PRIMARY KEY,
+            delete_audio_after_success INTEGER NOT NULL DEFAULT 1,
+            audio_retention_hours REAL NOT NULL DEFAULT 0.0,
+            redact_pii INTEGER NOT NULL DEFAULT 0,
+            allow_unredacted_partials INTEGER NOT NULL DEFAULT 0,
+            redact_categories_json TEXT NOT NULL DEFAULT '[]',
+            updated_by INTEGER,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+            FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_org_stt_settings_updated_by ON org_stt_settings(updated_by)")
+    conn.commit()
+    logger.info("Migration 083: Created org_stt_settings table")
+
+
+def rollback_083_drop_org_stt_settings(conn: sqlite3.Connection) -> None:
+    """Rollback migration 083 by dropping org_stt_settings."""
+    conn.execute("DROP TABLE IF EXISTS org_stt_settings")
+    conn.commit()
+    logger.info("Rollback 083: Dropped org_stt_settings table")
+
+
 def rollback_081_drop_admin_dependency_health_history(conn: sqlite3.Connection) -> None:
     """Rollback migration 081."""
     conn.execute("DROP TABLE IF EXISTS admin_dependency_health_history")
@@ -4611,6 +4784,22 @@ def get_authnz_migrations() -> list[Migration]:
             82,
             "Harden admin webhooks schema and create admin settings table",
             migration_082_harden_admin_webhooks_and_create_admin_settings,
+        ),
+        Migration(
+            83,
+            "Create org STT settings table",
+            migration_083_create_org_stt_settings,
+            rollback_083_drop_org_stt_settings,
+        ),
+        Migration(
+            84,
+            "Scope account lockouts by attempt type",
+            migration_084_scope_account_lockouts_by_attempt_type,
+        ),
+        Migration(
+            85,
+            "Remove api_keys.scope default",
+            migration_085_remove_api_keys_scope_default,
         ),
     ]
 

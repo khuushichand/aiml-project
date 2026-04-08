@@ -65,7 +65,7 @@ def _get_token_service():
 
 def _get_audit_service():
     from tldw_Server_API.app.core.Sharing.share_audit_service import ShareAuditService
-    return ShareAuditService(_get_repo())
+    return ShareAuditService()
 
 
 def _client_ip(request: Request) -> str:

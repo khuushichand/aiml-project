@@ -66,13 +66,23 @@ describe("McpHubPage FTUX", () => {
     await user.click(closeButton!)
 
     expect(screen.queryByTestId("mcp-hub-explainer")).toBeNull()
-    expect(localStorage.getItem("tldw_mcp_hub_explainer_dismissed")).toBe("true")
+    expect(localStorage.getItem("tldw:mcp-hub:explainer-dismissed")).toBe("true")
   })
 
   it("does not show the explainer card if previously dismissed", () => {
-    localStorage.setItem("tldw_mcp_hub_explainer_dismissed", "true")
+    localStorage.setItem("tldw:mcp-hub:explainer-dismissed", "true")
     render(<McpHubPage />)
     expect(screen.queryByTestId("mcp-hub-explainer")).toBeNull()
+  })
+
+  it("migrates the legacy explainer dismissal key on read", () => {
+    localStorage.setItem("tldw_mcp_hub_explainer_dismissed", "true")
+
+    render(<McpHubPage />)
+
+    expect(screen.queryByTestId("mcp-hub-explainer")).toBeNull()
+    expect(localStorage.getItem("tldw:mcp-hub:explainer-dismissed")).toBe("true")
+    expect(localStorage.getItem("tldw_mcp_hub_explainer_dismissed")).toBeNull()
   })
 
   it("defaults to the Tool Catalog tab", () => {
