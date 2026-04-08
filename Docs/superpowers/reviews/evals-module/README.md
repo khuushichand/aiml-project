@@ -227,7 +227,7 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - `tldw_Server_API/app/core/DB_Management/db_path_utils.py`
 ### Baseline Notes
 - The slice-3 persistence code is baseline-stable relative to `ec30354a2`.
-- The `tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py` setup failure caused by `resolve_trusted_database_path()` rejecting the temp DB path reproduces against the frozen baseline path logic, so it is verification context rather than a dirty-tree regression.
+- The `tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py` setup failure caused by `resolve_trusted_database_path()` rejecting the temp DB path reproduces against the frozen baseline path logic, so the temp-path issue recorded below is baseline behavior rather than a dirty-tree regression.
 ### Control and Data Flow Notes
 - `EvaluationManager._get_db_path()` resolves the default evaluations DB from `DatabasePaths`, but the explicit `db_path` branch returns any resolved path after null-byte stripping and does not apply the same user-directory containment check used for config-driven paths.
 - Config-driven `evaluations_db_path` values are contained with `relative_to(base_resolved)` and fall back to the default path when they escape the user directory.
@@ -239,12 +239,22 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Priority: Immediate
    Applicability: Baseline
    Why it matters: The explicit `db_path` constructor path bypasses the containment rule that protects config-driven evaluations paths. A caller can pass an absolute path outside the per-user database tree and `EvaluationManager` will accept it after `resolve()`, which defeats the path-safety model used everywhere else in this slice.
-   File references: `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:46`
+   File references: `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:46`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:51`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:62`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:65`, `tldw_Server_API/app/core/Evaluations/evaluation_manager.py:70`
    Recommended fix: Apply the same containment check used for config-driven paths to the explicit `db_path` branch, or reject explicit paths that do not resolve under the user base directory / trusted roots.
    Recommended tests: Add a regression that instantiates `EvaluationManager` with an explicit path outside the user tree and asserts it is rejected or normalized back to the default per-user evaluations DB.
-   Verification note: Baseline comparison with `git show ec30354a2:tldw_Server_API/app/core/Evaluations/evaluation_manager.py` shows the same explicit-path branch, so this is not a new working-tree regression.
+   Verification note: Baseline comparison with `git show ec30354a2:tldw_Server_API/app/core/Evaluations/evaluation_manager.py` shows the same explicit-path branch. A targeted probe with `_init_database` patched out and `Path.mkdir` intercepted produced `resolved_db_path=/Users/appledev/Documents/escape/evals.db` and `mkdir_target=/Users/appledev/Documents/escape` for `EvaluationManager(db_path='../../escape/evals.db', user_id=1)`, confirming that the explicit branch escapes the user storage root before any trusted-path gate intervenes.
 
-2. Severity: High
+2. Severity: Medium
+   Confidence: High
+   Priority: Near-term
+   Applicability: Baseline
+   Why it matters: `resolve_trusted_database_path()` resolves trusted roots such as `tempfile.gettempdir()` to real paths like `/private/var/...`, but it compares them against a merely normalized candidate path that can remain on the symlinked alias `/var/...`. In macOS test contexts, that makes trusted temp DB paths fail containment checks even though both paths resolve to the same location. The failure is large enough to collapse the entire `test_evaluation_manager.py` suite during fixture setup before any persistence assertions run.
+   File references: `tldw_Server_API/app/core/DB_Management/db_path_utils.py:145`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:152`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:161`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:165`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:170`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:177`
+   Recommended fix: Resolve the candidate path with `strict=False` before containment checks so trusted roots and candidate paths are compared in the same canonical form. Keep the trusted-root policy, but normalize roots and candidates symmetrically.
+   Recommended tests: Add a regression that passes a macOS-style `/var/...` temp path while `tempfile.gettempdir().resolve()` yields `/private/var/...` and assert the path is accepted. Keep a companion test proving that genuinely untrusted absolute paths are still rejected after canonicalization.
+   Verification note: The frozen baseline has the same code shape. A direct probe showed `normalized.relative_to(root)` fails for `/var/...` against `/private/var/...`, while `normalized.resolve(strict=False).relative_to(root)` succeeds. The focused `python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py` run then failed all 20 cases with `InvalidStoragePathError(\"invalid_path\")` from this trusted-path rejection.
+
+3. Severity: High
    Confidence: High
    Priority: Immediate
    Applicability: Baseline
@@ -255,7 +265,7 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Verification note: `QueryResult` in the shared backend contract exposes `first()` and `scalar()` methods, so the current adapter code is returning callables. This is baseline code, not a dirty-tree change.
 ### Open Questions
 - Needs verification: whether `list_evaluations()` is meant to be a session-isolated helper only. The current implementation clears `_recent_created_ids` after each readback, so it does not behave like a persistent “list all evaluations” API.
-- Needs verification: the temp-path rejection seen in `test_evaluation_manager.py` is baseline-identical under `ec30354a2`, but the `/private/var` vs `/var` normalization mismatch should be addressed somewhere in the storage-path stack if that fixture is expected to be portable across macOS sandbox layouts.
+- Needs verification: `EvaluationManager._init_database()` silently falls back to `_init_database_fallback()` in non-production environments when migrations fail, creating a legacy schema instead of failing loudly. The code-path evidence is clear, but I did not promote it to a finding because I have not yet proven a supported runtime path still depends on this manager strongly enough for that fallback to mask a real migration failure in practice.
 ### Verification Run
 - `git show ec30354a2:tldw_Server_API/app/core/DB_Management/db_path_utils.py | sed -n '120,210p'`
   `git show ec30354a2:tldw_Server_API/app/core/Evaluations/evaluation_manager.py | sed -n '1,140p'`
@@ -264,6 +274,36 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
   Result: confirmed the Slice 3 hotspots for path resolution, migration fallback, SQLite-only fallbacks, and adapter/backend routing.
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py`
   Result: `20 errors` from `InvalidStoragePathError: invalid_path` in the `temp_db_path` fixture while `EvaluationsDatabase` initialized its embeddings A/B store. The failing path normalized to `/var/folders/.../tmp*_test_eval.db` and was rejected by `resolve_trusted_database_path()`.
+- `python - <<'PY'`
+  `from pathlib import Path`
+  `import tempfile, os`
+  `root = Path(tempfile.gettempdir()).resolve()`
+  `candidate = Path('/var/folders/qc/m53gw5bs70q_xf10fz52dlmw0000gn/T/tmpr6iu163l_test_eval.db')`
+  `normalized = Path(os.path.normpath(str(candidate)))`
+  `print('root=', root)`
+  `print('normalized=', normalized)`
+  `try: normalized.relative_to(root); print('contained=True')`
+  `except Exception as exc: print('contained=False', type(exc).__name__)`
+  `print('normalized_resolved=', normalized.resolve(strict=False))`
+  `try: normalized.resolve(strict=False).relative_to(root); print('resolved_contained=True')`
+  `except Exception as exc: print('resolved_contained=False', type(exc).__name__)`
+  `PY`
+  Result: reproduced the macOS temp-path alias failure directly. `root` resolved to `/private/var/...`, `normalized` stayed `/var/...`, `contained=False ValueError`, and `resolved_contained=True` once the candidate path was resolved before containment checking.
+- `source .venv/bin/activate && python - <<'PY'`
+  `from pathlib import Path`
+  `from unittest.mock import patch`
+  `from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager`
+  `mkdir_calls = []`
+  `def fake_mkdir(self, *args, **kwargs):`
+  `    mkdir_calls.append(str(self))`
+  `    return None`
+  `with patch.object(EvaluationManager, '_init_database', lambda self: None):`
+  `    with patch.object(Path, 'mkdir', fake_mkdir):`
+  `        mgr = EvaluationManager(db_path='../../escape/evals.db', user_id=1)`
+  `        print('resolved_db_path=', mgr.db_path)`
+  `        print('mkdir_target=', mkdir_calls[-1] if mkdir_calls else None)`
+  `PY`
+  Result: reproduced the explicit-path escape without relying on sandbox denial. `EvaluationManager` resolved the path to `/Users/appledev/Documents/escape/evals.db` and attempted to create `/Users/appledev/Documents/escape`, confirming that the explicit-path branch bypasses the per-user containment policy.
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/unit/test_evaluations_db_filters.py`
   Result: `2 passed`.
 - `source .venv/bin/activate && python -m pytest -q tldw_Server_API/tests/Evaluations/test_evaluations_backend_dual.py`
