@@ -447,7 +447,7 @@ async def generate_embeddings_for_media(
             *,
             model_name: str,
             provider_name: str,
-            embeddings_to_store,
+            embeddings_to_store: list[Any],
         ) -> None:
             collection_name = f"user_{user_id}_media_embeddings"
 
