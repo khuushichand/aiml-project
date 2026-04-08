@@ -218,6 +218,11 @@ otel = [
   "opentelemetry-instrumentation-aiohttp-client>=0.48b0",
 ]
 
+# Error tracking (optional, for Sentry integration)
+sentry = [
+  "sentry-sdk[fastapi]>=2.0.0",
+]
+
 # Evaluation and metrics (optional)
 evaluation = [
   "bert-score>=0.3.0",

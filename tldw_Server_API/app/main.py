@@ -1734,6 +1734,22 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Startup: Failed to initialize telemetry: {e}")
 
+    # Startup: Initialize Sentry error tracking (optional)
+    _sentry_dsn = os.getenv("SENTRY_DSN", "")
+    if _sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(
+                dsn=_sentry_dsn,
+                traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+                environment=os.getenv("DEPLOYMENT_ENV", "development"),
+                release=os.getenv("OTEL_SERVICE_VERSION", "1.0.0"),
+                send_default_pii=False,
+            )
+            logger.info("App Startup: Sentry error tracking initialized")
+        except _STARTUP_GUARD_EXCEPTIONS as _sentry_err:
+            logger.warning(f"App Startup: Sentry initialization failed: {_sentry_err}")
+
     # Startup: Warn if first-time setup is enabled (local-only, no proxies)
     try:
         if needs_setup():

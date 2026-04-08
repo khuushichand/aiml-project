@@ -247,12 +247,12 @@ pg-restore:
 MON_STACK := Dockerfiles/Monitoring/docker-compose.monitoring.yml
 
 monitoring-up:
-	@echo "[monitoring] Starting Prometheus + Grafana"
+	@echo "[monitoring] Starting Prometheus + Grafana + Alertmanager"
 	docker compose -f $(MON_STACK) up -d
-	@echo "[monitoring] Grafana: http://localhost:3000 (admin/admin). Prometheus: http://localhost:9090"
+	@echo "[monitoring] Grafana: http://localhost:$${GRAFANA_PORT:-3002} (admin/admin). Prometheus: http://localhost:9090. Alertmanager: http://localhost:9093"
 
 monitoring-down:
-	@echo "[monitoring] Stopping Prometheus + Grafana"
+	@echo "[monitoring] Stopping monitoring stack"
 	docker compose -f $(MON_STACK) down -v
 
 monitoring-logs:
