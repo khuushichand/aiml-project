@@ -73,11 +73,6 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py`
 - `tldw_Server_API/app/core/Evaluations/user_rate_limiter.py`
 - `tldw_Server_API/app/api/v1/schemas/evaluation_schemas_unified.py`
-- `tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py`
-- `tldw_Server_API/tests/Evaluations/test_evaluations_unified.py`
-- `tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py`
-- `tldw_Server_API/tests/AuthNZ/integration/test_evaluations_permissions_claims.py`
-- `tldw_Server_API/tests/AuthNZ/integration/test_auth_principal_evaluations_invariants.py`
 ### Baseline Notes
 - The frozen baseline commit for this review is `ec30354a2`.
 - The implementation files most relevant to Slice 1 were already dirty at review start: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py`, and `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py`.
@@ -121,8 +116,6 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
    Recommended fix: Stop defaulting missing per-minute metadata to zero. Either compute remaining requests from limiter summary data, or omit the per-minute remaining header when the enforcement backend does not provide a trustworthy value.
    Recommended tests: Add header-level assertions for one RG-backed allow response and one legacy-cost-only allow response, verifying that success responses do not advertise `X-RateLimit-PerMinute-Remaining: 0` unless the request is actually exhausted.
    Verification note: Baseline inspection shows `_apply_rate_limit_headers()` only gets a concrete per-minute remaining value from `meta`, while the success metadata returned by `check_rate_limit()` does not populate that field.
-### Open Questions
-- None.
 ### Verification Run
 - `source .venv/bin/activate && rg -n "except Exception|_is_test_mode|pytest|TEST|fallback|record_byok_missing_credentials|HTTPException|require_eval_permissions|check_evaluation_rate_limit" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py tldw_Server_API/app/core/Evaluations/user_rate_limiter.py`
   Result: identified the Slice 1 guard-heavy branches for manual review, including pytest/test-mode bypasses, BYOK credential checks, the diagnostics-only route limiter shim, and broad exception handling in auth/header paths.
