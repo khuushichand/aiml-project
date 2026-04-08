@@ -360,10 +360,15 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py`
 - `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_recipes.py`
 - `tldw_Server_API/app/api/v1/schemas/evaluation_recipe_schemas.py`
+- `tldw_Server_API/app/core/DB_Management/DB_Manager.py`
+- `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py`
+- `tldw_Server_API/app/core/DB_Management/db_path_utils.py`
+- `tldw_Server_API/app/core/Evaluations/eval_runner.py`
 - `tldw_Server_API/app/core/Evaluations/rag_evaluator.py`
 - `tldw_Server_API/app/core/Evaluations/response_quality_evaluator.py`
 - `tldw_Server_API/app/core/Evaluations/recipe_runs_service.py`
 - `tldw_Server_API/app/core/Evaluations/recipe_runs_jobs.py`
+- `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py`
 - `tldw_Server_API/app/core/Evaluations/recipes/base.py`
 - `tldw_Server_API/app/core/Evaluations/recipes/registry.py`
 - `tldw_Server_API/app/core/Evaluations/recipes/rag_answer_quality.py`
@@ -371,13 +376,38 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 - `tldw_Server_API/app/core/Evaluations/recipes/rag_retrieval_tuning.py`
 - `tldw_Server_API/app/core/Evaluations/recipes/rag_retrieval_tuning_execution.py`
 - `tldw_Server_API/app/core/Evaluations/recipes/embeddings_retrieval.py`
+- `tldw_Server_API/app/core/RAG/rag_service/vector_stores/chromadb_adapter.py`
+- `tldw_Server_API/app/core/RAG/rag_service/vector_stores/factory.py`
+- `tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py`
 ### Baseline Notes
 - The reviewed slice is baseline-stable relative to `ec30354a2`; the requested code paths are present in the frozen baseline and the current tree.
 ### Control and Data Flow Notes
-- The API layer normalizes recipe requests through `evaluations_recipes.py`, then delegates to `RecipeRunsService` for validation, reuse hashing, persistence, and report shaping.
+- The recipe API layer normalizes requests through `evaluations_recipes.py`, then delegates to `RecipeRunsService` for dataset validation, reuse hashing, persistence, and report shaping.
+- The RAG pipeline preset routes in `evaluations_rag_pipeline.py` pass the authenticated stable user id into `EvaluationsDatabase`, but the persistence layer still keys presets by `name` alone.
+- RAG pipeline eval runs build ephemeral vector indexes in `eval_runner.py` from `index_namespace` plus a deterministic config ordinal (`cfg_001`, `cfg_002`, ...), then register those names in `ephemeral_collections`.
+- Cleanup is exposed as an authenticated user endpoint in `evaluations_rag_pipeline.py`, but it enumerates expired ephemeral collections from the shared evaluations database and deletes them through whatever vector-store adapter is initialized for the current user/backend.
+- `response_quality_evaluator.py` is a leaf scorer in this slice, but the hotspot scan shows its direct route wiring still lives under `evaluations_unified.py`, not the recipe or RAG pipeline routers reviewed here. I did not find a new slice-local defect in that evaluator beyond the service-level orchestration surface already covered in Slice 2.
 - The registry path is intentionally small: manifests are registered up front, and recipe-specific execution helpers build the report payloads returned by the API.
 ### Findings
-1. Severity: Medium
+1. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: pipeline presets are treated as user-scoped rows, but the shared-backend schema still keys `pipeline_presets` by `name` alone. The default SQLite path hides this because `DatabasePaths.get_evaluations_db_path()` creates a per-user DB file, but `UnifiedEvaluationService` routes through `create_evaluations_database()`, which binds the service to a shared PostgreSQL content backend when that backend is configured. In that supported deployment shape, two users saving the same preset name will race on the same row and the second `upsert_pipeline_preset()` call will overwrite the first user's preset and `user_id`.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:59`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:69`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:157`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:209`, `tldw_Server_API/app/core/DB_Management/DB_Manager.py:406`, `tldw_Server_API/app/core/DB_Management/DB_Manager.py:413`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:744`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:745`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2740`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2747`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2750`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2760`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2807`, `tldw_Server_API/app/core/DB_Management/db_path_utils.py:496`, `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py:137`, `tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py:1603`
+   Recommended fix: migrate `pipeline_presets` to a composite uniqueness model such as `(user_id, name)` or a surrogate primary key plus unique constraint on `(user_id, name)`, then update all CRUD helpers to upsert and delete on that composite key.
+   Recommended tests: add a PostgreSQL-backed multi-user integration test that creates the same preset name for two users and asserts both can list, fetch, update, and delete their own copy without affecting the other user.
+   Verification note: a direct SQLite probe using the same `ON CONFLICT(name)` statement stored only `{'name': 'shared', 'config': '{"b":2}', 'user_id': 'user-2'}` after inserting `shared` for `user-1` and then `user-2`, showing the schema conflict. Code inspection then confirmed that the default SQLite path is per-user, while the shared PostgreSQL backend path still routes all users through that same name-only schema.
+2. Severity: High
+   Confidence: High
+   Priority: Immediate
+   Applicability: Baseline
+   Why it matters: ephemeral RAG pipeline indexes are not isolated by run. `eval_runner.py` names them as `"{index_namespace}_{cfg_id}"`, where `cfg_id` is only the loop ordinal inside the config grid. Re-running the same pipeline with the same `index_namespace` reuses the same collection names, and the persistence layer records them with `INSERT OR IGNORE`, so later runs silently inherit earlier registry metadata. On Chroma this contaminates repeated runs for the same user because `create_collection()` is `get_or_create_collection()`. On pgvector it is worse: `create_collection()` is `CREATE TABLE IF NOT EXISTS`, and the adapter ignores `user_id`, so identical collection names can collide across users on that backend. The cleanup route then compounds the problem by sweeping a global `ephemeral_collections` table with no owner column.
+   File references: `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:233`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:242`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:252`, `tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py:253`, `tldw_Server_API/app/core/Evaluations/eval_runner.py:593`, `tldw_Server_API/app/core/Evaluations/eval_runner.py:608`, `tldw_Server_API/app/core/Evaluations/eval_runner.py:691`, `tldw_Server_API/app/core/Evaluations/eval_runner.py:703`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:443`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:444`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2816`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2823`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2831`, `tldw_Server_API/app/core/DB_Management/Evaluations_DB.py:2844`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/chromadb_adapter.py:103`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/chromadb_adapter.py:109`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/factory.py:103`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/factory.py:155`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/factory.py:160`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py:281`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py:287`, `tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py:315`
+   Recommended fix: include a run-unique component in every ephemeral collection name, persist owner identity with the registry row, and scope cleanup queries by owner/backend context before deleting and marking rows. For pgvector-backed deployments, ensure the namespace derivation also incorporates user isolation instead of only collection name reuse.
+   Recommended tests: add a regression that launches two RAG pipeline runs with the same `index_namespace` and asserts they receive different ephemeral collection names; add cleanup tests that prove one user's cleanup path cannot mark or delete another user's registry rows; add pgvector-specific coverage that rejects or isolates identical collection names across users.
+   Verification note: code inspection shows `collection_name = f"{base_namespace}_{cfg_id}"` with `cfg_id` derived only from enumeration order. A direct probe reproduced the collision pattern and registry overwrite behavior: two runs that both derive `shared_cfg_001` leave the first row intact under `INSERT OR IGNORE`. The backend adapters then reuse existing namespaces via `get_or_create_collection()` (Chroma) or `CREATE TABLE IF NOT EXISTS` (pgvector).
+3. Severity: Medium
    Confidence: High
    Priority: Near-term
    Applicability: Baseline
@@ -391,8 +421,40 @@ Uncertainty belongs in `Confidence` and/or `Verification note`, not `Applicabili
 ### Verification Run
 - `source .venv/bin/activate && rg -n "registry|execute|candidate|metric|retrieval|quality|job|background|dataset|snapshot" tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_rag_pipeline.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_recipes.py tldw_Server_API/app/core/Evaluations/recipe_runs_service.py tldw_Server_API/app/core/Evaluations/recipes`
   Result: confirmed the expected registry, execution, dataset, and report-shaping hotspots across the slice.
+- `source .venv/bin/activate && rg -n "ResponseQualityEvaluator|response_quality" tldw_Server_API/app/core/Evaluations/response_quality_evaluator.py tldw_Server_API/app/core/Evaluations/recipes tldw_Server_API/app/api/v1/endpoints/evaluations -g '*.py'`
+  Result: `response_quality_evaluator.py` is present in the slice, but direct route wiring still points at `evaluations_unified.py`; no recipe or RAG pipeline route in this slice invokes it directly.
+- `source .venv/bin/activate && rg -n "create_evaluations_database|get_evaluations_db_path|pipeline_presets|ephemeral_collections|create_collection" tldw_Server_API/app/core/DB_Management/DB_Manager.py tldw_Server_API/app/core/DB_Management/Evaluations_DB.py tldw_Server_API/app/core/DB_Management/db_path_utils.py tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py tldw_Server_API/app/core/Evaluations/eval_runner.py tldw_Server_API/app/core/RAG/rag_service/vector_stores/chromadb_adapter.py tldw_Server_API/app/core/RAG/rag_service/vector_stores/pgvector_adapter.py`
+  Result: confirmed the backend-sensitive preset storage path, the per-user SQLite DB path, the shared-backend factory branch, the deterministic ephemeral collection naming, and the collection creation semantics for Chroma and pgvector.
+- `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_recipe_runs_service.py tldw_Server_API/tests/Evaluations/integration/test_recipe_runs_api.py tldw_Server_API/tests/Evaluations/test_recipe_runs_jobs_worker.py tldw_Server_API/tests/Evaluations/test_rag_pipeline_runner.py tldw_Server_API/tests/Evaluations/test_recipe_registry.py tldw_Server_API/tests/Evaluations/test_recipe_dataset_snapshot.py tldw_Server_API/tests/Evaluations/test_recipe_rag_answer_quality.py`
+  Result: `84 passed`.
 - `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/test_rag_evaluator_embeddings.py tldw_Server_API/tests/Evaluations/unit/test_rag_evaluator.py tldw_Server_API/tests/Evaluations/test_recipe_embeddings_retrieval.py tldw_Server_API/tests/Evaluations/test_recipe_rag_retrieval_tuning.py`
   Result: `63 passed, 2 skipped`.
+- `source .venv/bin/activate && python - <<'PY'`
+  `import sqlite3`
+  `conn = sqlite3.connect(':memory:')`
+  `conn.row_factory = sqlite3.Row`
+  `conn.execute('CREATE TABLE pipeline_presets (name TEXT PRIMARY KEY, config TEXT NOT NULL, created_at TEXT, updated_at TEXT, user_id TEXT)')`
+  `conn.execute("INSERT INTO pipeline_presets (name, config, user_id) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET config=excluded.config, updated_at=CURRENT_TIMESTAMP, user_id=COALESCE(excluded.user_id, pipeline_presets.user_id)", ('shared', '{"a":1}', 'user-1'))`
+  `conn.execute("INSERT INTO pipeline_presets (name, config, user_id) VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET config=excluded.config, updated_at=CURRENT_TIMESTAMP, user_id=COALESCE(excluded.user_id, pipeline_presets.user_id)", ('shared', '{"b":2}', 'user-2'))`
+  `print(dict(conn.execute('SELECT name, config, user_id FROM pipeline_presets WHERE name = ?', ('shared',)).fetchone()))`
+  `print(conn.execute('SELECT COUNT(*) FROM pipeline_presets WHERE name = ? AND user_id = ?', ('shared', 'user-1')).fetchone()[0])`
+  `print(conn.execute('SELECT COUNT(*) FROM pipeline_presets WHERE name = ? AND user_id = ?', ('shared', 'user-2')).fetchone()[0])`
+  `PY`
+  Result: the second upsert replaced the row with `user_id='user-2'`; the same preset name could not exist for both users simultaneously.
+- `source .venv/bin/activate && python - <<'PY'`
+  `import sqlite3`
+  `base_namespace = 'shared'`
+  `name_a = f'{base_namespace}_cfg_001'`
+  `name_b = f'{base_namespace}_cfg_001'`
+  `print(name_a == name_b)`
+  `conn = sqlite3.connect(':memory:')`
+  `conn.row_factory = sqlite3.Row`
+  `conn.execute('CREATE TABLE ephemeral_collections (collection_name TEXT PRIMARY KEY, namespace TEXT, run_id TEXT, ttl_seconds INTEGER DEFAULT 86400, created_at TEXT DEFAULT CURRENT_TIMESTAMP, deleted_at TEXT NULL)')`
+  `conn.execute('INSERT OR IGNORE INTO ephemeral_collections (collection_name, ttl_seconds, run_id, namespace) VALUES (?, ?, ?, ?)', (name_a, 10, 'run-a', base_namespace))`
+  `conn.execute('INSERT OR IGNORE INTO ephemeral_collections (collection_name, ttl_seconds, run_id, namespace) VALUES (?, ?, ?, ?)', (name_b, 99, 'run-b', base_namespace))`
+  `print(dict(conn.execute('SELECT collection_name, namespace, run_id, ttl_seconds FROM ephemeral_collections WHERE collection_name = ?', (name_a,)).fetchone()))`
+  `PY`
+  Result: both runs derived the same collection name, and the second registration was ignored, leaving the first run's metadata in place.
 - `source .venv/bin/activate && python - <<'PY'`
   `from tldw_Server_API.app.core.Evaluations.recipes.base import StaticRecipeDefinition`
   `from tldw_Server_API.app.core.Evaluations.recipes.registry import RecipeRegistry`
