@@ -157,6 +157,8 @@ from tldw_Server_API.app.core.Chat.chat_service import (
     perform_chat_api_call_async,
     prepare_structured_response_request,
     queue_is_active,
+    resolve_input_moderation_chat_type,
+    resolve_moderation_chat_type,
     resolve_provider_and_model,
     resolve_provider_api_key,
     is_model_known_for_provider,
@@ -193,6 +195,9 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
+)
+from tldw_Server_API.app.core.Moderation.supervised_policy import (
+    bootstrap_guardian_moderation_runtime,
 )
 from tldw_Server_API.app.core.Skills.context_integration import (
     add_skill_tool_to_tools_list,
@@ -2946,6 +2951,16 @@ async def create_chat_completion(
             finally:
                 await _decrement_active_request(user_id)
 
+        try:
+            input_moderation_chat_type = await resolve_input_moderation_chat_type(
+                chat_db=chat_db,
+                request_data=request_data,
+                loop=current_loop,
+            )
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("resolve_input_moderation_chat_type failed; defaulting to None: {}", exc)
+            input_moderation_chat_type = None
+
         # Guardian & self-monitoring integration
         _supervised_engine = None
         _self_mon_service = None
@@ -2953,38 +2968,28 @@ async def create_chat_completion(
         try:
             from tldw_Server_API.app.core.feature_flags import is_guardian_enabled, is_self_monitoring_enabled
 
-            if current_user and getattr(current_user, "id", None) is not None:
-                try:
-                    _uid_int = int(current_user.id)
-                except Exception:
-                    import hashlib as _hashlib
-                    # Deterministic non-crypto ID derivation for non-integer test/single-user IDs.
-                    # `usedforsecurity=False` keeps behavior while making intent explicit.
-                    try:
-                        _digest = _hashlib.sha1(
-                            str(current_user.id).encode("utf-8"),
-                            usedforsecurity=False,
-                        ).digest()
-                    except TypeError:  # pragma: no cover - compatibility fallback
-                        _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()  # nosec B324
-                    _uid_int = int.from_bytes(_digest[:4], byteorder="big", signed=False)
-                _guardian_db_path = DatabasePaths.get_guardian_db_path(_uid_int)
+            guardian_enabled = is_guardian_enabled()
+            self_monitoring_enabled = is_self_monitoring_enabled()
+            if (
+                current_user
+                and getattr(current_user, "id", None) is not None
+                and (guardian_enabled or self_monitoring_enabled)
+            ):
+                _guardian_runtime = bootstrap_guardian_moderation_runtime(
+                    user_id=current_user.id,
+                    dependent_user_id=str(current_user.id),
+                    chat_type=input_moderation_chat_type,
+                )
+                _dep_user_id = _guardian_runtime.dependent_user_id
 
-                _guardian_db = None
-                if is_guardian_enabled() or is_self_monitoring_enabled():
-                    from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB as _GuardianDB
-                    _guardian_db = _GuardianDB(str(_guardian_db_path))
+                if guardian_enabled and _guardian_runtime.supervised_engine:
+                    _supervised_engine = _guardian_runtime.supervised_engine
 
-                if is_guardian_enabled() and _guardian_db:
-                    from tldw_Server_API.app.core.Moderation.supervised_policy import get_supervised_policy_engine
-                    _supervised_engine = get_supervised_policy_engine(_guardian_db)
-                    _dep_user_id = str(current_user.id)
-
-                if is_self_monitoring_enabled() and _guardian_db:
+                if self_monitoring_enabled and _guardian_runtime.guardian_db:
                     from tldw_Server_API.app.core.Monitoring.self_monitoring_service import get_self_monitoring_service
-                    _self_mon_service = get_self_monitoring_service(_guardian_db)
-        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
+                    _self_mon_service = get_self_monitoring_service(_guardian_runtime.guardian_db)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning("Guardian moderation bootstrap failed; continuing with base moderation only: {}", exc)
 
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
@@ -3006,6 +3011,7 @@ async def create_chat_completion(
                 supervised_policy_engine=_supervised_engine,
                 self_monitoring_service=_self_mon_service,
                 dependent_user_id=_dep_user_id,
+                chat_type=input_moderation_chat_type,
             )
         except HTTPException:
             raise
@@ -3235,6 +3241,14 @@ async def create_chat_completion(
                 if isinstance(continuation_runtime.get("assistant_context"), dict)
                 else None
             )
+            try:
+                output_moderation_chat_type = resolve_moderation_chat_type(
+                    request_data=request_data,
+                    assistant_context=assistant_context,
+                )
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("resolve_moderation_chat_type failed; defaulting to None: {}", exc)
+                output_moderation_chat_type = None
 
             # --- Prompt Templating (system + content transforms) ---
             final_system_message, templated_llm_payload = apply_prompt_templating(
@@ -3856,7 +3870,12 @@ async def create_chat_completion(
                     return base
                 try:
                     from tldw_Server_API.app.core.Moderation.supervised_policy import GuardianModerationProxy
-                    return GuardianModerationProxy(base, _supervised_engine, _dep_user_id)
+                    return GuardianModerationProxy(
+                        base,
+                        _supervised_engine,
+                        _dep_user_id,
+                        chat_type=output_moderation_chat_type,
+                    )
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 

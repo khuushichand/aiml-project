@@ -516,38 +516,18 @@ def _restore_soft_deleted_writing_session(
     schema_version: int,
     version_parent_id: str | None,
 ) -> None:
-    """Restore a soft-deleted writing session while preserving its ID."""
-    existing = db.get_writing_session(session_id, include_deleted=True)
-    if not existing:
-        raise ConflictError(
-            f"Session with ID '{session_id}' already exists.",
-            entity="writing_sessions",
-            entity_id=session_id,
-        )
-    payload_json = json.dumps(payload, ensure_ascii=True)
-    next_version = int(existing.get("version") or 1) + 1
-    conn.execute(
-        """
-        UPDATE writing_sessions
-           SET name = ?,
-               payload_json = ?,
-               schema_version = ?,
-               version_parent_id = ?,
-               deleted = 0,
-               last_modified = CURRENT_TIMESTAMP,
-               version = ?,
-               client_id = ?
-         WHERE id = ?
-        """,
-        (
-            name,
-            payload_json,
-            int(schema_version),
-            version_parent_id,
-            next_version,
-            db.client_id,
-            session_id,
-        ),
+    """Restore a soft-deleted writing session while preserving its ID.
+
+    Delegates to ``db.restore_writing_session()`` so that all SQL stays
+    in the DB-management layer.  The *conn* parameter is accepted for
+    call-site compatibility but is no longer used directly.
+    """
+    db.restore_writing_session(
+        session_id,
+        name=name,
+        payload=payload,
+        schema_version=schema_version,
+        version_parent_id=version_parent_id,
     )
 
 

@@ -993,14 +993,23 @@ class MediaModule(BaseModule):
                 except DatabaseError as exc:
                     logger.debug("Prechunked retrieval failed for media {}: {}", media_id, exc)
 
-            # Fallback: on-the-fly chunking from full content
+            # Fallback: on-the-fly chunking from full content.
+            # Preserve anchor_index if it was already resolved (e.g. from
+            # chunk_index loc hint or uuid/offset lookup) before the DB call
+            # that raised DatabaseError.
             size_chars = max(1, chunk_size_tokens * cpt)
             chunks = _chunkify(content, size_chars)
             if not chunks:
                 body = self._make_snippet(content, None, snippet_length)
                 return {"meta": item, "content": body, "attachments": None}
 
-            anchor_index = 0 if approx_offset is None else max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            if anchor_index is not None:
+                # Clamp the previously-resolved index to the on-the-fly chunk list bounds.
+                anchor_index = max(0, min(len(chunks) - 1, anchor_index))
+            elif approx_offset is not None:
+                anchor_index = max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            else:
+                anchor_index = 0
 
             if mode == "chunk":
                 body = chunks[anchor_index]

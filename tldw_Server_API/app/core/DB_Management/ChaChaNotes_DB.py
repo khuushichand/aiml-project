@@ -30245,6 +30245,122 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
 
+    def restore_writing_session(
+        self,
+        session_id: str,
+        *,
+        name: str | None = None,
+        payload: dict[str, Any] | None = None,
+        schema_version: int | None = None,
+        version_parent_id: str | None = None,
+    ) -> bool:
+        """
+        Restore a soft-deleted writing session, optionally updating its fields.
+
+        Sets ``deleted = 0``, increments the version, and optionally applies
+        new ``name``, ``payload``, ``schema_version``, and
+        ``version_parent_id`` values.  If the session is already active the
+        call is treated as a success (idempotent).
+
+        Args:
+            session_id: The session UUID to restore.
+            name: Optional new name for the restored session.
+            payload: Optional new payload dict (will be serialized to JSON).
+            schema_version: Optional new schema version number.
+            version_parent_id: Optional new version parent ID.
+
+        Returns:
+            True on success.
+
+        Raises:
+            ConflictError: If the session does not exist.
+            CharactersRAGDBError: For database errors.
+        """
+        now = self._get_current_utc_timestamp_iso()
+
+        try:
+            with self.transaction() as conn:
+                check_cursor = conn.execute(
+                    "SELECT deleted, version FROM writing_sessions WHERE id = ?",
+                    (session_id,),
+                )
+                record_status = check_cursor.fetchone()
+
+                if not record_status:
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Writing session ID {session_id} not found.",
+                        entity="writing_sessions",
+                        entity_id=session_id,
+                    )
+
+                if not record_status["deleted"]:
+                    logger.info(
+                        f"Writing session ID {session_id} already active. Restore successful (idempotent)."
+                    )
+                    return True
+
+                current_version = int(record_status["version"] or 1)
+                next_version_val = current_version + 1
+
+                # Build SET clause dynamically for optional field updates
+                set_parts = [
+                    "deleted = 0",
+                    "last_modified = ?",
+                    "version = ?",
+                    "client_id = ?",
+                ]
+                params: list[Any] = [now, next_version_val, self.client_id]
+
+                if name is not None:
+                    set_parts.append("name = ?")
+                    params.append(name)
+                if payload is not None:
+                    set_parts.append("payload_json = ?")
+                    params.append(self._serialize_writing_payload(payload, "Session"))
+                if schema_version is not None:
+                    set_parts.append("schema_version = ?")
+                    params.append(int(schema_version))
+                if version_parent_id is not None:
+                    set_parts.append("version_parent_id = ?")
+                    params.append(version_parent_id)
+
+                query = (
+                    f"UPDATE writing_sessions SET {', '.join(set_parts)} "  # nosec B608
+                    f"WHERE id = ? AND deleted = 1"
+                )
+                params.append(session_id)
+
+                cursor = conn.execute(query, tuple(params))
+
+                if cursor.rowcount == 0:
+                    check_again = conn.execute(
+                        "SELECT version, deleted FROM writing_sessions WHERE id = ?",
+                        (session_id,),
+                    )
+                    final = check_again.fetchone()
+                    if final and not final["deleted"]:
+                        logger.info(
+                            f"Writing session {session_id} was restored concurrently."
+                        )
+                        return True
+                    raise ConflictError(  # noqa: TRY003, TRY301
+                        f"Restore for writing session {session_id} affected 0 rows.",
+                        entity="writing_sessions",
+                        entity_id=session_id,
+                    )
+
+                logger.info(
+                    f"Restored writing session {session_id} "
+                    f"(was version {current_version}), new version {next_version_val}."
+                )
+                return True
+        except ConflictError:
+            raise
+        except Exception as exc:
+            raise CharactersRAGDBError(
+                f"Database error restoring writing session {session_id}: {exc}"
+            ) from exc
+
     def clone_writing_session(self, session_id: str, *, name: str | None = None) -> dict[str, Any]:
         """
         Clone a writing session, optionally renaming the copy.
