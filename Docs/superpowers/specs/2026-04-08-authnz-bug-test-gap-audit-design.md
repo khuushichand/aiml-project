@@ -55,6 +55,13 @@ Representative endpoint and test entry points should include at least:
 - `tldw_Server_API/tests/AuthNZ/unit/`
 - `tldw_Server_API/tests/AuthNZ/property/`
 
+Representative admin/authz endpoint selection should favor:
+
+- endpoints that issue, refresh, revoke, or invalidate credentials
+- endpoints that mutate RBAC, roles, permissions, or admin-only state
+- endpoints whose protection depends on shared AuthNZ dependencies rather than local ad hoc checks
+- an adjacent non-auth endpoint only when it is needed to confirm that AuthNZ enforcement is actually applied at a real caller boundary
+
 Expansion beyond the initial hotspot set should be justified by one or more of:
 
 - high fan-out into other AuthNZ flows
@@ -168,6 +175,10 @@ The resulting review should be a concise, prioritized audit report with:
 2. Probable risks or open questions that materially affect confidence
 3. Improvements that would reduce future AuthNZ regression risk
 4. Brief residual-risk notes where coverage or runtime verification remains incomplete
+5. A coverage note listing:
+   - hotspot files reviewed directly
+   - files or tests only spot-checked
+   - notable scoped surfaces not reviewed deeply and why
 
 ## Success Criteria
 
