@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { Drawer, Tabs, Modal, Input, Empty, Skeleton, Button, message } from "antd"
 import type { InputRef } from "antd"
 import {
+  AlertTriangle,
   FileText,
   MessageSquare,
   Sparkles,
@@ -821,6 +822,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const workspaceTransitionTimerRef = React.useRef<number | null>(null)
   const [showStorageQuotaWarning, setShowStorageQuotaWarning] =
     React.useState(false)
+  const [storageHighUsageDismissed, setStorageHighUsageDismissed] =
+    React.useState(false)
   const [showCrossTabSyncWarning, setShowCrossTabSyncWarning] =
     React.useState(false)
   const [crossTabChangedFields, setCrossTabChangedFields] = React.useState<
@@ -835,6 +838,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
     accountUsedBytes: null,
     accountQuotaBytes: null
   })
+  const storageUsagePercent = React.useMemo(() => {
+    if (
+      workspaceStorageUsage.quotaBytes <= 0 ||
+      !Number.isFinite(workspaceStorageUsage.usedBytes) ||
+      !Number.isFinite(workspaceStorageUsage.quotaBytes)
+    ) {
+      return 0
+    }
+    return Math.round(
+      (workspaceStorageUsage.usedBytes / workspaceStorageUsage.quotaBytes) * 100
+    )
+  }, [workspaceStorageUsage.usedBytes, workspaceStorageUsage.quotaBytes])
+
+  const showStorageHighUsageWarning =
+    statusGuardrailsEnabled &&
+    !storageHighUsageDismissed &&
+    !showStorageQuotaWarning &&
+    storageUsagePercent >= 80
+
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const onboardingInitializedRef = React.useRef(false)
   const [showTutorialPrompt, setShowTutorialPrompt] = React.useState(false)
@@ -2174,7 +2196,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       </a>
 
       {statusGuardrailsEnabled &&
-        (showStorageQuotaWarning || showCrossTabSyncWarning) && (
+        (showStorageQuotaWarning || showStorageHighUsageWarning || showCrossTabSyncWarning) && (
         <div className="space-y-2 border-b border-border bg-surface px-3 py-2">
           {showStorageQuotaWarning && (
             <div
@@ -2193,6 +2215,33 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 type="button"
                 className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
                 onClick={() => setShowStorageQuotaWarning(false)}
+              >
+                {t("common:dismiss", "Dismiss")}
+              </button>
+            </div>
+          )}
+
+          {showStorageHighUsageWarning && (
+            <div
+              data-testid="workspace-storage-high-usage-banner"
+              className="flex flex-wrap items-center justify-between gap-2 rounded border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-text"
+              role="status"
+              aria-live="polite"
+            >
+              <span className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+                <span>
+                  {t(
+                    "playground:workspace.storageHighUsage",
+                    "Storage is {{percent}}% full. Consider archiving unused workspaces to free space.",
+                    { percent: storageUsagePercent }
+                  )}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
+                onClick={() => setStorageHighUsageDismissed(true)}
               >
                 {t("common:dismiss", "Dismiss")}
               </button>
