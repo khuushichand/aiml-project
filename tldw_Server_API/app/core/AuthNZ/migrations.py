@@ -1,7 +1,6 @@
 # migrations.py
 # Description: Database migrations for AuthNZ module tables
 #
-from __future__ import annotations
 # Imports
 import contextlib
 import json

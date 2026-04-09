@@ -427,5 +427,9 @@ def bootstrap_guardian_moderation_runtime(
         dependent_user_id=str(dependent_user_id),
         chat_type=normalized_chat_type,
         guardian_db=guardian_db,
-        supervised_engine=get_supervised_policy_engine(guardian_db),
+        supervised_engine=(
+            get_supervised_policy_engine(guardian_db)
+            if guardian_db is not None
+            else None
+        ),
     )

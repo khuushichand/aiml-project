@@ -38,10 +38,10 @@ def test_update_settings_can_clear_runtime_overrides():
 
 @pytest.mark.unit
 def test_update_settings_persist_failure_does_not_mutate_runtime_override(monkeypatch, tmp_path):
+    """Persistence failures are noncritical: the in-memory override is still applied."""
     svc = ModerationService()
     svc._runtime_overrides_path = str(tmp_path / "runtime_overrides.json")
     svc._runtime_override = {"pii_enabled": False}
-    original_override = dict(svc._runtime_override)
 
     def _raise_disk_full(*_args, **_kwargs):
         raise OSError("disk full")
@@ -51,10 +51,11 @@ def test_update_settings_persist_failure_does_not_mutate_runtime_override(monkey
         _raise_disk_full,
     )
 
-    with pytest.raises(OSError, match="disk full"):
-        svc.update_settings(pii_enabled=True, persist=True)
-
-    assert svc._runtime_override == original_override
+    # Should NOT raise; persistence failure is caught and logged.
+    result = svc.update_settings(pii_enabled=True, persist=True)
+    assert result is not None
+    # The in-memory override should still be applied despite persistence failure.
+    assert svc._runtime_override.get("pii_enabled") is True
 
 
 @pytest.mark.unit

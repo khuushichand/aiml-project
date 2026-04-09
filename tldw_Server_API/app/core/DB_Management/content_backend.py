@@ -167,7 +167,7 @@ except Exception:  # pragma: no cover
 _EVICTION_GRACE_SECONDS: float = 5.0
 
 
-def _close_backend_pool(backend) -> None:
+def _close_backend_pool(backend: DatabaseBackend | None) -> None:
     """Best-effort close for pooled shared content backends."""
     if backend is None:
         return

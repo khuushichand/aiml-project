@@ -136,7 +136,7 @@ class ModerationTestRequest(BaseModel):
         None,
         description="Dependent user ID to simulate for guardian overlay; defaults to user_id when omitted",
     )
-    chat_type: Optional[str] = Field(
+    chat_type: Optional[Literal["regular", "character", "persona"]] = Field(
         None,
         description="Chat type to simulate for guardian overlay; defaults to 'regular' when omitted",
     )
@@ -150,7 +150,7 @@ class ModerationTestRequest(BaseModel):
 
 class ModerationTestResponse(BaseModel):
     flagged: bool
-    action: Literal['block', 'redact', 'warn', 'pass']
+    action: Literal['block', 'redact', 'warn', 'notify', 'pass']
     sample: Optional[str] = None
     redacted_text: Optional[str] = None
     effective: dict[str, Any]
