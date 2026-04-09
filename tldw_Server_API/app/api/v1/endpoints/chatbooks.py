@@ -8,6 +8,7 @@ Chatbook API Endpoints
 Provides REST API endpoints for creating, importing, and managing chatbooks.
 """
 
+import asyncio
 import os
 import shutil
 from datetime import datetime, timezone
@@ -137,18 +138,22 @@ async def chatbooks_health():
     try:
         base_data_dir = DatabasePaths.get_user_db_base_dir()
 
-        exists = base_data_dir.exists()
-        writable = False
-        if exists:
-            try:
-                test_file = base_data_dir / ".chatbooks_health_check"
-                test_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(test_file, "w") as f:
-                    f.write("ok")
-                os.remove(test_file)
-                writable = True
-            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
-                writable = False
+        def _check_storage() -> tuple[bool, bool]:
+            _exists = base_data_dir.exists()
+            _writable = False
+            if _exists:
+                try:
+                    test_file = base_data_dir / ".chatbooks_health_check"
+                    test_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(test_file, "w") as f:
+                        f.write("ok")
+                    os.remove(test_file)
+                    _writable = True
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
+                    pass
+            return _exists, _writable
+
+        exists, writable = await asyncio.to_thread(_check_storage)
 
         health["components"]["storage_base"] = {
             "path": str(base_data_dir),
