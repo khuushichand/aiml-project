@@ -203,6 +203,9 @@ const OUTPUT_GROUPS: Array<{
   }
 ]
 
+// Primary output types shown by default; remaining are collapsed behind an expander
+const PRIMARY_OUTPUT_TYPES = new Set<ArtifactType>(["summary", "flashcards", "quiz", "report"])
+
 // Status icons for artifacts
 const STATUS_ICONS: Record<
   GeneratedArtifact["status"],
@@ -224,8 +227,6 @@ import {
   OUTPUT_VIRTUAL_ROW_HEIGHT,
   OUTPUT_VIRTUAL_OVERSCAN
 } from "./hooks/useStudioDerivedState"
-
-const RECENT_OUTPUT_TYPES_COUNT = 3
 
 const MindMapArtifactViewer = React.lazy(() =>
   import("./ArtifactModalContent").then((module) => ({
@@ -614,7 +615,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
     generationPhase,
     chatModels: _chatModels,
     loadingChatModels,
-    recentOutputTypes,
+    recentOutputTypes: _recentOutputTypes,
     slidesVisualStyles: _slidesVisualStyles,
     slidesVisualStylesLoading,
     slidesVisualStyleValueLocal: _slidesVisualStyleValueLocal,
@@ -638,14 +639,6 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       setSlidesVisualStyleValue(_slidesVisualStyleValueLocal)
     }
   }, [slidesVisualStyleValue, _slidesVisualStyleValueLocal])
-
-  // Initialize moreOutputsExpanded based on recent output types
-  useEffect(() => {
-    if (recentOutputTypes.length === 0) {
-      setMoreOutputsExpanded(true)
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // Reset flashcard deck selection if the deck no longer exists
   useEffect(() => {
@@ -1282,10 +1275,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           </div>
         )}
         {(() => {
-          const recentTypes = recentOutputTypes.slice(0, RECENT_OUTPUT_TYPES_COUNT)
-          const allTypes = OUTPUT_BUTTONS.map((b) => b.type)
-          const remainingTypes = allTypes.filter((t) => !recentTypes.includes(t))
-          const hasRecent = recentTypes.length > 0
+          const primaryButtons = OUTPUT_BUTTONS.filter((b) => PRIMARY_OUTPUT_TYPES.has(b.type))
+          const secondaryButtons = OUTPUT_BUTTONS.filter((b) => !PRIMARY_OUTPUT_TYPES.has(b.type))
 
           const artifactStatusForType = (type: ArtifactType): "completed" | "failed" | null => {
             const match = generatedArtifacts.find((a) => a.type === type)
@@ -1360,53 +1351,33 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
           }
 
           return (
-            <div className="space-y-4">
-              {hasRecent && (
-                <section aria-label={t("playground:studio.recentOutputs", "Recent")}>
-                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                    {t("playground:studio.recentOutputs", "Recent")}
-                  </h4>
-                  <div className="grid grid-cols-3 gap-3">
-                    {recentTypes.map(renderOutputButton)}
-                  </div>
-                </section>
-              )}
-              {hasRecent && !moreOutputsExpanded && (
-                <button
-                  type="button"
-                  onClick={() => setMoreOutputsExpanded(true)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                  {t("playground:studio.moreOutputs", "More outputs...")}
-                </button>
-              )}
-              {(moreOutputsExpanded || !hasRecent) &&
-                OUTPUT_GROUPS.map((group) => {
-                  const groupTypes = hasRecent
-                    ? group.types.filter((t) => remainingTypes.includes(t))
-                    : group.types
-                  if (groupTypes.length === 0) return null
-                  return (
-                    <section key={group.id} aria-label={group.label}>
-                      <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                        {group.label}
-                      </h4>
-                      <div className="grid grid-cols-2 gap-3">
-                        {groupTypes.map(renderOutputButton)}
-                      </div>
-                    </section>
-                  )
-                })}
-              {hasRecent && moreOutputsExpanded && (
-                <button
-                  type="button"
-                  onClick={() => setMoreOutputsExpanded(false)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-2 text-xs font-medium text-text-muted transition hover:border-primary/40 hover:text-text"
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                  {t("playground:studio.lessOutputs", "Show less")}
-                </button>
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                {primaryButtons.map((btn) => renderOutputButton(btn.type))}
+              </div>
+
+              {secondaryButtons.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setMoreOutputsExpanded((prev) => !prev)}
+                    className="mt-2 flex w-full items-center justify-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-surface2 transition-colors"
+                    aria-expanded={moreOutputsExpanded}
+                  >
+                    {moreOutputsExpanded
+                      ? t("playground:studio.lessOutputs", "Show fewer")
+                      : t("playground:studio.moreOutputs", `More outputs (${secondaryButtons.length})`)}
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 transition-transform ${moreOutputsExpanded ? "rotate-180" : ""}`}
+                    />
+                  </button>
+
+                  {moreOutputsExpanded && (
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {secondaryButtons.map((btn) => renderOutputButton(btn.type))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )
