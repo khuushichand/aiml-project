@@ -30,6 +30,7 @@ help:
 	@echo "  make quickstart-docker-webui Docker API + WebUI"
 	@echo "  make monitoring-up           Start Prometheus + Grafana"
 	@echo "  make monitoring-down         Stop monitoring stack"
+	@echo "  make monitoring-reset        Stop monitoring + delete volumes"
 	@echo ""
 	@echo "See Docs/Getting_Started/README.md for full setup guides."
 	@echo ""
@@ -242,21 +243,25 @@ pg-restore:
 # -----------------------------------------------------------------------------
 # Monitoring stack (Prometheus + Grafana)
 # -----------------------------------------------------------------------------
-.PHONY: monitoring-up monitoring-down monitoring-logs
+.PHONY: monitoring-up monitoring-down monitoring-reset monitoring-logs
 
 MON_STACK := Dockerfiles/Monitoring/docker-compose.monitoring.yml
 
 monitoring-up:
-	@echo "[monitoring] Starting Prometheus + Grafana"
-	docker compose -f $(MON_STACK) up -d
-	@echo "[monitoring] Grafana: http://localhost:3000 (admin/admin). Prometheus: http://localhost:9090"
+	@echo "[monitoring] Starting Prometheus + Grafana + Alertmanager"
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(MON_STACK) up -d
+	@echo "[monitoring] Grafana: http://localhost:$${GRAFANA_PORT:-3002} (admin/admin). Prometheus: http://localhost:9090. Alertmanager: http://localhost:9093"
 
 monitoring-down:
-	@echo "[monitoring] Stopping Prometheus + Grafana"
-	docker compose -f $(MON_STACK) down -v
+	@echo "[monitoring] Stopping monitoring stack"
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(MON_STACK) down
+
+monitoring-reset:
+	@echo "[monitoring] Stopping monitoring stack and removing volumes"
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(MON_STACK) down -v
 
 monitoring-logs:
-	docker compose -f $(MON_STACK) logs -f
+	docker compose --env-file $(TLDW_ENV_FILE) -f $(MON_STACK) logs -f
 
 # -----------------------------------------------------------------------------
 # Dev Server (mock mode)

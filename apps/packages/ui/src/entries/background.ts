@@ -2734,9 +2734,11 @@ export default defineBackground({
             if (!resp.ok) {
               const ct = resp.headers.get('content-type') || ''
               let errMsg: any = resp.statusText
+              let errDetails: any = undefined
               if (ct.includes('application/json')) {
                 const j = await resp.json().catch(() => null)
                 if (j && (j.detail || j.error || j.message)) errMsg = j.detail || j.error || j.message
+                errDetails = j
               } else {
                 const t = await resp.text().catch(() => null)
                 if (t) errMsg = t
@@ -2744,7 +2746,8 @@ export default defineBackground({
               safePost({
                 event: "error",
                 status: resp.status,
-                message: formatErrorMessage(errMsg, `HTTP ${resp.status}`)
+                message: formatErrorMessage(errMsg, `HTTP ${resp.status}`),
+                details: errDetails,
               })
               return
             }

@@ -233,6 +233,12 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import (
+    LimitEnforcer,
+    get_billing_org_id,
+    require_within_limit,
+)
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory, enforcement_enabled, get_billing_enforcer
 from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import derive_hmac_key
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
@@ -251,6 +257,7 @@ from tldw_Server_API.app.core.Persona.exemplar_runtime import (
     append_persona_exemplar_sections,
 )
 from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
@@ -2218,6 +2225,7 @@ async def _persist_system_message_if_needed(
         status.HTTP_404_NOT_FOUND: {"description": "Resource not found (e.g., character)."},
         status.HTTP_409_CONFLICT: {"description": "Data conflict (e.g., version mismatch during DB operation)."},
         status.HTTP_413_CONTENT_TOO_LARGE: {"description": "Request payload too large (e.g., too many messages, too many images)."},
+        status.HTTP_402_PAYMENT_REQUIRED: {"description": "Billing limit exceeded. Upgrade plan to continue."},
         status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Rate limit exceeded."},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal server error."},
         status.HTTP_502_BAD_GATEWAY: {"description": "Error received from an upstream LLM provider."},
@@ -2229,6 +2237,7 @@ async def _persist_system_message_if_needed(
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.completions", count_as="call")),
         Depends(get_auth_principal),  # Establish AuthPrincipal/AuthContext early for guardrails
         Depends(enforce_llm_budget),  # Hard budget stop before handler runs
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),  # Billing: daily API call limit
     ]
 )
 async def create_chat_completion(
@@ -2242,6 +2251,7 @@ async def create_chat_completion(
     X_API_KEY: str = Header(None, alias="X-API-KEY", description="Direct API key header for single-user mode."),
     audit_service=Depends(get_audit_service_for_user),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+    billing_org_id: int | None = Depends(get_billing_org_id),
     # background_tasks: BackgroundTasks = Depends(), # Replaced by starlette.background.BackgroundTask for StreamingResponse
 ):
     """
@@ -2438,6 +2448,10 @@ async def create_chat_completion(
     _rg_handle_id = None
     _rg_policy_id = None
     rg_finalized = False
+
+    # Billing: initialized after request_json is available (see below)
+    _billing_enforcer: LimitEnforcer | None = None
+    _billing_enforcer_entered = False
 
     _track_request_cm = metrics.track_request(
         provider=provider,
@@ -2951,6 +2965,24 @@ async def create_chat_completion(
             finally:
                 await _decrement_active_request(user_id)
 
+        # Billing: LLM token enforcement via context manager (tracks actual usage)
+        if enforcement_enabled() and billing_org_id is not None and not _billing_enforcer_entered:
+            try:
+                _est = estimate_tokens_from_json(
+                    _sanitize_json_for_rate_limit(request_json)
+                ) if request_json else 1000
+                _billing_enforcer = LimitEnforcer(
+                    billing_org_id,
+                    LimitCategory.LLM_TOKENS_MONTH,
+                    estimated_units=max(1, _est),
+                )
+                await _billing_enforcer.__aenter__()
+                _billing_enforcer_entered = True
+            except HTTPException:
+                raise
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _billing_err:
+                logger.debug(f"Billing token pre-check failed (fail-open): {_billing_err}")
+                _billing_enforcer = None
         try:
             input_moderation_chat_type = await resolve_input_moderation_chat_type(
                 chat_db=chat_db,
@@ -3942,9 +3974,8 @@ async def create_chat_completion(
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
-                    rg_commit_cb=(
-                        (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
-                        if _rg_handle_id else None
+                    rg_commit_cb=_build_streaming_commit_cb(
+                        _rg_handle_id, request, _billing_enforcer, billing_org_id,
                     ),
                     rg_refund_cb=(
                         (lambda **_kwargs: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": 0}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
@@ -4081,6 +4112,15 @@ async def create_chat_completion(
                         rg_finalized = True
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_commit_err:
                     logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
+                # Billing: record actual token usage for non-streaming
+                if _billing_enforcer is not None:
+                    try:
+                        usage = (encoded_payload or {}).get("usage") if isinstance(encoded_payload, dict) else None
+                        total = int((usage or {}).get("total_tokens") or 0) if usage else 0
+                        if total > 0:
+                            _billing_enforcer.record_actual(total)
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _billing_err:
+                        logger.debug(f"Billing token recording failed: {_billing_err}")
                 alias_headers = _build_persona_alias_deprecation_headers(persona_alias_used)
                 return JSONResponse(content=encoded_payload, headers=alias_headers or None)
 
@@ -4192,7 +4232,14 @@ async def create_chat_completion(
             # Do not leak raw HTTPException details from underlying call sites.
             # For unexpected HTTPException from lower layers (e.g., provider shims),
             # normalize to a generic 500 to match test expectations.
+            # However, billing (402) and rate-limit (429) responses must propagate
+            # to the client unchanged so callers can react appropriately.
             if isinstance(e_chat, HTTPException):
+                if e_chat.status_code in (
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                ):
+                    raise
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unexpected internal server error occurred."
@@ -4337,6 +4384,15 @@ async def create_chat_completion(
                     rg_finalized = True
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_refund_err:
                 logger.debug(f"RG tokens refund skipped/failed: {_rg_refund_err}")
+        # Billing: finalize the LimitEnforcer context manager.
+        # For streaming: the callback handles recording via apply_usage_delta
+        # directly, so __aexit__ only needs to run for non-streaming paths
+        # (where record_actual was called before __aexit__).
+        if _billing_enforcer is not None and _billing_enforcer_entered:
+            try:
+                await _billing_enforcer.__aexit__(exc_type, exc_value, exc_tb)
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _billing_exit_err:
+                logger.debug(f"Billing enforcer exit failed: {_billing_exit_err}")
         await _track_request_cm.__aexit__(exc_type, exc_value, exc_tb)
 
 
@@ -4410,6 +4466,83 @@ def _sanitize_json_for_rate_limit(request_json: str) -> str:
         return pattern.sub(r"\1<omitted>", request_json)
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return request_json
+
+
+def _build_streaming_commit_cb(
+    rg_handle_id: str | None,
+    request: Request | None,
+    billing_enforcer: LimitEnforcer | None,
+    billing_org_id: int | None,
+) -> Callable[[int], Any] | None:
+    """Build the rg_commit_cb for streaming chat that handles both RG and billing.
+
+    The callback is invoked by chat_service when the stream finishes with the
+    total estimated token count.  It must:
+      - Record billing usage via apply_usage_delta (hot cache) AND schedule a
+        durable cost-units ledger write so usage survives cache expiry/restart.
+      - Return an awaitable that the caller awaits, combining the durable
+        ledger write and the RG governor commit.
+    """
+    if not rg_handle_id and not billing_enforcer:
+        return None
+
+    def _commit(total: int) -> Any:
+        tokens = int(total)
+
+        # Billing: record streaming tokens into the enforcer hot cache.
+        if billing_enforcer is not None and billing_org_id is not None:
+            try:
+                billing_enforcer.record_actual(tokens)
+                get_billing_enforcer().apply_usage_delta(
+                    billing_org_id, LimitCategory.LLM_TOKENS_MONTH, tokens,
+                )
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "Billing streaming cache update failed (fail-open): "
+                    "org_id=%s, category=LLM_TOKENS_MONTH, tokens=%s, error=%s",
+                    billing_org_id, tokens, exc,
+                )
+
+        # Build an async wrapper that performs the durable ledger write
+        # and the RG governor commit.  The caller checks for __await__
+        # and awaits the result if present.
+        rg_coro = None
+        if rg_handle_id and request is not None:
+            gov = getattr(request.app.state, "rg_governor", None)
+            if gov is not None:
+                rg_coro = gov.commit(rg_handle_id, actuals={"tokens": tokens})
+
+        needs_durable = (
+            billing_enforcer is not None
+            and billing_org_id is not None
+            and tokens > 0
+        )
+
+        if not needs_durable and rg_coro is None:
+            return None
+
+        async def _durable_and_rg() -> None:
+            # Durable cost-units ledger write so streaming usage persists
+            # across cache expiry / server restart.
+            if needs_durable:
+                try:
+                    await cost_units.record_cost_units_for_entity(
+                        entity_scope="org",
+                        entity_value=str(billing_org_id),
+                        tokens=tokens,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Billing streaming durable ledger write failed (fail-open): "
+                        "org_id=%s, category=LLM_TOKENS_MONTH, tokens=%s, error=%s",
+                        billing_org_id, tokens, exc,
+                    )
+            if rg_coro is not None:
+                await rg_coro
+
+        return _durable_and_rg()
+
+    return _commit
 
 
 def _estimate_tokens_for_queue(request_json: str) -> int:

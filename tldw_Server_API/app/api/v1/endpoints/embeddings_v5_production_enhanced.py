@@ -51,6 +51,8 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
@@ -2194,7 +2196,15 @@ async def create_embeddings_batch_async(
     response_model=CreateEmbeddingResponse,
     status_code=status.HTTP_200_OK,
     summary="Create embeddings (enhanced with circuit breaker)",
-    dependencies=[Depends(rbac_rate_limit("embeddings.create"))]
+    dependencies=[
+        Depends(rbac_rate_limit("embeddings.create")),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {
+            "description": "Billing limit exceeded. Upgrade plan to continue."
+        },
+    },
 )
 async def create_embedding_endpoint(
     request: Request,
@@ -2869,7 +2879,15 @@ class EmbeddingsBatchResponse(BaseModel):
     "/embeddings/batch",
     response_model=EmbeddingsBatchResponse,
     summary="Create embeddings for a batch of texts",
-    dependencies=[Depends(rbac_rate_limit("embeddings.create"))],
+    dependencies=[
+        Depends(rbac_rate_limit("embeddings.create")),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {
+            "description": "Billing limit exceeded. Upgrade plan to continue."
+        },
+    },
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,

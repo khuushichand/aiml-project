@@ -20,6 +20,13 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import resolve_org_id_for_principal
+from tldw_Server_API.app.core.Resource_Governance import cost_units
+from tldw_Server_API.app.core.Billing.enforcement import (
+    LimitCategory,
+    enforcement_enabled,
+    get_billing_enforcer,
+)
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
     get_chacha_db_for_user_id,
@@ -948,6 +955,35 @@ async def websocket_transcribe(
     ):
         return
 
+    # Billing: check transcription minutes quota before streaming begins
+    _ws_billing_org_id: int | None = None
+    if enforcement_enabled():
+        try:
+            _ws_principal = get_websocket_auth_principal(websocket)
+            if _ws_principal is not None:
+                _ws_billing_org_id = await resolve_org_id_for_principal(_ws_principal)
+                if _ws_billing_org_id is not None:
+                    _enforcer = get_billing_enforcer()
+                    _result = await _enforcer.check_limit(
+                        _ws_billing_org_id,
+                        LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                        requested_units=1,
+                    )
+                    if _result.should_block:
+                        await _outer_stream.send_json({
+                            "type": "error",
+                            "code": "billing_limit_exceeded",
+                            "message": _result.message or "Transcription minutes quota exceeded. Please upgrade your plan.",
+                            "category": "transcription_minutes_month",
+                            "current": _result.current,
+                            "limit": _result.limit,
+                            "upgrade_url": "/billing/plans",
+                        })
+                        await websocket.close(code=_policy_close_code(), reason="billing_limit_exceeded")
+                        return
+        except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as _billing_err:
+            logger.debug(f"WS billing pre-check failed (fail-open): {_billing_err}")
+
     stt_metrics_provider = "other"
     stt_metrics_model = "other"
     stt_request_status = "ok"
@@ -1231,6 +1267,7 @@ async def websocket_transcribe(
         # Resource Governor: acquire a 'streams' concurrency lease (policy resolved via route_map)
         # Track and enforce minutes chunk-by-chunk
         used_minutes = 0.0
+        _billing_minutes_accumulator = 0.0  # fractional minutes pending billing flush
         # Bounded fail-open budget in minutes if DB is unavailable while streaming
         FAIL_OPEN_CAP_MINUTES = _get_failopen_cap_minutes()
         failopen_remaining = FAIL_OPEN_CAP_MINUTES
@@ -1327,6 +1364,30 @@ async def websocket_transcribe(
                         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                             logger.debug(f"metrics increment failed (audio_failopen_cap_db_record): error={m_err}")
                         raise _QuotaExceeded("daily_minutes") from None
+            # Billing: accumulate fractional minutes; flush to cache when >= 1
+            nonlocal _billing_minutes_accumulator
+            if _ws_billing_org_id is not None:
+                _billing_minutes_accumulator += minutes_chunk
+                if _billing_minutes_accumulator >= 1.0:
+                    _flush = int(_billing_minutes_accumulator)
+                    _billing_minutes_accumulator -= _flush
+                    try:
+                        get_billing_enforcer().apply_usage_delta(
+                            _ws_billing_org_id,
+                            LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                            _flush,
+                        )
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                        pass  # fail-open
+                    # Durable cost-units ledger write
+                    try:
+                        await cost_units.record_cost_units_for_entity(
+                            entity_scope="org",
+                            entity_value=str(_ws_billing_org_id),
+                            minutes=float(_flush),
+                        )
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                        pass  # fail-open
 
         async def _on_heartbeat() -> None:
             """
@@ -1464,6 +1525,26 @@ async def websocket_transcribe(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
                 logger.debug(f"metrics increment failed (audio stream_outer_handler_error): error={m_err}")
     finally:
+        # Billing: flush any remaining fractional minutes before closing
+        if _ws_billing_org_id is not None and _billing_minutes_accumulator >= 0.5:
+            _final_flush = max(1, int(_billing_minutes_accumulator + 0.5))
+            try:
+                get_billing_enforcer().apply_usage_delta(
+                    _ws_billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    _final_flush,
+                )
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                pass
+            # Durable cost-units ledger write
+            try:
+                await cost_units.record_cost_units_for_entity(
+                    entity_scope="org",
+                    entity_value=str(_ws_billing_org_id),
+                    minutes=float(_final_flush),
+                )
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                pass
         try:
             await websocket.close()
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as e:
