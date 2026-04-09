@@ -1338,7 +1338,12 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   ) : (
                     <Icon className="h-5 w-5" />
                   )}
-                  <span className="mt-1.5 text-xs font-medium">{label}</span>
+                  <span className="mt-1.5 flex flex-col items-center text-center">
+                    <span className="text-xs font-medium">{label}</span>
+                    <span className="text-[10px] leading-tight text-text-muted font-normal line-clamp-2 mt-0.5">
+                      {description}
+                    </span>
+                  </span>
                   {artifactStatus === "completed" && (
                     <CheckCircle className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-success" />
                   )}
