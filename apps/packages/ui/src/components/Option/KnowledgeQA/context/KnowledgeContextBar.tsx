@@ -312,7 +312,6 @@ export function KnowledgeContextBar({
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [profileSaveMode, setProfileSaveMode] = useState(false)
   const [profileNameInput, setProfileNameInput] = useState("")
-  const profileMenuRef = useRef<HTMLDivElement | null>(null)
 
   const sourceMenuRef = useRef<HTMLDivElement | null>(null)
   const granularMenuRef = useRef<HTMLDivElement | null>(null)
@@ -421,24 +420,19 @@ export function KnowledgeContextBar({
   }, [])
 
   useEffect(() => {
-    if (!sourceMenuOpen && !granularMenuOpen && !profileMenuOpen) return
+    if (!sourceMenuOpen && !granularMenuOpen) return
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node
       if (sourceMenuRef.current?.contains(target)) return
       if (granularMenuRef.current?.contains(target)) return
-      if (profileMenuRef.current?.contains(target)) return
       setSourceMenuOpen(false)
       setGranularMenuOpen(false)
-      setProfileMenuOpen(false)
-      setProfileSaveMode(false)
     }
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       setSourceMenuOpen(false)
       setGranularMenuOpen(false)
-      setProfileMenuOpen(false)
-      setProfileSaveMode(false)
     }
 
     document.addEventListener("mousedown", handleClickOutside)
@@ -447,7 +441,7 @@ export function KnowledgeContextBar({
       document.removeEventListener("mousedown", handleClickOutside)
       document.removeEventListener("keydown", handleEscape)
     }
-  }, [sourceMenuOpen, granularMenuOpen, profileMenuOpen])
+  }, [sourceMenuOpen, granularMenuOpen])
 
   useEffect(() => {
     if (!granularMenuOpen || granularLoaded || granularLoading) return
@@ -537,7 +531,11 @@ export function KnowledgeContextBar({
     (profile: SearchProfile) => {
       onSourcesChange(profile.sources)
       onPresetChange(profile.preset)
-      if (profile.enableWebFallback !== webEnabled) {
+      // Capture the current web-fallback state at call time to avoid stale
+      // closure issues. Only a toggle is available (no direct setter), so we
+      // compare against the live value before firing.
+      const currentWeb = webEnabled
+      if (profile.enableWebFallback !== currentWeb) {
         onToggleWeb()
       }
       setProfileMenuOpen(false)
@@ -923,35 +921,23 @@ export function KnowledgeContextBar({
           menuAlign="right"
         />
 
-        <div className="relative" ref={profileMenuRef}>
-          <Tooltip title="Save or load search profiles to quickly switch between common configurations">
-            <button
-              type="button"
-              onClick={() => {
-                setProfileMenuOpen((prev) => !prev)
-                setProfileSaveMode(false)
-                setProfileNameInput("")
-              }}
-              className={cn(
-                "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors",
-                profileMenuOpen
-                  ? "border-primary/40 bg-primary/10 text-primaryStrong"
-                  : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-              )}
-              aria-expanded={profileMenuOpen}
-              aria-controls={profileMenuOpen ? "knowledge-profile-menu" : undefined}
-            >
-              <Bookmark className="h-3.5 w-3.5" />
-              Profiles
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-          </Tooltip>
-          {profileMenuOpen ? (
+        <Popover
+          trigger="click"
+          open={profileMenuOpen}
+          onOpenChange={(open) => {
+            setProfileMenuOpen(open)
+            if (!open) {
+              setProfileSaveMode(false)
+              setProfileNameInput("")
+            }
+          }}
+          placement="topLeft"
+          content={
             <div
               id="knowledge-profile-menu"
               role="menu"
               aria-label="Saved search profiles"
-              className="absolute left-0 bottom-full z-30 mb-2 w-64 rounded-lg border border-border/80 bg-surface p-2 shadow-lg"
+              className="w-60"
             >
               <div className="mb-1.5 px-1 text-xs font-semibold text-text-muted">
                 Saved Profiles
@@ -1039,8 +1025,26 @@ export function KnowledgeContextBar({
                 )}
               </div>
             </div>
-          ) : null}
-        </div>
+          }
+        >
+          <Tooltip title="Save or load search profiles to quickly switch between common configurations">
+            <button
+              type="button"
+              className={cn(
+                "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors",
+                profileMenuOpen
+                  ? "border-primary/40 bg-primary/10 text-primaryStrong"
+                  : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+              )}
+              aria-expanded={profileMenuOpen}
+              aria-controls={profileMenuOpen ? "knowledge-profile-menu" : undefined}
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+              Profiles
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        </Popover>
 
         <button
           type="button"

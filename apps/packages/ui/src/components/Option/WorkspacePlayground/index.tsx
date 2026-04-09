@@ -2341,7 +2341,38 @@ const WorkspacePlaygroundBody: React.FC = () => {
       )}
 
 
-      {isMobile ? (
+      {/* Tutorial prompt banner (shared between mobile and desktop layouts) */}
+      {(() => {
+        const tutorialPromptBanner = showTutorialPrompt ? (
+          <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
+            <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  startTutorial("workspace-playground-basics")
+                  dismissOnboardingOverlay()
+                  setShowTutorialPrompt(false)
+                }}
+                className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
+              >
+                Start tour
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  dismissOnboardingOverlay()
+                  setShowTutorialPrompt(false)
+                }}
+                className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ) : null
+
+        return isMobile ? (
         <>
           <WorkspaceHeader
             leftPaneOpen={false}
@@ -2367,34 +2398,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           />
           <SharedWorkspaceBanner />
 
-          {showTutorialPrompt && (
-            <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
-              <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    startTutorial("workspace-playground-basics")
-                    dismissOnboardingOverlay()
-                    setShowTutorialPrompt(false)
-                  }}
-                  className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
-                >
-                  Start tour
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    dismissOnboardingOverlay()
-                    setShowTutorialPrompt(false)
-                  }}
-                  className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
+          {tutorialPromptBanner}
 
           <WorkspaceStatusBar
             storageUsedBytes={workspaceStorageUsage.usedBytes}
@@ -2438,34 +2442,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
           />
           <SharedWorkspaceBanner />
 
-          {showTutorialPrompt && (
-            <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
-              <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    startTutorial("workspace-playground-basics")
-                    dismissOnboardingOverlay()
-                    setShowTutorialPrompt(false)
-                  }}
-                  className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
-                >
-                  Start tour
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    dismissOnboardingOverlay()
-                    setShowTutorialPrompt(false)
-                  }}
-                  className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
+          {tutorialPromptBanner}
 
           <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
@@ -2565,7 +2542,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
         </>
-      )}
+      )
+      })()}
 
       <Modal
         title={
@@ -2743,13 +2721,13 @@ const WorkspacePlaygroundBody: React.FC = () => {
         <div className="space-y-2 py-2 text-sm">
           {(
             [
-              [t("playground:workspace.shortcutFocusSources", "Focus sources pane"), `${isMac ? "\u2318" : "Ctrl+"} 1`],
-              [t("playground:workspace.shortcutFocusChat", "Focus chat pane"), `${isMac ? "\u2318" : "Ctrl+"} 2`],
-              [t("playground:workspace.shortcutFocusStudio", "Focus studio pane"), `${isMac ? "\u2318" : "Ctrl+"} 3`],
-              [t("playground:workspace.shortcutGlobalSearch", "Global search"), `${isMac ? "\u2318" : "Ctrl+"}K`],
-              [t("playground:workspace.shortcutNewNote", "New note"), `${isMac ? "\u2318" : "Ctrl+"}N`],
-              [t("playground:workspace.shortcutNewWorkspace", "New workspace"), `${isMac ? "\u21E7\u2318" : "Ctrl+Shift+"}N`],
-              [t("playground:workspace.shortcutUndo", "Undo"), `${isMac ? "\u2318" : "Ctrl+"}Z`],
+              [t("playground:workspace.shortcutFocusSources", "Focus sources pane"), isMac ? "\u2318 1" : "Ctrl + 1"],
+              [t("playground:workspace.shortcutFocusChat", "Focus chat pane"), isMac ? "\u2318 2" : "Ctrl + 2"],
+              [t("playground:workspace.shortcutFocusStudio", "Focus studio pane"), isMac ? "\u2318 3" : "Ctrl + 3"],
+              [t("playground:workspace.shortcutGlobalSearch", "Global search"), isMac ? "\u2318 K" : "Ctrl + K"],
+              [t("playground:workspace.shortcutNewNote", "New note"), isMac ? "\u2318 N" : "Ctrl + N"],
+              [t("playground:workspace.shortcutNewWorkspace", "New workspace"), isMac ? "\u21E7 \u2318 N" : "Ctrl + Shift + N"],
+              [t("playground:workspace.shortcutUndo", "Undo"), isMac ? "\u2318 Z" : "Ctrl + Z"],
               [t("playground:workspace.shortcutShowShortcuts", "Show shortcuts"), "?"]
             ] as const
           ).map(([label, keys]) => (
