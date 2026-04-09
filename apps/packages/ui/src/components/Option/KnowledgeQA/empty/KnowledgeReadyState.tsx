@@ -55,7 +55,7 @@ export function KnowledgeReadyState({
         </p>
       </div>
 
-      {/* How it works - collapsible for returning users */}
+      {/* How it works - adapts to user state */}
       <div className="mx-auto max-w-2xl rounded-lg border border-border/80 bg-surface2/60 px-4 py-3 text-left">
         <button
           type="button"
@@ -71,17 +71,42 @@ export function KnowledgeReadyState({
           )}
         </button>
         {guideExpanded && (
-          <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
-            <li>
-              <span className="font-medium text-text">1.</span> Select sources
-            </li>
-            <li>
-              <span className="font-medium text-text">2.</span> Ask a question
-            </li>
-            <li>
-              <span className="font-medium text-text">3.</span> Review cited answer
-            </li>
-          </ol>
+          isReturningUser ? (
+            <p className="mt-2 text-sm text-text-muted">
+              Select sources, ask a question, review cited answers.
+            </p>
+          ) : !hasSources ? (
+            <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
+              <li>
+                <span className="font-medium text-primary">1.</span>{" "}
+                <button
+                  type="button"
+                  onClick={onSelectSources}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Add documents first
+                </button>
+              </li>
+              <li>
+                <span className="font-medium text-text">2.</span> Ask a question
+              </li>
+              <li>
+                <span className="font-medium text-text">3.</span> Review cited answer
+              </li>
+            </ol>
+          ) : (
+            <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
+              <li>
+                <span className="font-medium text-text">1.</span> Select sources
+              </li>
+              <li>
+                <span className="font-medium text-text">2.</span> Ask a question
+              </li>
+              <li>
+                <span className="font-medium text-text">3.</span> Review cited answer
+              </li>
+            </ol>
+          )
         )}
       </div>
 

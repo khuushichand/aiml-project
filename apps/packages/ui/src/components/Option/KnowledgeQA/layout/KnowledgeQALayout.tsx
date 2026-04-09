@@ -539,7 +539,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
         ) : null}
       </main>
 
-      {/* Mode toggle + promotion toast */}
+      {/* Mode toggle + promotion toast + help link */}
       <div className="fixed bottom-4 right-4 z-20 flex flex-col items-end gap-2">
         {showPromotionToast && !isMobile && (
           <div className="rounded-lg border border-border bg-surface px-4 py-3 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -581,6 +581,15 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
             )}
           </button>
         )}
+
+        <a
+          href="https://github.com/rmusser01/tldw_server2#readme"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-text-muted hover:text-primary transition-colors"
+        >
+          Help &amp; Documentation
+        </a>
       </div>
     </div>
   )

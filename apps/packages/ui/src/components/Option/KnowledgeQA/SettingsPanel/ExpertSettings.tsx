@@ -190,6 +190,9 @@ export function ExpertSettings() {
 
   return (
     <div className="space-y-2">
+      <p className="text-xs text-text-muted pb-1">
+        Advanced settings for fine-tuning search behavior. Expand a section to adjust its options.
+      </p>
       {SECTIONS.map((section) => (
         <SettingsSection
           key={section.id}
