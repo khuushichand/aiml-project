@@ -9,6 +9,7 @@ type KnowledgeReadyStateProps = {
   onSelectSources: () => void
   hasSources: boolean
   hasRecentSession: boolean
+  webFallbackEnabled?: boolean
   className?: string
 }
 
@@ -19,6 +20,7 @@ export function KnowledgeReadyState({
   onSelectSources,
   hasSources,
   hasRecentSession,
+  webFallbackEnabled = false,
   className,
 }: KnowledgeReadyStateProps) {
   const isReturningUser = hasRecentSession
@@ -86,15 +88,28 @@ export function KnowledgeReadyState({
       </div>
 
       {!hasSources ? (
-        <div className="mx-auto max-w-2xl rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-left text-sm text-warn">
+        <div
+          className={cn(
+            "mx-auto max-w-2xl rounded-lg px-4 py-3 text-left text-sm",
+            webFallbackEnabled
+              ? "border border-info/30 bg-info/10 text-info"
+              : "border border-warn/30 bg-warn/10 text-warn"
+          )}
+        >
           <p>
-            No sources are selected. Start by choosing source categories, or use web
-            fallback for web-first searches.
+            {webFallbackEnabled
+              ? "No document sources are selected. Your search will use web results only."
+              : "No sources are selected. Select source categories to search, or enable web fallback."}
           </p>
           <button
             type="button"
             onClick={onSelectSources}
-            className="mt-2 inline-flex items-center rounded-md border border-warn/40 px-2.5 py-1 text-xs font-medium hover:bg-warn/20 transition-colors"
+            className={cn(
+              "mt-2 inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium transition-colors",
+              webFallbackEnabled
+                ? "border-info/40 hover:bg-info/20"
+                : "border-warn/40 hover:bg-warn/20"
+            )}
           >
             Open source settings
           </button>

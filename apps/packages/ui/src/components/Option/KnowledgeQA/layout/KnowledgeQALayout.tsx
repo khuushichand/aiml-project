@@ -408,6 +408,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                     onSelectSources={handleOpenSourceSelector}
                     hasSources={settings.sources.length > 0}
                     hasRecentSession={Boolean(recentHistoryItem)}
+                    webFallbackEnabled={settings.enable_web_fallback}
                   />
                   {/* Inline recent sessions for returning users in Simple mode */}
                   {effectiveSimple && recentSessions.length > 0 && (

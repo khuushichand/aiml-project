@@ -101,6 +101,8 @@ export function SearchBar({
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1)
   const hasResults = results.length > 0 || Boolean(answer)
+  const hasSources = settings.sources.length > 0
+  const noSourcesBlocked = !hasSources && !settings.enable_web_fallback
   const showHintEmphasis = !query && !isSearching && cycleCount === 0
   const showCharacterCount = query.length >= Math.floor(MAX_QUERY_LENGTH * 0.8)
   const historyQueries = useMemo(
@@ -219,12 +221,12 @@ export function SearchBar({
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault()
-      if (query.trim() && !isSearching) {
+      if (query.trim() && !isSearching && !noSourcesBlocked) {
         setShowSuggestions(false)
         search()
       }
     },
-    [query, isSearching, search]
+    [query, isSearching, noSourcesBlocked, search]
   )
 
   const applySuggestion = useCallback(
@@ -395,7 +397,8 @@ export function SearchBar({
         {/* Submit button */}
         <button
           type="submit"
-          disabled={!query.trim() || isSearching}
+          disabled={!query.trim() || isSearching || noSourcesBlocked}
+          title={noSourcesBlocked ? "Select source categories or enable web fallback to search" : undefined}
           className={cn(
             "absolute right-2 top-1/2 -translate-y-1/2",
             "px-4 py-2 rounded-lg",

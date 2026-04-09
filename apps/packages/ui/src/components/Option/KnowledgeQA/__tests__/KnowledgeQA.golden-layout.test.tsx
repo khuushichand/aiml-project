@@ -279,7 +279,7 @@ describe("KnowledgeQA golden layout guardrails", () => {
     expect(screen.getByText("How it works")).toBeInTheDocument()
     expect(
       screen.getByText(
-        /No sources are selected\. Start by choosing source categories/i
+        /No document sources are selected\. Your search will use web results only\./i
       )
     ).toBeInTheDocument()
     expect(screen.getByText("How do I add my first source?")).toBeInTheDocument()
