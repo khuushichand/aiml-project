@@ -251,26 +251,33 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
             )
 
     if owner_loop and owner_loop is not current_loop:
-        future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
-        _track_scheduled_stop_future(future)
+        try:
+            future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
+        except RuntimeError:
+            # Owner loop closed between our check and the submission; fall through
+            # to the current-loop or thread-based fallback below.
+            pass
+        else:
+            _track_scheduled_stop_future(future)
 
-        def _log_result(fut):
-            exc = fut.exception()
-            if exc:
-                logger.error(
-                    f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
-                    exc_info=True,
-                )
+            def _log_result(fut):
+                exc = fut.exception()
+                if exc:
+                    logger.error(
+                        f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
+                        exc_info=True,
+                    )
 
-        future.add_done_callback(_log_result)
-        return
+            future.add_done_callback(_log_result)
+            return
 
     if current_loop:
         # In test contexts, avoid leaving background stop tasks pending on loop shutdown.
         if _is_test_context():
             threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
             return
-        current_loop.create_task(_stop())
+        task = current_loop.create_task(_stop())
+        _track_scheduled_stop_future(task)
         return
 
     threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
@@ -278,16 +285,16 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
 
 _services_stopping: set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
-_scheduled_stop_futures: set[concurrent.futures.Future[Any]] = set()
+_scheduled_stop_futures: set[Union[concurrent.futures.Future[Any], asyncio.Task[Any]]] = set()
 _scheduled_stop_lock = threading.Lock()
 
 
-def _track_scheduled_stop_future(future: concurrent.futures.Future[Any]) -> None:
-    """Track a cross-loop audit stop future until completion."""
+def _track_scheduled_stop_future(future: Union[concurrent.futures.Future[Any], asyncio.Task[Any]]) -> None:
+    """Track a cross-loop audit stop future or same-loop task until completion."""
     with _scheduled_stop_lock:
         _scheduled_stop_futures.add(future)
 
-    def _cleanup(done_future: concurrent.futures.Future[Any]) -> None:
+    def _cleanup(done_future: Union[concurrent.futures.Future[Any], asyncio.Task[Any]]) -> None:
         with _scheduled_stop_lock:
             _scheduled_stop_futures.discard(done_future)
 
@@ -297,15 +304,21 @@ def _track_scheduled_stop_future(future: concurrent.futures.Future[Any]) -> None
 async def _drain_scheduled_audit_stops(timeout: Optional[float] = None) -> None:
     """Wait for any tracked cross-loop audit stop futures to finish."""
     with _scheduled_stop_lock:
-        futures = [future for future in _scheduled_stop_futures if not future.done()]
+        pending = [future for future in _scheduled_stop_futures if not future.done()]
 
-    if not futures:
+    if not pending:
         return
 
-    waiter = asyncio.gather(
-        *(asyncio.wrap_future(future) for future in futures),
-        return_exceptions=True,
-    )
+    # asyncio.Task instances are already asyncio futures; concurrent.futures.Future
+    # instances need wrapping so they can be awaited on this event loop.
+    awaitables = []
+    for future in pending:
+        if isinstance(future, asyncio.Task):
+            awaitables.append(future)
+        else:
+            awaitables.append(asyncio.wrap_future(future))
+
+    waiter = asyncio.gather(*awaitables, return_exceptions=True)
     if timeout is None or timeout <= 0:
         await waiter
     else:

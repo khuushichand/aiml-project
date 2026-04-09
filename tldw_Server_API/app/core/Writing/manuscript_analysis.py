@@ -183,14 +183,31 @@ def _extract_content(response: Any) -> str:
     return _extract_content_block(response) or str(response)
 
 
-def _extract_content_block(content: Any) -> str:
-    """Extract text from a content block, list of blocks, or nested payload."""
+def _extract_content_block(content: Any, *, _depth: int = 0, max_depth: int = 20) -> str:
+    """Extract text from a content block, list of blocks, or nested payload.
+
+    Parameters
+    ----------
+    content:
+        The value to extract text from.
+    _depth:
+        Current recursion depth (internal use).
+    max_depth:
+        Maximum recursion depth to prevent stack overflow on malformed data.
+    """
+    if _depth >= max_depth:
+        logger.warning(
+            f"_extract_content_block: max recursion depth ({max_depth}) reached; "
+            "returning str(content) to avoid stack overflow"
+        )
+        return str(content) if content is not None else ""
     if content is None:
         return ""
     if isinstance(content, str):
         return content
+    next_depth = _depth + 1
     if isinstance(content, list):
-        parts = [_extract_content_block(part) for part in content]
+        parts = [_extract_content_block(part, _depth=next_depth, max_depth=max_depth) for part in content]
         return "".join(part for part in parts if part)
     if isinstance(content, dict):
         text = content.get("text")
@@ -198,26 +215,26 @@ def _extract_content_block(content: Any) -> str:
             return text
         nested_content = content.get("content")
         if nested_content is not None:
-            extracted = _extract_content_block(nested_content)
+            extracted = _extract_content_block(nested_content, _depth=next_depth, max_depth=max_depth)
             if extracted:
                 return extracted
         message = content.get("message")
         if message is not None:
-            extracted = _extract_content_block(message)
+            extracted = _extract_content_block(message, _depth=next_depth, max_depth=max_depth)
             if extracted:
                 return extracted
         value = content.get("value")
         if isinstance(value, str):
             return value
         if isinstance(value, list):
-            return _extract_content_block(value)
+            return _extract_content_block(value, _depth=next_depth, max_depth=max_depth)
         return ""
     text = getattr(content, "text", None)
     if isinstance(text, str):
         return text
     nested_content = getattr(content, "content", None)
     if nested_content is not None:
-        return _extract_content_block(nested_content)
+        return _extract_content_block(nested_content, _depth=next_depth, max_depth=max_depth)
     return ""
 
 

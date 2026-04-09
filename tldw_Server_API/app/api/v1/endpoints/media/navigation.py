@@ -1377,7 +1377,7 @@ def _derive_content_span(
             lookup = lookup_section_by_heading(db, media_id, heading)
         else:
             lookup = None
-    except DatabaseError as exc:
+    except (DatabaseError, TypeError) as exc:
         logger.debug("Section heading lookup failed for media {}: {}", media_id, exc)
         lookup = None
 

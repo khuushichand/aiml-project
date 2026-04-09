@@ -254,7 +254,6 @@ class CreateChatbookResponse(BaseModel):
     success: bool
     message: str
     job_id: Optional[str] = Field(None, description="Job ID if async mode")
-    file_path: Optional[str] = Field(None, description="File path if sync mode")
     download_url: Optional[str] = Field(None, description="Download URL if sync mode")
 
 

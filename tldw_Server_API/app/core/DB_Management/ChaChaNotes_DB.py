@@ -30245,6 +30245,212 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """
         return self._soft_delete_generic_item("writing_sessions", session_id, expected_version, pk_col_name="id")
 
+    def restore_writing_session(
+        self,
+        session_id: str,
+        *,
+        name: str,
+        payload: dict,
+        schema_version: int,
+        version_parent_id: str | None,
+    ) -> None:
+        """Restore a soft-deleted writing session while preserving its ID."""
+        existing = self.get_writing_session(session_id, include_deleted=True)
+        if not existing:
+            raise ConflictError(
+                f"Session with ID '{session_id}' not found.",
+                entity="writing_sessions",
+                entity_id=session_id,
+            )
+        payload_json = json.dumps(payload, ensure_ascii=True)
+        next_version = int(existing.get("version") or 1) + 1
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE writing_sessions
+                   SET name = ?,
+                       payload_json = ?,
+                       schema_version = ?,
+                       version_parent_id = ?,
+                       deleted = 0,
+                       last_modified = CURRENT_TIMESTAMP,
+                       version = ?,
+                       client_id = ?
+                 WHERE id = ?
+                """,
+                (
+                    name,
+                    payload_json,
+                    int(schema_version),
+                    version_parent_id,
+                    next_version,
+                    self.client_id,
+                    session_id,
+                ),
+            )
+
+    def import_writing_snapshot(
+        self,
+        *,
+        mode: str,
+        sessions: list[dict[str, Any]],
+        templates: list[dict[str, Any]],
+        themes: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Atomically import a writing snapshot (sessions, templates, themes).
+
+        All operations execute on a single connection within one transaction
+        so a failure mid-import triggers a full rollback.
+
+        Args:
+            mode: ``"merge"`` or ``"replace"``.
+            sessions: List of session dicts with keys: name, payload, schema_version,
+                      id (optional), version_parent_id (optional).
+            templates: List of template dicts with keys: name, payload, schema_version,
+                       version_parent_id (optional), is_default (optional).
+            themes: List of theme dicts with keys: name, class_name, css, schema_version,
+                    version_parent_id (optional), is_default (optional), order_index (optional).
+
+        Returns:
+            Dict with counts: ``{"sessions": N, "templates": N, "themes": N}``.
+        """
+        now = self._get_current_utc_timestamp_iso()
+        imported = {"sessions": 0, "templates": 0, "themes": 0}
+
+        with self.transaction() as conn:
+            # --- replace mode: soft-delete all existing items ---
+            if mode == "replace":
+                conn.execute(
+                    "UPDATE writing_sessions SET deleted = 1, last_modified = ?, client_id = ? "
+                    "WHERE deleted = 0",
+                    (now, self.client_id),
+                )
+                conn.execute(
+                    "UPDATE writing_templates SET deleted = 1, last_modified = ?, client_id = ? "
+                    "WHERE deleted = 0",
+                    (now, self.client_id),
+                )
+                conn.execute(
+                    "UPDATE writing_themes SET deleted = 1, last_modified = ?, client_id = ? "
+                    "WHERE deleted = 0",
+                    (now, self.client_id),
+                )
+
+            # --- sessions ---
+            for s in sessions:
+                s_name = self._normalize_writing_name(s["name"], "Session")
+                s_payload = json.dumps(s["payload"], ensure_ascii=True)
+                s_schema = int(s.get("schema_version") or 1)
+                s_vp = self._normalize_nullable_text(s.get("version_parent_id"))
+                s_id = (s.get("id") or "").strip() or None
+
+                if s_id:
+                    row = conn.execute(
+                        "SELECT version, deleted FROM writing_sessions WHERE id = ?",
+                        (s_id,),
+                    ).fetchone()
+                    if row is not None:
+                        cur_ver = int(row[0] if isinstance(row, (list, tuple)) else row["version"])
+                        is_deleted = bool(row[1] if isinstance(row, (list, tuple)) else row["deleted"])
+                        if is_deleted:
+                            conn.execute(
+                                "UPDATE writing_sessions SET name=?, payload_json=?, schema_version=?, "
+                                "version_parent_id=?, deleted=0, last_modified=?, version=?, client_id=? "
+                                "WHERE id=?",
+                                (s_name, s_payload, s_schema, s_vp, now, cur_ver + 1, self.client_id, s_id),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE writing_sessions SET name=?, payload_json=?, schema_version=?, "
+                                "version_parent_id=?, last_modified=?, version=?, client_id=? "
+                                "WHERE id=?",
+                                (s_name, s_payload, s_schema, s_vp, now, cur_ver + 1, self.client_id, s_id),
+                            )
+                    else:
+                        conn.execute(
+                            "INSERT INTO writing_sessions "
+                            "(id, name, payload_json, schema_version, version_parent_id, "
+                            "created_at, last_modified, deleted, client_id, version) "
+                            "VALUES (?,?,?,?,?,?,?,0,?,1)",
+                            (s_id, s_name, s_payload, s_schema, s_vp, now, now, self.client_id),
+                        )
+                else:
+                    new_id = self._generate_uuid()
+                    conn.execute(
+                        "INSERT INTO writing_sessions "
+                        "(id, name, payload_json, schema_version, version_parent_id, "
+                        "created_at, last_modified, deleted, client_id, version) "
+                        "VALUES (?,?,?,?,?,?,?,0,?,1)",
+                        (new_id, s_name, s_payload, s_schema, s_vp, now, now, self.client_id),
+                    )
+                imported["sessions"] += 1
+
+            # --- templates ---
+            for t in templates:
+                t_name = self._normalize_writing_name(t["name"], "Template")
+                t_payload = json.dumps(t["payload"], ensure_ascii=True)
+                t_schema = int(t.get("schema_version") or 1)
+                t_vp = self._normalize_nullable_text(t.get("version_parent_id"))
+                t_default = 1 if t.get("is_default") else 0
+
+                row = conn.execute(
+                    "SELECT version FROM writing_templates WHERE name = ? AND deleted = 0",
+                    (t_name,),
+                ).fetchone()
+                if row is not None:
+                    cur_ver = int(row[0] if isinstance(row, (list, tuple)) else row["version"])
+                    conn.execute(
+                        "UPDATE writing_templates SET payload_json=?, schema_version=?, "
+                        "version_parent_id=?, is_default=?, last_modified=?, version=?, client_id=? "
+                        "WHERE name=? AND deleted=0",
+                        (t_payload, t_schema, t_vp, t_default, now, cur_ver + 1, self.client_id, t_name),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO writing_templates "
+                        "(name, payload_json, schema_version, version_parent_id, is_default, "
+                        "created_at, last_modified, deleted, client_id, version) "
+                        "VALUES (?,?,?,?,?,?,?,0,?,1)",
+                        (t_name, t_payload, t_schema, t_vp, t_default, now, now, self.client_id),
+                    )
+                imported["templates"] += 1
+
+            # --- themes ---
+            for th in themes:
+                th_name = self._normalize_writing_name(th["name"], "Theme")
+                th_class = str(th.get("class_name") or "").strip()
+                th_css = str(th.get("css") or "").strip()
+                th_schema = int(th.get("schema_version") or 1)
+                th_vp = self._normalize_nullable_text(th.get("version_parent_id"))
+                th_default = 1 if th.get("is_default") else 0
+                th_order = int(th.get("order_index") or 0)
+
+                row = conn.execute(
+                    "SELECT version FROM writing_themes WHERE name = ? AND deleted = 0",
+                    (th_name,),
+                ).fetchone()
+                if row is not None:
+                    cur_ver = int(row[0] if isinstance(row, (list, tuple)) else row["version"])
+                    conn.execute(
+                        "UPDATE writing_themes SET class_name=?, css=?, schema_version=?, "
+                        "version_parent_id=?, is_default=?, order_index=?, last_modified=?, "
+                        "version=?, client_id=? WHERE name=? AND deleted=0",
+                        (th_class, th_css, th_schema, th_vp, th_default, th_order, now,
+                         cur_ver + 1, self.client_id, th_name),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO writing_themes "
+                        "(name, class_name, css, schema_version, version_parent_id, is_default, "
+                        "order_index, created_at, last_modified, deleted, client_id, version) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,0,?,1)",
+                        (th_name, th_class, th_css, th_schema, th_vp, th_default, th_order,
+                         now, now, self.client_id),
+                    )
+                imported["themes"] += 1
+
+        return imported
+
     def clone_writing_session(self, session_id: str, *, name: str | None = None) -> dict[str, Any]:
         """
         Clone a writing session, optionally renaming the copy.

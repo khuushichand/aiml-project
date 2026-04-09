@@ -342,8 +342,9 @@ class DatabaseMigrator:
         try:
             sql_text = filepath.read_text()
         except OSError as exc:
-            logger.error(f"Unable to read migration file {filepath}: {exc}")
-            return None
+            raise MigrationError(
+                f"Unable to read migration file: {filepath.name}"
+            ) from exc
 
         executable_sql = self._strip_sql_comments(sql_text)
         if not executable_sql:

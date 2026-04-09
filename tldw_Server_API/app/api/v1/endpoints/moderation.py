@@ -33,6 +33,10 @@ from tldw_Server_API.app.api.v1.schemas.moderation_schemas import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Moderation.supervised_policy import (
+    GuardianModerationProxy,
+    bootstrap_guardian_moderation_runtime,
+)
 
 router = APIRouter(
     dependencies=[
@@ -61,6 +65,18 @@ def _normalize_etag_list(value: str | None) -> list[str]:
         if token:
             tokens.append(token)
     return tokens
+
+
+def _normalize_optional_identifier(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _normalize_chat_type(value: str | None) -> str:
+    normalized = str(value or "regular").strip().lower()
+    return normalized or "regular"
 
 
 @router.get("/moderation/users", response_model=ModerationUserOverridesResponse, summary="List all per-user moderation overrides", tags=["moderation"])
@@ -245,6 +261,20 @@ async def update_moderation_settings(body: ModerationSettingsUpdate) -> Moderati
             clear_pii=clear_pii,
             clear_categories=clear_categories,
         )
+        if isinstance(data, dict) and data.get("ok") is False:
+            error_detail = str(data.get("error", "Failed to update moderation settings"))
+            error_type = str(data.get("error_type", "")).strip().lower()
+            if error_type == "validation":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=error_detail,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update moderation settings",
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Failed to update moderation settings")
         raise HTTPException(
@@ -401,97 +431,78 @@ async def lint_blocklist(
 )
 async def test_moderation(payload: ModerationTestRequest) -> ModerationTestResponse:
     """Evaluate sample text against the effective moderation policy for a user."""
-    svc = get_moderation_service()
-    eff = svc.get_effective_policy(payload.user_id)
+    base_service = get_moderation_service()
+    service = base_service
+    user_id = _normalize_optional_identifier(payload.user_id)
 
-    # Determine phase enablement
-    phase_enabled = eff.enabled and (eff.input_enabled if payload.phase == 'input' else eff.output_enabled)
-    if not phase_enabled:
-        return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
-    if hasattr(svc, 'evaluate_action_with_match'):
-        eval_res = svc.evaluate_action_with_match(payload.text, eff, payload.phase)
-        action = None
-        redacted = None
-        matched_pattern = None
-        category = None
-        match_span = None
-        if isinstance(eval_res, (tuple, list)):
-            if len(eval_res) >= 1:
-                action = eval_res[0]
-            if len(eval_res) >= 2:
-                redacted = eval_res[1]
-            if len(eval_res) >= 3:
-                matched_pattern = eval_res[2]
-            if len(eval_res) >= 4:
-                category = eval_res[3]
-            if len(eval_res) >= 5:
-                match_span = eval_res[4]
-        else:
-            try:
-                action, redacted, matched_pattern = eval_res  # type: ignore
-            except ValueError:
-                action = None
-                redacted = None
-                matched_pattern = None
-        flagged = (action != 'pass')
-        sanitized_sample = None
-        if flagged:
-            try:
-                if match_span and hasattr(svc, "build_sanitized_snippet"):
-                    sanitized_sample = svc.build_sanitized_snippet(payload.text, eff, match_span, matched_pattern)
-                else:
-                    _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
-            except Exception:
-                logger.exception(
-                    "moderation.test: failed to sanitize sample",
-                    extra={"user_id": payload.user_id, "phase": payload.phase},
-                )
-                sanitized_sample = None
-        redacted_text = redacted if action == "redact" else None
-        if action == "redact" and redacted_text is None:
-            redacted_text = svc.redact_text(payload.text, eff)
-        return ModerationTestResponse(
-            flagged=flagged,
-            action=action if action else 'pass',
-            sample=sanitized_sample,
-            redacted_text=redacted_text,
-            effective=eff.to_dict(),
-            category=category,
+    supervised_engine = None
+    guardian_chat_type = "regular"
+    guardian_dep_uid = None
+    if payload.apply_guardian_overlay:
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="user_id is required when apply_guardian_overlay=true",
+            )
+        dependent_user_id = _normalize_optional_identifier(payload.dependent_user_id) or user_id
+        if dependent_user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="dependent_user_id must match user_id for live-chat guardian simulation",
+            )
+        guardian_chat_type = _normalize_chat_type(payload.chat_type)
+        runtime = bootstrap_guardian_moderation_runtime(
+            user_id=user_id,
+            dependent_user_id=dependent_user_id,
+            chat_type=guardian_chat_type,
         )
-    if hasattr(svc, 'evaluate_action'):
-        eval_res = svc.evaluate_action(payload.text, eff, payload.phase)
-        if isinstance(eval_res, tuple) and len(eval_res) >= 3:
-            action, redacted, _matched_pattern = eval_res[0], eval_res[1], eval_res[2]
-            category = eval_res[3] if len(eval_res) >= 4 else None
-        else:
-            action, redacted, _matched_pattern = eval_res  # type: ignore
-            category = None
-        flagged = (action != 'pass')
-        sanitized_sample = None
-        if flagged:
-            try:
-                _, sanitized_sample = svc.check_text(payload.text, eff, payload.phase)
-            except Exception:
-                logger.exception(
-                    "moderation.test: failed to sanitize sample",
-                    extra={"user_id": payload.user_id, "phase": payload.phase},
-                )
-                sanitized_sample = None
-        redacted_text = redacted if action == "redact" else None
-        if action == "redact" and redacted_text is None:
-            redacted_text = svc.redact_text(payload.text, eff)
-        return ModerationTestResponse(
-            flagged=flagged,
-            action=action if action else 'pass',
-            sample=sanitized_sample,
-            redacted_text=redacted_text,
-            effective=eff.to_dict(),
-            category=category,
+        guardian_dep_uid = runtime.dependent_user_id
+        if runtime.supervised_engine is not None:
+            supervised_engine = runtime.supervised_engine
+            service = GuardianModerationProxy(
+                base_service,
+                runtime.supervised_engine,
+                runtime.dependent_user_id,
+                chat_type=runtime.chat_type,
+            )
+
+    effective_policy = service.get_effective_policy(user_id)
+    result = service.evaluate_text(payload.text, effective_policy, payload.phase)
+
+    action = result.action
+    category = result.category
+
+    # When guardian overlay is active, run a direct supervised-engine pass
+    # so notify-only rules are preserved (the proxy coerces notify→warn).
+    if supervised_engine is not None and guardian_dep_uid is not None:
+        supervised_result = supervised_engine.check_text(
+            payload.text,
+            guardian_dep_uid,
+            phase=payload.phase,
+            chat_type=guardian_chat_type,
         )
-    else:
-        flagged, sample = svc.check_text(payload.text, eff, payload.phase)
-        if not flagged:
-            return ModerationTestResponse(flagged=False, action='pass', sample=None, redacted_text=None, effective=eff.to_dict())
-        action = eff.input_action if payload.phase == 'input' else eff.output_action
-        redacted = svc.redact_text(payload.text, eff) if action == 'redact' else None
-        return ModerationTestResponse(flagged=True, action=action, sample=sample, redacted_text=redacted, effective=eff.to_dict())
+        if supervised_result.action == "notify" and action == "pass":
+            # The base pipeline saw nothing actionable but the supervised
+            # engine matched a notify-only rule — surface it.
+            action = "notify"
+            category = supervised_result.matched_category or category
+        elif supervised_result.action == "notify" and action == "warn":
+            # The proxy coerced notify→warn; restore the original action
+            # when the base policy itself didn't produce the warn.
+            base_result = base_service.evaluate_text(
+                payload.text,
+                base_service.get_effective_policy(user_id),
+                payload.phase,
+            )
+            if base_result.action == "pass":
+                action = "notify"
+                category = supervised_result.matched_category or category
+
+    return ModerationTestResponse(
+        flagged=action != "pass",
+        action=action,
+        sample=result.sample,
+        redacted_text=result.redacted_text,
+        effective=effective_policy.to_dict(),
+        category=category,
+    )

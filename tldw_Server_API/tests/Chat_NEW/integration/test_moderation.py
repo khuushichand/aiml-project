@@ -5,6 +5,7 @@ import tempfile
 import pytest
 from typing import Any
 from fastapi.testclient import TestClient
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -35,6 +36,21 @@ def _make_test_db():
         "creator_notes": "test"
     })
     return db, db_path
+
+
+def _add_non_default_character(db: CharactersRAGDB, name: str = "Guardian Character") -> dict[str, Any]:
+    character_id = db.add_character_card({
+        "name": name,
+        "description": "Non-default test character",
+        "personality": "Guarded",
+        "scenario": "Testing",
+        "system_prompt": "You are in character",
+        "first_message": "Hello from character",
+        "creator_notes": "test"
+    })
+    character = db.get_character_card_by_id(int(character_id))
+    assert character is not None
+    return character
 
 
 def _post_with_csrf(client: TestClient, url: str, **kwargs):
@@ -116,6 +132,33 @@ class _EvalModerationService:
             if pat.search(text or ""):
                 return True, pat.pattern
         return False, None
+
+
+class _CharacterScopedGuardianEngine:
+    def __init__(self):
+        self.overlay_chat_types = []
+        self.check_calls = []
+
+    def build_moderation_policy_overlay(self, dependent_user_id: str, base_policy: _StubPolicy, chat_type: str | None = None):
+        self.overlay_chat_types.append(chat_type)
+        if chat_type == "character":
+            return _StubPolicy(
+                enabled=True,
+                input_action="block",
+                output_action=base_policy.output_action,
+                redact=base_policy.redact_replacement,
+                patterns=[re.compile(r"secret", re.IGNORECASE)],
+            )
+        return base_policy
+
+    def check_text(self, text: str, dependent_user_id: str, phase: str, chat_type: str | None = None):
+        self.check_calls.append((phase, chat_type, text))
+        is_character_secret = chat_type == "character" and "secret" in (text or "").lower()
+        return SimpleNamespace(
+            action="block" if is_character_secret else "pass",
+            notify_guardian=False,
+            rule_name_visible="guardian-secret" if is_character_secret else None,
+        )
 
 
 @pytest.mark.unit
@@ -417,6 +460,231 @@ def test_streaming_cross_chunk_redaction_persisted(monkeypatch):
         saved = msgs[-1].get("content", "")
         assert "[REDACTED]" in saved
         assert "xqzp1234" not in saved.lower()
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            _ = None
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+def test_character_chat_input_guardian_overlay_uses_character_chat_type():
+    db, db_path = _make_test_db()
+    try:
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        character = _add_non_default_character(db, name="Guardian Character Input")
+
+        base_policy = _StubPolicy(
+            enabled=True,
+            input_action="warn",
+            output_action="redact",
+            patterns=[re.compile(r"never-match-this", re.IGNORECASE)],
+        )
+        engine = _CharacterScopedGuardianEngine()
+        bootstrap_calls: list[tuple[object, str, str]] = []
+
+        def _fake_bootstrap_guardian_moderation_runtime(*, user_id, dependent_user_id, chat_type):
+            bootstrap_calls.append((user_id, dependent_user_id, chat_type))
+            return SimpleNamespace(
+                dependent_user_id=dependent_user_id,
+                chat_type=chat_type,
+                guardian_db=object(),
+                supervised_engine=engine,
+            )
+
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(base_policy)),
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.bootstrap_guardian_moderation_runtime", side_effect=_fake_bootstrap_guardian_moderation_runtime, create=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_guardian_enabled", return_value=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_self_monitoring_enabled", return_value=False),
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                return_value={
+                    "id": "chatcmpl-guard-input-1",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "gpt-4o-mini",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "safe"}, "finish_reason": "stop"}],
+                },
+            ),
+        ):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "character_id": str(character["id"]),
+                    "messages": [{"role": "user", "content": "please say secret"}],
+                    "stream": False,
+                }
+                response = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+
+        assert response.status_code == 400
+        assert bootstrap_calls and bootstrap_calls[0][2] == "character"
+        assert engine.overlay_chat_types == ["character"]
+        assert engine.check_calls == [("input", "character", "please say secret")]
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            _ = None
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+def test_continued_character_conversation_input_guardian_overlay_uses_saved_conversation_chat_type():
+    db, db_path = _make_test_db()
+    try:
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        character = _add_non_default_character(db, name="Guardian Character Continued")
+        conversation_id = db.add_conversation(
+            {
+                "character_id": character["id"],
+                "title": "Guardian Continued Character Chat",
+                "client_id": "test_client",
+            }
+        )
+        assert conversation_id
+
+        base_policy = _StubPolicy(
+            enabled=True,
+            input_action="warn",
+            output_action="redact",
+            patterns=[re.compile(r"never-match-this", re.IGNORECASE)],
+        )
+        engine = _CharacterScopedGuardianEngine()
+        bootstrap_calls: list[tuple[object, str, str]] = []
+
+        def _fake_bootstrap_guardian_moderation_runtime(*, user_id, dependent_user_id, chat_type):
+            bootstrap_calls.append((user_id, dependent_user_id, chat_type))
+            return SimpleNamespace(
+                dependent_user_id=dependent_user_id,
+                chat_type=chat_type,
+                guardian_db=object(),
+                supervised_engine=engine,
+            )
+
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(base_policy)),
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.bootstrap_guardian_moderation_runtime", side_effect=_fake_bootstrap_guardian_moderation_runtime, create=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_guardian_enabled", return_value=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_self_monitoring_enabled", return_value=False),
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                return_value={
+                    "id": "chatcmpl-guard-input-2",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "gpt-4o-mini",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "safe"}, "finish_reason": "stop"}],
+                },
+            ),
+        ):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "conversation_id": conversation_id,
+                    "messages": [{"role": "user", "content": "please say secret"}],
+                    "stream": False,
+                }
+                response = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+
+        assert response.status_code == 400
+        assert bootstrap_calls and bootstrap_calls[0][2] == "character"
+        assert engine.overlay_chat_types == ["character"]
+        assert engine.check_calls == [("input", "character", "please say secret")]
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            _ = None
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+def test_continued_ordinary_conversation_input_guardian_overlay_stays_regular_for_default_assistant():
+    db, db_path = _make_test_db()
+    try:
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        default_character = db.get_character_card_by_name(DEFAULT_CHARACTER_NAME)
+        assert default_character is not None
+        conversation_id = db.add_conversation(
+            {
+                "character_id": default_character["id"],
+                "title": "Guardian Continued Ordinary Chat",
+                "client_id": "test_client",
+            }
+        )
+        assert conversation_id
+
+        base_policy = _StubPolicy(
+            enabled=True,
+            input_action="warn",
+            output_action="redact",
+            patterns=[re.compile(r"never-match-this", re.IGNORECASE)],
+        )
+        engine = _CharacterScopedGuardianEngine()
+        bootstrap_calls: list[tuple[object, str, str]] = []
+
+        def _fake_bootstrap_guardian_moderation_runtime(*, user_id, dependent_user_id, chat_type):
+            bootstrap_calls.append((user_id, dependent_user_id, chat_type))
+            return SimpleNamespace(
+                dependent_user_id=dependent_user_id,
+                chat_type=chat_type,
+                guardian_db=object(),
+                supervised_engine=engine,
+            )
+
+        with (
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(base_policy)),
+            patch("tldw_Server_API.app.api.v1.endpoints.chat.bootstrap_guardian_moderation_runtime", side_effect=_fake_bootstrap_guardian_moderation_runtime, create=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_guardian_enabled", return_value=True),
+            patch("tldw_Server_API.app.core.feature_flags.is_self_monitoring_enabled", return_value=False),
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                return_value={
+                    "id": "chatcmpl-guard-input-ordinary",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "gpt-4o-mini",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "safe"}, "finish_reason": "stop"}],
+                },
+            ),
+        ):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "conversation_id": conversation_id,
+                    "messages": [{"role": "user", "content": "please say secret"}],
+                    "stream": False,
+                }
+                response = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+
+        assert response.status_code == 200
+        assert bootstrap_calls and bootstrap_calls[0][2] == "regular"
+        assert engine.overlay_chat_types
+        assert set(engine.overlay_chat_types) == {"regular"}
+        assert engine.check_calls == [("input", "regular", "please say secret")]
     finally:
         try:
             os.unlink(db_path)
