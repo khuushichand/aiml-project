@@ -2498,15 +2498,13 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
                 { name: deleteTargetWorkspace.name }
               )}
             </p>
-            {deleteTargetWorkspace.sourceCount > 0 && (
-              <p className="text-sm text-text-muted">
-                {t(
-                  "playground:workspace.deleteConfirmStats",
-                  "{{sourceCount}} source(s) will be removed.",
-                  { sourceCount: deleteTargetWorkspace.sourceCount }
-                )}
-              </p>
-            )}
+            <p className="text-sm text-text-muted">
+              {t(
+                "playground:workspace.deleteConfirmStats",
+                "This workspace has {{sourceCount}} source(s). All associated chat sessions and notes will also be removed.",
+                { sourceCount: deleteTargetWorkspace.sourceCount }
+              )}
+            </p>
             <div>
               <p className="mb-1.5 text-sm text-text-muted">
                 {t(

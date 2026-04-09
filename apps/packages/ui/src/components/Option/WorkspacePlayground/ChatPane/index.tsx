@@ -886,6 +886,12 @@ const WorkspaceChatEmpty: React.FC<{
 
       {totalSourceCount === 0 && (
         <div className="mt-4 space-y-3" data-testid="workspace-chat-empty-guidance">
+          <p className="text-center text-xs text-text-muted" data-testid="workspace-chat-sources-explainer">
+            {t(
+              "playground:chat.sourcesExplainer",
+              "Sources are documents, PDFs, web pages, or other content you upload. Add sources in the left panel to start asking questions about them."
+            )}
+          </p>
           {onAddSource && (
             <button
               type="button"

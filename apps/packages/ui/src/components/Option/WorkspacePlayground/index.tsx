@@ -2296,10 +2296,16 @@ const WorkspacePlaygroundBody: React.FC = () => {
                     )}
                   </p>
                 )}
+                <p className="text-xs font-medium text-primary">
+                  {t(
+                    "playground:workspace.externalUpdateRecommendation",
+                    "Recommended: Reload to get the latest version."
+                  )}
+                </p>
                 <p className="text-xs text-text-muted">
                   {t(
                     "playground:workspace.externalUpdateActionHint",
-                    "Reload from other tab refreshes this tab. Keep this version ignores the update. Save as new workspace copies your current state."
+                    "Keep this version ignores the update. Save as new workspace copies your current state."
                   )}
                 </p>
               </div>
