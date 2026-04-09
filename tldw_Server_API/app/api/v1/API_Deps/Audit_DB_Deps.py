@@ -251,19 +251,25 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
             )
 
     if owner_loop and owner_loop is not current_loop:
-        future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
-        _track_scheduled_stop_future(future)
+        try:
+            future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
+        except RuntimeError:
+            # Owner loop closed between our check and the submission; fall through
+            # to the current-loop or thread-based fallback below.
+            pass
+        else:
+            _track_scheduled_stop_future(future)
 
-        def _log_result(fut):
-            exc = fut.exception()
-            if exc:
-                logger.error(
-                    f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
-                    exc_info=True,
-                )
+            def _log_result(fut):
+                exc = fut.exception()
+                if exc:
+                    logger.error(
+                        f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
+                        exc_info=True,
+                    )
 
-        future.add_done_callback(_log_result)
-        return
+            future.add_done_callback(_log_result)
+            return
 
     if current_loop:
         # In test contexts, avoid leaving background stop tasks pending on loop shutdown.

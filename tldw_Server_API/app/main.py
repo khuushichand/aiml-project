@@ -4677,13 +4677,23 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Unified audit services stopped")
 
         try:
+            from tldw_Server_API.app.api.v1.endpoints.sharing import (
+                shutdown_sharing_audit_service,
+            )
+
+            await shutdown_sharing_audit_service()
+            logger.info("App Shutdown: Sharing audit service stopped")
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
+            logger.debug(f"Sharing audit service shutdown skipped: {_e}")
+
+        try:
             from tldw_Server_API.app.core.Embeddings.audit_adapter import (
                 shutdown_local_audit_adapter_loop,
             )
 
             shutdown_local_audit_adapter_loop()
             logger.info("App Shutdown: Embeddings audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
             logger.debug(f"Embeddings audit adapter loop shutdown skipped: {_e}")
 
         try:
@@ -4693,7 +4703,7 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_evaluations_audit_loop()
             logger.info("App Shutdown: Evaluations audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
             logger.debug(f"Evaluations audit adapter loop shutdown skipped: {_e}")
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")

@@ -18,9 +18,9 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 
 
 @pytest.fixture()
-def client(tmp_path_factory):
+def client(tmp_path_factory, monkeypatch):
     """Provide a TestClient with deterministic chatbooks job state."""
-    os.environ["TEST_MODE"] = "true"
+    monkeypatch.setenv("TEST_MODE", "true")
     tmp_dir = tmp_path_factory.mktemp("chatbooks_cancel")
 
     class _DummyCursor:
@@ -133,6 +133,7 @@ def client(tmp_path_factory):
                     row["progress_percentage"] = progress_percentage
                 return _DummyCursor([])
 
+
             return _DummyCursor([])
 
     async def override_user():
@@ -158,6 +159,10 @@ def client(tmp_path_factory):
     def _lagging_get_job(job_id: str, job_type: str):
         return lagging_rows.get(job_id)
 
+    if service._jobs_adapter is None:
+        from tldw_Server_API.app.core.Chatbooks.jobs_adapter import ChatbooksJobsAdapter
+
+        service._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=service.user_id)
     service._jobs_adapter._get_job = _lagging_get_job  # type: ignore[method-assign]
 
     async def _fake_create_chatbook(**kwargs):

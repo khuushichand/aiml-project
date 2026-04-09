@@ -268,9 +268,12 @@ class ChatbookValidator:
 
         except zipfile.BadZipFile:
             return False, "Invalid or corrupted ZIP file"
+        except (RuntimeError, NotImplementedError) as e:
+            # Encrypted entries or unsupported compression raise these
+            return False, f"Unsupported ZIP format: {e}"
         except Exception as e:
-            logger.error(f"Error validating ZIP file: {e}")
-            return False, f"Error validating file: {str(e)}"
+            logger.exception(f"Unexpected error validating ZIP file: {e}")
+            raise
 
     @classmethod
     def validate_chatbook_metadata(cls,

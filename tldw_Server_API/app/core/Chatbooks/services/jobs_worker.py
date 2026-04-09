@@ -203,7 +203,7 @@ async def _handle_import(service: ChatbookService, payload: dict[str, Any], job_
     if not resolved_file_path:
         raise ChatbooksJobError("Invalid or potentially malicious archive file", retryable=False)
     try:
-        ok, msg, warnings = await asyncio.to_thread(
+        ok, msg, result = await asyncio.to_thread(
             service._import_chatbook_sync,
             resolved_file_path,
             selections,
@@ -225,7 +225,12 @@ async def _handle_import(service: ChatbookService, payload: dict[str, Any], job_
             ij.status = ImportStatus.COMPLETED
             ij.completed_at = datetime.now(timezone.utc)
             service._save_import_job(ij)
-        return {"warnings": warnings or []}
+        if isinstance(result, dict):
+            return {
+                "imported_items": result.get("imported_items") or {},
+                "warnings": result.get("warnings") or [],
+            }
+        return {"imported_items": {}, "warnings": result or []}
 
     if ij:
         ij.status = ImportStatus.FAILED
