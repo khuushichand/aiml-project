@@ -32,7 +32,8 @@ import {
   MoreHorizontal,
   Settings,
   Star,
-  Share2
+  Share2,
+  CircleHelp
 } from "lucide-react"
 import type {
   SavedWorkspace,
@@ -1668,6 +1669,19 @@ export const WorkspaceHeader: React.FC<WorkspaceHeaderProps> = ({
             onClick={() => setShareDialogOpen(true)}
           >
             <Share2 className="h-4 w-4" />
+          </button>
+        </Tooltip>
+
+        {/* Help / Tour Button */}
+        <Tooltip title={t("playground:workspace.takeTour", "Take a tour")}>
+          <button
+            type="button"
+            data-testid="workspace-help-tour-button"
+            onClick={() => startTutorial("workspace-playground-basics")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-text-muted hover:bg-surface2 hover:text-text transition-colors"
+            aria-label={t("playground:workspace.takeTour", "Take a tour of the workspace")}
+          >
+            <CircleHelp className="h-4 w-4" />
           </button>
         </Tooltip>
 

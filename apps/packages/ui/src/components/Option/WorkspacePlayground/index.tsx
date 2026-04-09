@@ -837,6 +837,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   })
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const onboardingInitializedRef = React.useRef(false)
+  const [showTutorialPrompt, setShowTutorialPrompt] = React.useState(false)
   const startTutorial = useTutorialStore((s) => s.startTutorial)
 
   // Shared workspace state (from ?shared= query param)
@@ -1676,15 +1677,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
         WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
       )
       if (dismissed !== "1") {
-        // Auto-start the guided Joyride tour for first-time users
-        startTutorial("workspace-playground-basics")
-        dismissOnboardingOverlay()
+        setShowTutorialPrompt(true)
       }
     } catch {
-      // On storage error, start the tour anyway for this session
-      startTutorial("workspace-playground-basics")
+      // Ignore storage errors
     }
-  }, [isStoreHydrated, workspaceId, startTutorial, dismissOnboardingOverlay])
+  }, [isStoreHydrated, workspaceId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -2291,6 +2289,35 @@ const WorkspacePlaygroundBody: React.FC = () => {
           />
           <SharedWorkspaceBanner />
 
+          {showTutorialPrompt && (
+            <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
+              <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    startTutorial("workspace-playground-basics")
+                    dismissOnboardingOverlay()
+                    setShowTutorialPrompt(false)
+                  }}
+                  className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
+                >
+                  Start tour
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissOnboardingOverlay()
+                    setShowTutorialPrompt(false)
+                  }}
+                  className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
           <WorkspaceStatusBar
             storageUsedBytes={workspaceStorageUsage.usedBytes}
             storageQuotaBytes={workspaceStorageUsage.quotaBytes}
@@ -2332,6 +2359,35 @@ const WorkspacePlaygroundBody: React.FC = () => {
             isMobile={false}
           />
           <SharedWorkspaceBanner />
+
+          {showTutorialPrompt && (
+            <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
+              <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    startTutorial("workspace-playground-basics")
+                    dismissOnboardingOverlay()
+                    setShowTutorialPrompt(false)
+                  }}
+                  className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
+                >
+                  Start tour
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissOnboardingOverlay()
+                    setShowTutorialPrompt(false)
+                  }}
+                  className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
