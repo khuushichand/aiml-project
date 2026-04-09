@@ -237,6 +237,17 @@ The user-facing final response should be based on those staged artifacts rather
 than on ad hoc notes. This keeps the audit resumable and preserves pre-fix
 evidence when narrow proof-of-fix patches are applied later in the review.
 
+The default stage order should be:
+
+1. `Stage 1: Baseline and boundary inventory`
+2. `Stage 2: Runtime authentication and authorization analysis`
+3. `Stage 3: Persistence, migrations, and configuration safety`
+4. `Stage 4: Tests, docs drift, and verification gaps`
+5. `Stage 5: Final synthesis, roadmap, and patch decisions`
+
+If the review needs to branch, it should still preserve this canonical sequence
+in the workspace so the evidence trail is easy to follow.
+
 ## Findings Model
 
 The final report should present findings first, ordered by severity.
@@ -289,6 +300,21 @@ The review will produce three outputs:
 The final response should be in code-review style, ordered by severity, with
 runtime and security defects first, then correctness issues, then
 maintainability, docs drift, and test gaps.
+
+The canonical final response structure should be:
+
+1. `Findings`
+2. `Open Questions` only when unresolved ambiguity materially affects confidence
+3. `Verification`
+4. `Remediation Roadmap`
+
+Inside `Findings`:
+
+- confirmed findings come before probable risks
+- probable risks come before improvements
+- any issue fixed during the review must still be listed, clearly marked as
+  `fixed during review`, with the original failure mode and the verification
+  evidence preserved
 
 ### 2. Remediation roadmap
 
