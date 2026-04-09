@@ -1065,9 +1065,13 @@ export async function* bgStream<
     } else if (msg?.event === 'error') {
       const streamError = new Error(msg.message || 'Stream error') as Error & {
         status?: number
+        details?: unknown
       }
       if (typeof msg.status === "number" && Number.isFinite(msg.status)) {
         streamError.status = Math.trunc(msg.status)
+      }
+      if (typeof msg.details !== "undefined" && msg.details !== null) {
+        streamError.details = sanitizeResponseData(msg.details)
       }
       error = streamError
       done = true

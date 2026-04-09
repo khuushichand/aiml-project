@@ -397,6 +397,9 @@ def _resolve_batch_or_session_id(
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
         Depends(guard_storage_quota),
+        # Pessimistic pre-check: verifies at least 1 MB of storage quota
+        # remains.  Actual size is unknown until after ingestion completes,
+        # so the real usage is recorded post-ingestion by the job worker.
         Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
         Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
     ],

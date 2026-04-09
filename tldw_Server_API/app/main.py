@@ -1806,8 +1806,8 @@ async def lifespan(app: FastAPI):
                 send_default_pii=False,
             )
             logger.info("App Startup: Sentry error tracking initialized")
-        except _STARTUP_GUARD_EXCEPTIONS as _sentry_err:
-            logger.warning(f"App Startup: Sentry initialization failed: {_sentry_err}")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _sentry_err:
+            logger.warning("App Startup: Sentry initialization failed: {}", _sentry_err)
 
     # Startup: Warn if first-time setup is enabled (local-only, no proxies)
     try:

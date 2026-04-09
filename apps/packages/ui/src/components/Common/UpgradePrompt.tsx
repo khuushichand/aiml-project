@@ -77,7 +77,7 @@ const UpgradePrompt: React.FC<UpgradePromptProps> = ({
               >
                 {t("billing:upgradePrompt.contactSupport", "Contact support")}
               </a>
-            ) : (
+            ) : onUpgrade ? (
               <button
                 type="button"
                 onClick={onUpgrade}
@@ -85,7 +85,16 @@ const UpgradePrompt: React.FC<UpgradePromptProps> = ({
               >
                 {t("billing:upgradePrompt.upgradePlan", "Upgrade plan")}
               </button>
-            )}
+            ) : errorInfo.upgradeUrl ? (
+              <a
+                href={errorInfo.upgradeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
+              >
+                {t("billing:upgradePrompt.upgradePlan", "Upgrade plan")}
+              </a>
+            ) : null}
             {onDismiss && (
               <button
                 type="button"

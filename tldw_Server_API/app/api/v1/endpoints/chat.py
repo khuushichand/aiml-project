@@ -252,6 +252,7 @@ from tldw_Server_API.app.core.Persona.exemplar_runtime import (
     append_persona_exemplar_sections,
 )
 from tldw_Server_API.app.core.Persona.memory_integration import persist_persona_turn
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.testing import (
@@ -4213,7 +4214,14 @@ async def create_chat_completion(
             # Do not leak raw HTTPException details from underlying call sites.
             # For unexpected HTTPException from lower layers (e.g., provider shims),
             # normalize to a generic 500 to match test expectations.
+            # However, billing (402) and rate-limit (429) responses must propagate
+            # to the client unchanged so callers can react appropriately.
             if isinstance(e_chat, HTTPException):
+                if e_chat.status_code in (
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                ):
+                    raise
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unexpected internal server error occurred."
@@ -4452,35 +4460,69 @@ def _build_streaming_commit_cb(
 
     The callback is invoked by chat_service when the stream finishes with the
     total estimated token count.  It must:
-      - Record billing usage synchronously (apply_usage_delta) since
-        LimitEnforcer.__aexit__ runs at handler return time, before the stream
-        generator fires this callback.
-      - Return the RG governor coroutine so the caller can await it.
+      - Record billing usage via apply_usage_delta (hot cache) AND schedule a
+        durable cost-units ledger write so usage survives cache expiry/restart.
+      - Return an awaitable that the caller awaits, combining the durable
+        ledger write and the RG governor commit.
     """
     if not rg_handle_id and not billing_enforcer:
         return None
 
     def _commit(total: int) -> Any:
-        # Billing: record streaming tokens directly into the enforcer cache.
+        tokens = int(total)
+
+        # Billing: record streaming tokens into the enforcer hot cache.
         if billing_enforcer is not None and billing_org_id is not None:
             try:
-                billing_enforcer.record_actual(int(total))
+                billing_enforcer.record_actual(tokens)
                 get_billing_enforcer().apply_usage_delta(
-                    billing_org_id, LimitCategory.LLM_TOKENS_MONTH, int(total),
+                    billing_org_id, LimitCategory.LLM_TOKENS_MONTH, tokens,
                 )
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
-                logger.debug(
-                    "Billing streaming token recording failed (fail-open): "
-                    "org_id=%s, tokens=%s, error=%s",
-                    billing_org_id, total, exc,
+                logger.warning(
+                    "Billing streaming cache update failed (fail-open): "
+                    "org_id=%s, category=LLM_TOKENS_MONTH, tokens=%s, error=%s",
+                    billing_org_id, tokens, exc,
                 )
 
-        # RG governor: return the coroutine for the caller to await.
+        # Build an async wrapper that performs the durable ledger write
+        # and the RG governor commit.  The caller checks for __await__
+        # and awaits the result if present.
+        rg_coro = None
         if rg_handle_id and request is not None:
             gov = getattr(request.app.state, "rg_governor", None)
             if gov is not None:
-                return gov.commit(rg_handle_id, actuals={"tokens": int(total)})
-        return None
+                rg_coro = gov.commit(rg_handle_id, actuals={"tokens": tokens})
+
+        needs_durable = (
+            billing_enforcer is not None
+            and billing_org_id is not None
+            and tokens > 0
+        )
+
+        if not needs_durable and rg_coro is None:
+            return None
+
+        async def _durable_and_rg() -> None:
+            # Durable cost-units ledger write so streaming usage persists
+            # across cache expiry / server restart.
+            if needs_durable:
+                try:
+                    await cost_units.record_cost_units_for_entity(
+                        entity_scope="org",
+                        entity_value=str(billing_org_id),
+                        tokens=tokens,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Billing streaming durable ledger write failed (fail-open): "
+                        "org_id=%s, category=LLM_TOKENS_MONTH, tokens=%s, error=%s",
+                        billing_org_id, tokens, exc,
+                    )
+            if rg_coro is not None:
+                await rg_coro
+
+        return _durable_and_rg()
 
     return _commit
 

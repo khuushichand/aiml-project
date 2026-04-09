@@ -61,15 +61,18 @@ export function parseBillingLimitError(
   // Check status code
   if (status === 402 || status === 429) {
     const lower = message.toLowerCase()
+    const isFeatureGate =
+      lower.includes("feature_not_available") ||
+      lower.includes("feature not available")
     if (
       lower.includes("limit_exceeded") ||
       lower.includes("limit exceeded") ||
-      lower.includes("feature_not_available") ||
+      isFeatureGate ||
       lower.includes("quota exceeded") ||
       lower.includes("upgrade")
     ) {
       return {
-        errorType: lower.includes("feature_not_available")
+        errorType: isFeatureGate
           ? "feature_not_available"
           : "limit_exceeded",
         message,
@@ -80,12 +83,15 @@ export function parseBillingLimitError(
 
   // Message-only fallback (for degraded paths where status is lost)
   const lower = message.toLowerCase()
+  const isFeatureGateFallback =
+    lower.includes("feature_not_available") ||
+    lower.includes("feature not available")
   if (
     lower.includes("limit_exceeded") ||
-    lower.includes("feature_not_available")
+    isFeatureGateFallback
   ) {
     return {
-      errorType: lower.includes("feature_not_available")
+      errorType: isFeatureGateFallback
         ? "feature_not_available"
         : "limit_exceeded",
       message,

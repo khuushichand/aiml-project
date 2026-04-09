@@ -96,8 +96,8 @@ if (process.env.NEXT_PUBLIC_SENTRY_DSN) {
   try {
     const sentry = await import('@sentry/nextjs');
     withSentryConfig = sentry.withSentryConfig;
-  } catch {
-    // @sentry/nextjs not installed; skip
+  } catch (error) {
+    console.warn('[next.config] Skipping Sentry integration:', error)
   }
 }
 

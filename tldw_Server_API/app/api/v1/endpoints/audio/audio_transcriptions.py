@@ -443,6 +443,10 @@ def _dictation_error_detail(
             require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         ),
         Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        # Pessimistic pre-check: verifies at least 1 minute of transcription
+        # quota remains.  Actual duration is unknown until after processing,
+        # so the real usage is recorded post-transcription via
+        # apply_usage_delta(TRANSCRIPTION_MINUTES_MONTH, ceil(minutes)).
         Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
@@ -1077,7 +1081,6 @@ async def create_transcription(
             except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
                 pass  # fail-open
 
-        timed_segments = _normalize_timed_segments(segments_for_timing)
         retention_decision = build_audio_retention_decision(effective_stt_policy)
         if not retention_decision.delete_after_success and canonical_path:
             try:
@@ -1316,6 +1319,10 @@ async def create_transcription(
         Depends(check_rate_limit),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call")),
         Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        # Pessimistic pre-check: verifies at least 1 minute of transcription
+        # quota remains.  Actual duration is unknown until after processing,
+        # so the real usage is recorded post-transcription via
+        # apply_usage_delta(TRANSCRIPTION_MINUTES_MONTH, ceil(minutes)).
         Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
@@ -1338,6 +1345,7 @@ async def create_translation(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+    billing_org_id: int | None = Depends(get_billing_org_id),
 ):
     """
     Translates audio into English.
@@ -1379,6 +1387,7 @@ async def create_translation(
         current_user=current_user,
         principal=principal,
         db=db,
+        billing_org_id=billing_org_id,
     )
 
 

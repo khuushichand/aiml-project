@@ -9,13 +9,19 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Response,
     UploadFile,
     status,
 )
 from loguru import logger
 from starlette.responses import JSONResponse
 
-from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import (
+    BILLING_LIMIT_HEADER,
+    BILLING_USAGE_HEADER,
+    BILLING_WARNING_HEADER,
+    require_within_limit,
+)
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
 from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
@@ -49,6 +55,19 @@ from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
 
 router = APIRouter()
 
+_BILLING_HEADERS = (BILLING_LIMIT_HEADER, BILLING_USAGE_HEADER, BILLING_WARNING_HEADER)
+
+
+def _propagate_billing_headers(
+    source: Response,
+    target: JSONResponse,
+) -> None:
+    """Copy billing headers written by ``require_within_limit`` onto the explicit JSONResponse."""
+    for name in _BILLING_HEADERS:
+        value = source.headers.get(name)
+        if value is not None:
+            target.headers[name] = value
+
 
 @router.post(
     "/process-audios",
@@ -62,6 +81,7 @@ router = APIRouter()
 )
 async def process_audios_endpoint(
     background_tasks: BackgroundTasks,
+    injected_response: Response,
     db: Any = Depends(get_media_db_for_user),
     form_data: ProcessAudiosForm = Depends(get_process_audios_form),
     files: list[UploadFile] | None = File(
@@ -209,6 +229,7 @@ async def process_audios_endpoint(
                     )
                     if legacy_signal is not None:
                         apply_media_legacy_headers(response, legacy_signal)
+                    _propagate_billing_headers(injected_response, response)
                     return response
 
                 response = JSONResponse(
@@ -217,6 +238,7 @@ async def process_audios_endpoint(
                 )
                 if legacy_signal is not None:
                     apply_media_legacy_headers(response, legacy_signal)
+                _propagate_billing_headers(injected_response, response)
                 return response
 
             # Otherwise, no inputs at all -> 400.
@@ -362,6 +384,7 @@ async def process_audios_endpoint(
     response = JSONResponse(status_code=final_status_code, content=batch_result)
     if legacy_signal is not None:
         apply_media_legacy_headers(response, legacy_signal)
+    _propagate_billing_headers(injected_response, response)
     return response
 
 

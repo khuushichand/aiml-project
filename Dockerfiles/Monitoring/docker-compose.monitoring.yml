@@ -1,8 +1,9 @@
 # Monitoring overlay for tldw_server.
 # Usage (overlay — recommended):
 #   docker compose -f Dockerfiles/docker-compose.yml -f Dockerfiles/Monitoring/docker-compose.monitoring.yml up -d
-# Standalone (app running on host — requires editing prometheus.yml target to host.docker.internal:8000):
-#   docker compose -f Dockerfiles/Monitoring/docker-compose.monitoring.yml up -d
+# NOTE: This is a compose overlay. prometheus.yml scrapes "app:8000" which
+# requires the main docker-compose.yml stack to provide the "app" service.
+# Running this file standalone will cause Prometheus scrape failures.
 
 services:
   prometheus:
