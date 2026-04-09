@@ -2597,6 +2597,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
               </span>
             }
           />
+          <p className="text-xs text-text-muted mt-0.5">
+            {t(
+              "playground:search.prefixHint",
+              "Tip: Type source: chat: or note: to filter by category"
+            )}
+          </p>
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-text-subtle">
               {t("playground:search.filterBy", "Filter:")}
