@@ -15,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
+    DatabaseBackend,
     DatabaseConfig,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory

@@ -28,6 +28,7 @@ import shutil
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -1804,7 +1805,7 @@ class ChatbookService:
         import_embeddings: bool = False,
         async_mode: bool = False,
         request_id: str | None = None
-    ) -> tuple[bool, str, str | list[str] | None]:
+    ) -> tuple[bool, str, str | dict[str, Any] | None]:
         """
         Import a chatbook.
 
@@ -1820,7 +1821,7 @@ class ChatbookService:
         Returns:
             Tuple of (success, message, result) where result is:
             - job_id (str) if async_mode=True
-            - warnings list (List[str]) if async_mode=False
+            - sync import result dict if async_mode=False
         """
         # Handle both conflict_resolution and conflict_strategy (for test compatibility)
         if conflict_strategy and not conflict_resolution:
@@ -1969,7 +1970,7 @@ class ChatbookService:
             return True, f"Import job started: {job_id}", job_id
         else:
             # Run synchronously (wrapped in executor for async compatibility)
-            # Return (success, message, warnings)
+            # Return (success, message, structured sync import result)
             return await asyncio.to_thread(
                 self._import_chatbook_sync,
                 str(resolved_path), content_selections,
@@ -1985,7 +1986,7 @@ class ChatbookService:
         prefix_imported: bool,
         import_media: bool,
         import_embeddings: bool
-    ) -> tuple[bool, str, list[str] | None]:
+    ) -> tuple[bool, str, dict[str, Any] | None]:
         """
         Synchronously import a chatbook.
         """
@@ -2108,10 +2109,25 @@ class ChatbookService:
                 content_selections.pop(ct, None)
 
             character_id_map: dict[str, int] = {}
+            imported_items: dict[str, int] = {}
+
+            def _run_import_for_type(
+                content_type: ContentType,
+                import_fn: Callable[..., Any],
+                *args: Any,
+                **kwargs: Any,
+            ) -> None:
+                before_successful = import_status.successful_items
+                import_fn(*args, **kwargs)
+                imported_count = import_status.successful_items - before_successful
+                if imported_count > 0:
+                    imported_items[content_type.value] = imported_count
 
             # Import characters first (they may be dependencies)
             if ContentType.CHARACTER in content_selections:
-                self._import_characters(
+                _run_import_for_type(
+                    ContentType.CHARACTER,
+                    self._import_characters,
                     extract_dir, manifest,
                     content_selections[ContentType.CHARACTER],
                     conflict_resolution, prefix_imported,
@@ -2121,7 +2137,9 @@ class ChatbookService:
 
             # Import world books
             if ContentType.WORLD_BOOK in content_selections:
-                self._import_world_books(
+                _run_import_for_type(
+                    ContentType.WORLD_BOOK,
+                    self._import_world_books,
                     extract_dir, manifest,
                     content_selections[ContentType.WORLD_BOOK],
                     conflict_resolution, prefix_imported,
@@ -2130,7 +2148,9 @@ class ChatbookService:
 
             # Import dictionaries
             if ContentType.DICTIONARY in content_selections:
-                self._import_dictionaries(
+                _run_import_for_type(
+                    ContentType.DICTIONARY,
+                    self._import_dictionaries,
                     extract_dir, manifest,
                     content_selections[ContentType.DICTIONARY],
                     conflict_resolution, prefix_imported,
@@ -2139,7 +2159,9 @@ class ChatbookService:
 
             # Import conversations
             if ContentType.CONVERSATION in content_selections:
-                self._import_conversations(
+                _run_import_for_type(
+                    ContentType.CONVERSATION,
+                    self._import_conversations,
                     extract_dir, manifest,
                     content_selections[ContentType.CONVERSATION],
                     conflict_resolution, prefix_imported,
@@ -2149,7 +2171,9 @@ class ChatbookService:
 
             # Import notes
             if ContentType.NOTE in content_selections:
-                self._import_notes(
+                _run_import_for_type(
+                    ContentType.NOTE,
+                    self._import_notes,
                     extract_dir, manifest,
                     content_selections[ContentType.NOTE],
                     conflict_resolution, prefix_imported,
@@ -2160,21 +2184,25 @@ class ChatbookService:
 
             # Build result message
             logger.debug(f"Import status: total={import_status.total_items}, successful={import_status.successful_items}, skipped={import_status.skipped_items}, failed={import_status.failed_items}")
+            sync_result = {
+                "imported_items": imported_items,
+                "warnings": list(import_status.warnings or []),
+            }
 
             if import_status.successful_items > 0:
                 message = f"Successfully imported {import_status.successful_items}/{import_status.total_items} items"
                 if import_status.skipped_items > 0:
                     message += f" ({import_status.skipped_items} skipped)"
-                return True, message, list(import_status.warnings or [])
+                return True, message, sync_result
             elif import_status.total_items == 0:
                 # No items to import is not an error
-                return True, "Import completed: No items to import", list(import_status.warnings or [])
+                return True, "Import completed: No items to import", sync_result
             elif import_status.skipped_items > 0:
                 # All items were skipped (e.g., due to conflicts)
-                return True, f"Import completed: All {import_status.skipped_items} items were skipped", list(import_status.warnings or [])
+                return True, f"Import completed: All {import_status.skipped_items} items were skipped", sync_result
             else:
                 logger.debug("Import failed: No items were successfully imported or skipped")
-                return False, "No items were imported", list(import_status.warnings or [])
+                return False, "No items were imported", sync_result
 
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error importing chatbook: {e}")
@@ -2283,15 +2311,12 @@ class ChatbookService:
                 return None, "Invalid or potentially malicious archive file"
             file_path = str(resolved_path)
 
-            # Defense-in-depth: validate the archive before extraction
-            try:
-                from .chatbook_validators import ChatbookValidator
-                ok, err = ChatbookValidator.validate_zip_file(file_path)
-                if not ok:
-                    return None, err or "Invalid archive"
-            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
-                # If validator import fails, continue with cautious extraction guards
-                pass
+            # Defense-in-depth: validate the archive before extraction.
+            # Any unexpected validator fault should surface as a server error.
+            from .chatbook_validators import ChatbookValidator
+            ok, err = ChatbookValidator.validate_zip_file(file_path)
+            if not ok:
+                return None, err or "Invalid archive"
             # Extract to temporary directory with UUID to prevent collisions
             extract_dir = self.temp_dir / f"preview_{uuid4().hex}"
 
@@ -2327,16 +2352,20 @@ class ChatbookService:
             if not manifest_path.exists():
                 return None, "Invalid chatbook: manifest.json not found"
 
-            with open(manifest_path, encoding='utf-8') as f:
-                manifest_data = json.load(f)
-
-            manifest = ChatbookManifest.from_dict(manifest_data)
+            try:
+                with open(manifest_path, encoding='utf-8') as f:
+                    manifest_data = json.load(f)
+                manifest = ChatbookManifest.from_dict(manifest_data)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError, ValidationError):
+                return None, "Invalid chatbook manifest"
 
             return manifest, None
 
+        except zipfile.BadZipFile:
+            return None, "Invalid archive"
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error previewing chatbook: {e}")
-            return None, f"Error previewing chatbook: {str(e)}"
+            raise
         finally:
             if extract_dir and extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
@@ -2921,10 +2950,11 @@ class ChatbookService:
                         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             continue
 
-                        # Check if any job references this file
+                        # Check if any job references this file (by absolute path or token)
+                        token_ref = self._build_import_file_token(entry.resolve())
                         cursor = self.db.execute_query(
-                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND chatbook_path = ? LIMIT 1",
-                            (self.user_id, str(entry)),
+                            "SELECT 1 FROM import_jobs WHERE user_id = ? AND (chatbook_path = ? OR chatbook_path = ?) LIMIT 1",
+                            (self.user_id, str(entry), token_ref),
                         )
                         refs = self._fetch_results(cursor)
                         if not refs:
@@ -2946,7 +2976,11 @@ class ChatbookService:
     def _try_delete_import_file(self, file_path_str: str) -> int:
         """Try to delete an import archive file. Returns 1 if deleted, 0 otherwise."""
         try:
-            file_path = Path(file_path_str).resolve()
+            file_path = self._resolve_import_archive_path(file_path_str)
+        except (ValidationError, SecurityError):
+            logger.warning("Refusing to delete unresolved import file token")
+            return 0
+        try:
             # Validate path is within expected directories
             import_base = Path(self.import_dir).resolve()
             temp_base = Path(self.temp_dir).resolve()
@@ -5194,11 +5228,20 @@ class ChatbookService:
             True if valid
         """
         try:
+            from .chatbook_validators import ChatbookValidator
+
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
             except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 raise ValidationError("Invalid or potentially malicious archive file", field="file_path") from exc
             file_path = str(resolved_path)
+
+            valid_archive, archive_error = ChatbookValidator.validate_zip_file(file_path)
+            if not valid_archive:
+                raise ValidationError(
+                    archive_error or "Invalid chatbook archive",
+                    field="file_path",
+                )
 
             with zipfile.ZipFile(file_path, 'r') as zf:
                 # Check for manifest

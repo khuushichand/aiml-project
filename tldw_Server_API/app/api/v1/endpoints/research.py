@@ -74,6 +74,31 @@ def shutdown_websearch_executor(*, wait: bool = True, cancel_futures: bool = Tru
     if executor is not None:
         executor.shutdown(wait=wait, cancel_futures=cancel_futures)
 
+
+def _get_phase1_fatal_error(phase1: dict[str, Any]) -> HTTPException | None:
+    """Convert fatal provider failures with no results into an HTTP error."""
+    web_results = phase1.get("web_search_results_dict")
+    if not isinstance(web_results, dict):
+        return None
+
+    results = web_results.get("results")
+    if isinstance(results, list) and results:
+        return None
+
+    error_message = web_results.get("processing_error") or web_results.get("error")
+    if not error_message:
+        warnings = web_results.get("warnings")
+        if isinstance(warnings, list):
+            for warning in warnings:
+                if isinstance(warning, dict) and warning.get("phase") == "provider" and warning.get("message"):
+                    error_message = warning["message"]
+                    break
+
+    if not error_message:
+        return None
+
+    return HTTPException(status_code=502, detail=f"Websearch failed: {error_message}")
+
 #
 #########################################################################################################################
 #
@@ -375,6 +400,10 @@ async def websearch_endpoint(
             payload.query,
             search_params,
         )
+
+        phase1_fatal_error = _get_phase1_fatal_error(phase1)
+        if phase1_fatal_error is not None:
+            raise phase1_fatal_error
 
         if payload.aggregate:
             # Cancellation propagates if client disconnects

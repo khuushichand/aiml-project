@@ -112,7 +112,8 @@ FastAPI endpoint (app/api/v1/endpoints/chat.py)
 ---
 
 ## Metrics & Logging
-- Metrics enumerated in `chat_metrics.ChatMetricsCollector` feed OpenTelemetry meters (`chat_requests_total`, streaming stats, tokens, DB operations, moderation outcomes).
+- `chat_metrics.ChatMetricsCollector` continues to emit OpenTelemetry meters (`chat_requests_total`, streaming stats, tokens, DB operations, moderation outcomes).
+- `/api/v1/metrics/chat` serves a small in-process summary maintained alongside those emissions so registry-style fields such as `sum` remain available.
 - Loguru is used throughout for structured logging; metrics and audit hooks provide provider/model labels for downstream dashboards.
 - Usage tracking integrates with `Usage.usage_tracker` to record per-call token/cost estimates.
 

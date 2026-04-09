@@ -1,6 +1,5 @@
 import configparser
 import threading
-import time
 
 import pytest
 
@@ -51,8 +50,6 @@ def test_get_content_backend_closes_superseded_cached_backend(monkeypatch) -> No
     old_backend = _FakeBackend()
     new_backend = _FakeBackend()
 
-    # Use zero grace period so the deferred close fires immediately.
-    monkeypatch.setattr(content_backend, "_EVICTION_GRACE_SECONDS", 0.0)
     monkeypatch.setattr(content_backend, "_cached_backend", old_backend)
     monkeypatch.setattr(content_backend, "_cached_backend_signature", ("old",))
     monkeypatch.setattr(
@@ -66,8 +63,6 @@ def test_get_content_backend_closes_superseded_cached_backend(monkeypatch) -> No
 
     if backend is not new_backend:
         pytest.fail("expected replacement backend to be returned")
-    # The close is deferred to a background thread; give it a moment.
-    time.sleep(0.1)
     if old_backend.pool.closed != 1:
         pytest.fail("expected superseded cached backend pool to close exactly once")
 
@@ -75,15 +70,11 @@ def test_get_content_backend_closes_superseded_cached_backend(monkeypatch) -> No
 def test_reset_media_runtime_defaults_closes_cached_backend(monkeypatch) -> None:
     cached_backend = _FakeBackend()
 
-    # Use zero grace period so the deferred close fires immediately.
-    monkeypatch.setattr(content_backend, "_EVICTION_GRACE_SECONDS", 0.0)
     monkeypatch.setattr(content_backend, "_cached_backend", cached_backend)
     monkeypatch.setattr(content_backend, "_cached_backend_signature", ("cached",))
 
     media_runtime_defaults._clear_content_backend_cache()
 
-    # The close is deferred to a background thread; give it a moment.
-    time.sleep(0.1)
     if cached_backend.pool.closed != 1:
         pytest.fail("expected clearing cached backend to close the pool exactly once")
 

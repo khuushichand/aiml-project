@@ -1,6 +1,7 @@
 # migrations.py
 # Description: Database migrations for AuthNZ module tables
 #
+from __future__ import annotations
 # Imports
 import contextlib
 import json
@@ -607,7 +608,7 @@ def migration_085_remove_api_keys_scope_default(conn: sqlite3.Connection) -> Non
     try:
         conn.execute(
             f"""
-            CREATE TABLE api_keys_new (
+            CREATE TABLE IF NOT EXISTS api_keys_new (
                 {', '.join(column_defs)}
             )
             """
@@ -619,7 +620,7 @@ def migration_085_remove_api_keys_scope_default(conn: sqlite3.Connection) -> Non
             FROM api_keys
             """
         )
-        conn.execute("DROP TABLE api_keys")
+        conn.execute("DROP TABLE IF EXISTS api_keys")
         conn.execute("ALTER TABLE api_keys_new RENAME TO api_keys")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")

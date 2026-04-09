@@ -312,6 +312,30 @@ async def export_audit_events(
         fname = _normalize_ext(fname, "csv")
     headers = {"Content-Disposition": f"attachment; filename={fname}"}
 
+    if not do_stream and max_rows is None:
+        default_limit = getattr(audit_service, "non_stream_max_rows", None)
+        count_events_fn = getattr(audit_service, "count_events", None)
+        if isinstance(default_limit, int) and default_limit > 0 and callable(count_events_fn):
+            total_count = await count_events_fn(
+                start_time=st,
+                end_time=et,
+                event_types=ets,
+                categories=cats,
+                user_id=user_id_filter,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                ip_address=ip_address,
+                session_id=session_id,
+                endpoint=endpoint,
+                method=method,
+                min_risk_score=min_risk_score,
+                allow_cross_tenant=allow_cross_tenant,
+            )
+            if int(total_count) > default_limit:
+                headers["X-Audit-Export-Truncated"] = "true"
+                headers["X-Audit-Export-Row-Limit"] = str(default_limit)
+                headers["X-Audit-Export-Total-Count"] = str(int(total_count))
+
     if do_stream:
         # content is an async generator from export_events
         return StreamingResponse(content=content, media_type=media, headers=headers)

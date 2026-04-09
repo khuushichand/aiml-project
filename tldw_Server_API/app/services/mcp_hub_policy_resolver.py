@@ -597,6 +597,10 @@ class McpHubPolicyResolver:
             + deny_capability_resolution.unsupported_environment_requirements
         )
 
+        # Ensure tool_tier_overrides is present in the resolved document so
+        # downstream consumers (GovernanceFilter, runner_client) can rely on it.
+        resolved_policy_document.setdefault("tool_tier_overrides", {})
+
         return {
             "enabled": True,
             "allowed_tools": _allowed_tool_patterns(resolved_policy_document),
@@ -674,7 +678,7 @@ class McpHubPolicyResolver:
             "approval_mode": None,
             "policy_document": {},
             "authored_policy_document": {},
-            "resolved_policy_document": {},
+            "resolved_policy_document": {"tool_tier_overrides": {}},
             "resolved_capabilities": [],
             "unresolved_capabilities": [],
             "capability_mapping_summary": [],

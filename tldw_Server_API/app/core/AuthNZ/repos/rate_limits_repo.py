@@ -59,6 +59,7 @@ class AuthnzRateLimitsRepo:
         )
         await conn.execute("DROP TABLE IF EXISTS account_lockouts_legacy")
 
+
     async def _ensure_postgres_account_lockouts_schema(self, conn: Any) -> None:
         """Upgrade legacy identifier-only lockout tables to attempt-type scope."""
         lockout_ddl = """

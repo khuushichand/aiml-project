@@ -1287,6 +1287,21 @@ class TestCharacterAPIIntegration:
         assert restored_db is not None
         assert int(restored_db["deleted"]) == 0
 
+    def test_restore_character_active_row_returns_409(self, client: TestClient):
+        create_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload("RestoreActiveAPI"),
+        )
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{created['id']}/restore?expected_version={created['version']}"
+        )
+
+        assert response.status_code == 409, response.text
+        assert "already active" in response.json()["detail"].lower()
+
     def test_restore_character_version_conflict_integration(
         self, client: TestClient, test_db: CharactersRAGDB
     ):

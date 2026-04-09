@@ -1429,6 +1429,22 @@ else:
     except _IMPORT_EXCEPTIONS as _acp_import_err:
         logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
         acp_router = None  # type: ignore[assignment]
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+    except _IMPORT_EXCEPTIONS as _acp_sched_err:
+        logger.warning(f"ACP schedules endpoints unavailable at import time; deferring: {_acp_sched_err}")
+        acp_schedules_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+    except _IMPORT_EXCEPTIONS as _acp_trig_err:
+        logger.warning(f"ACP triggers endpoints unavailable at import time; deferring: {_acp_trig_err}")
+        acp_triggers_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+    except _IMPORT_EXCEPTIONS as _acp_perm_err:
+        logger.warning(f"ACP permissions endpoints unavailable at import time; deferring: {_acp_perm_err}")
+        acp_permissions_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -3439,7 +3455,10 @@ async def lifespan(app: FastAPI):
 
             _cfg = DatabaseConfig.from_env()
             _backend = DatabaseBackendFactory.create_backend(_cfg)
-            _run_pg_rls_auto_ensure(_backend)
+            try:
+                _run_pg_rls_auto_ensure(_backend)
+            except DatabaseError as e:
+                logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
         else:
             logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
@@ -4658,13 +4677,23 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Unified audit services stopped")
 
         try:
+            from tldw_Server_API.app.api.v1.endpoints.sharing import (
+                shutdown_sharing_audit_service,
+            )
+
+            await shutdown_sharing_audit_service()
+            logger.info("App Shutdown: Sharing audit service stopped")
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
+            logger.debug(f"Sharing audit service shutdown skipped: {_e}")
+
+        try:
             from tldw_Server_API.app.core.Embeddings.audit_adapter import (
                 shutdown_local_audit_adapter_loop,
             )
 
             shutdown_local_audit_adapter_loop()
             logger.info("App Shutdown: Embeddings audit adapter loop stopped")
-        except (_STARTUP_GUARD_EXCEPTIONS + (ImportError, ModuleNotFoundError)) as _e:
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
             logger.debug(f"Embeddings audit adapter loop shutdown skipped: {_e}")
 
         try:
@@ -4674,7 +4703,7 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_evaluations_audit_loop()
             logger.info("App Shutdown: Evaluations audit adapter loop stopped")
-        except (_STARTUP_GUARD_EXCEPTIONS + (ImportError, ModuleNotFoundError)) as _e:
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
             logger.debug(f"Evaluations audit adapter loop shutdown skipped: {_e}")
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
@@ -6023,29 +6052,9 @@ async def root():
 
 # Metrics endpoint for Prometheus scraping (registered conditionally below)
 async def metrics():
-    """Prometheus metrics endpoint.
+    from tldw_Server_API.app.api.v1.endpoints.metrics import build_prometheus_metrics_response
 
-    Exposes both the internal registry (JSON-backed) and the default
-    prometheus_client REGISTRY used by embeddings/orchestrator code paths.
-    """
-    from fastapi.responses import PlainTextResponse
-
-    try:
-        from prometheus_client import REGISTRY as PC_REGISTRY
-        from prometheus_client import generate_latest as pc_generate_latest
-    except _IMPORT_EXCEPTIONS:
-        PC_REGISTRY = None
-        pc_generate_latest = None
-
-    registry = get_metrics_registry()
-    combined = registry.export_prometheus_format() or ""
-    try:
-        if pc_generate_latest and PC_REGISTRY:
-            combined = (combined + "\n" + pc_generate_latest(PC_REGISTRY).decode("utf-8")).strip() + "\n"
-    except _REQUEST_GUARD_EXCEPTIONS:
-        # If prometheus_client is unavailable, ignore
-        pass
-    return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
+    return await build_prometheus_metrics_response()
 
 
 # OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
@@ -6611,6 +6620,25 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+
+        app.include_router(acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"])
+    except _IMPORT_EXCEPTIONS as _acp_sched_min_err:
+        logger.debug(f"Skipping ACP schedules router in minimal test app: {_acp_sched_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+
+        app.include_router(acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"])
+    except _IMPORT_EXCEPTIONS as _acp_trig_min_err:
+        logger.debug(f"Skipping ACP triggers router in minimal test app: {_acp_trig_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+
+        app.include_router(acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"])
+    except _IMPORT_EXCEPTIONS as _acp_perm_min_err:
+        logger.debug(f"Skipping ACP permissions router in minimal test app: {_acp_perm_min_err}")
     # Agent Orchestration endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
@@ -6864,6 +6892,12 @@ else:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     if "acp_router" in locals() and acp_router is not None:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
+    if "acp_schedules_router" in locals() and acp_schedules_router is not None:
+        _include_if_enabled("acp", acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"], default_stable=False)
+    if "acp_triggers_router" in locals() and acp_triggers_router is not None:
+        _include_if_enabled("acp", acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"], default_stable=False)
+    if "acp_permissions_router" in locals() and acp_permissions_router is not None:
+        _include_if_enabled("acp", acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_memory_router" in locals():

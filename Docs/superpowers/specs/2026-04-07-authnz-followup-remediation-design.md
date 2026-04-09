@@ -26,6 +26,8 @@ In scope:
 - [`tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py)
 - [`tldw_Server_API/Databases/SQLite/Schema/sqlite_users.sql`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/Databases/SQLite/Schema/sqlite_users.sql)
 - AuthNZ tests and schema fixtures that currently encode the old contracts
+- Schema-dependent tests outside `tldw_Server_API/tests/AuthNZ` that create or
+  query AuthNZ `api_keys` rows and currently rely on omitted `scope`
 
 Out of scope:
 
@@ -102,6 +104,8 @@ PostgreSQL/backstop:
 - [`rate_limits_repo.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/repos/rate_limits_repo.py)
   schema ensure logic will detect the old identifier-only shape and upgrade it
   to attempt-type scoped form.
+- That upgrade must be idempotent and safe under concurrent first-use
+  initialization, rather than assuming a single-writer bootstrap path.
 
 Runtime:
 
@@ -112,6 +116,10 @@ Runtime:
   type.
 - [`lockout_tracker.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/lockout_tracker.py)
   will stop dropping `attempt_type` on lookup and reset.
+- The repo contract changes accordingly: `get_active_lockout(...)` and
+  `reset_failed_attempts_and_lockout(...)` become attempt-type aware signatures,
+  and test doubles/stubs that currently model identifier-only lockouts must be
+  updated with the new method shape.
 
 Fixture alignment:
 
@@ -159,6 +167,12 @@ Runtime expectations:
 
 SQLite persisted runtime schema drift should fail early instead of surfacing as
 later query-time breakage.
+
+The runtime/test gate must be defined once and reused, not reimplemented in
+multiple modules. Introduce a canonical helper or predicate in the AuthNZ
+database layer and have both [`database.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/database.py)
+and [`api_keys_repo.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/repos/api_keys_repo.py)
+consume that shared rule.
 
 In
 [`database.py`](/Users/appledev/Documents/GitHub/tldw_server/tldw_Server_API/app/core/AuthNZ/database.py):
@@ -208,6 +222,8 @@ Test categories:
 - Migration-sensitive tests for SQLite schema evolution
 - Bootstrap/schema tests for API key readiness checks
 - Fixture/schema expectation updates where old DDL is asserted
+- Schema-dependent tests outside `tldw_Server_API/tests/AuthNZ` that rely on
+  omitted `scope` must be updated or explicitly justified
 
 ## Risks And Mitigations
 

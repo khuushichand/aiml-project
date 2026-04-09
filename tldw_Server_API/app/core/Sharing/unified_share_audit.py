@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import aiosqlite
+from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -31,7 +32,16 @@ _RESERVED_METADATA_KEYS = {
     "actor_user_id",
     "share_id",
     "token_id",
+    "_legacy_created_at",
 }
+
+
+@dataclass(frozen=True)
+class ShareAuditIdentityState:
+    """Snapshot of compatibility/legacy ID state for migration safety checks."""
+    compatibility_ids: set[int] = field(default_factory=set)
+    legacy_ids: set[int] = field(default_factory=set)
+    max_compatibility_id: int = 0
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -97,10 +107,19 @@ class SharingIdentityState:
 class UnifiedShareAuditWriter:
     """Write Sharing events into unified audit and project them back compatibly."""
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | None = None,
+        service: UnifiedAuditService | None = None,
+    ) -> None:
         resolved = Path(db_path) if db_path else DatabasePaths.get_shared_audit_db_path()
         self.db_path = str(resolved)
-        self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+        if service is not None:
+            self._service = service
+            self._owns_service = False
+        else:
+            self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+            self._owns_service = True
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -116,7 +135,8 @@ class UnifiedShareAuditWriter:
     async def stop(self) -> None:
         if not self._initialized:
             return
-        await self._service.stop()
+        if self._owns_service:
+            await self._service.stop()
         self._initialized = False
 
     async def _open_db(self) -> aiosqlite.Connection:
@@ -166,14 +186,6 @@ class UnifiedShareAuditWriter:
             row = await cur.fetchone()
         return int(row["int_value"]) if row is not None else 0
 
-    async def get_identity_state(self) -> SharingIdentityState:
-        await self.initialize()
-        db = await self._open_db()
-        try:
-            return await self._load_identity_state_db(db)
-        finally:
-            await db.close()
-
     async def _load_identity_state_db(self, db: aiosqlite.Connection) -> SharingIdentityState:
         async with db.execute(
             f"SELECT metadata FROM audit_events WHERE {_SHARE_EVENT_FILTER_SQL}"  # nosec B608
@@ -202,12 +214,19 @@ class UnifiedShareAuditWriter:
         )
 
     async def _max_existing_compatibility_id(self) -> int:
-        db = await self._open_db()
-        try:
-            state = await self._load_identity_state_db(db)
-            return state.max_compatibility_id
-        finally:
-            await db.close()
+        query = f"""
+            SELECT MAX(COALESCE(
+                CAST(json_extract(metadata, '$.compatibility_id') AS INTEGER),
+                CAST(json_extract(metadata, '$.legacy_share_audit_id') AS INTEGER),
+                0
+            )) AS max_id
+            FROM audit_events
+            WHERE {_SHARE_EVENT_FILTER_SQL}
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(query) as cur:
+                row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
 
     async def _sync_compatibility_floor(self) -> None:
         floor = max(
@@ -443,6 +462,142 @@ class UnifiedShareAuditWriter:
             raise RuntimeError("Sharing audit write unexpectedly returned no compatibility id")
         return compatibility_id
 
+    async def query_events(
+        self,
+        *,
+        owner_user_id: int | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        await self.initialize()
+        conditions = [_SHARE_EVENT_FILTER_SQL]
+        params: list[Any] = []
+        if owner_user_id is not None:
+            conditions.append(
+                "(tenant_user_id = ? OR json_extract(metadata, '$.owner_user_id') = ?)"
+            )
+            owner_str = str(owner_user_id)
+            params.extend([owner_str, owner_user_id])
+        if resource_type is not None:
+            conditions.append("resource_type = ?")
+            params.append(resource_type)
+        if resource_id is not None:
+            conditions.append("resource_id = ?")
+            params.append(resource_id)
+        params.extend([limit, offset])
+
+        query = f"""
+            SELECT
+                timestamp,
+                event_type,
+                tenant_user_id,
+                context_user_id,
+                context_ip_address,
+                context_user_agent,
+                resource_type,
+                resource_id,
+                metadata
+            FROM audit_events
+            WHERE {' AND '.join(conditions)}
+            ORDER BY timestamp DESC, rowid DESC
+            LIMIT ? OFFSET ?
+        """
+
+        db = await self._open_db()
+        try:
+            async with db.execute(query, params) as cur:
+                rows = await cur.fetchall()
+        finally:
+            await db.close()
+
+        projected: list[dict[str, Any]] = []
+        for row in rows:
+            result = self._project_row(dict(row))
+            if result is not None:
+                projected.append(result)
+        return projected
+
+    def _project_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        metadata = _load_metadata(row.get("metadata"))
+        compatibility_id = _coerce_int(
+            metadata.get("compatibility_id")
+            or metadata.get("legacy_share_audit_id")
+        )
+        if compatibility_id is None:
+            logger.warning(
+                "Skipping sharing audit row without compatibility_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
+
+        owner_user_id = _coerce_int(row.get("tenant_user_id"))
+        if owner_user_id is None:
+            owner_user_id = _coerce_int(metadata.get("owner_user_id"))
+        if owner_user_id is None:
+            logger.warning(
+                "Skipping sharing audit row without owner_user_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
+
+        actor_user_id = _coerce_int(metadata.get("actor_user_id"))
+        if actor_user_id is None:
+            actor_user_id = _coerce_int(row.get("context_user_id"))
+
+        created_at = metadata.get("_legacy_created_at") or row.get("timestamp")
+
+        return {
+            "id": compatibility_id,
+            "event_type": str(row.get("event_type") or ""),
+            "actor_user_id": actor_user_id,
+            "resource_type": row.get("resource_type"),
+            "resource_id": row.get("resource_id"),
+            "owner_user_id": owner_user_id,
+            "share_id": _coerce_int(metadata.get("share_id")),
+            "token_id": _coerce_int(metadata.get("token_id")),
+            "metadata": _visible_metadata(metadata),
+            "ip_address": row.get("context_ip_address"),
+            "user_agent": row.get("context_user_agent"),
+            "created_at": created_at,
+        }
+
+    async def get_identity_state(self) -> ShareAuditIdentityState:
+        """Return a snapshot of compatibility and legacy ID state for migration safety checks."""
+        await self.initialize()
+        query = f"""
+            SELECT metadata FROM audit_events
+            WHERE {_SHARE_EVENT_FILTER_SQL}
+        """
+        compatibility_ids: set[int] = set()
+        legacy_ids: set[int] = set()
+        max_cid = 0
+
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(query) as cur:
+                async for row in cur:
+                    meta = _load_metadata(row[0])
+                    cid = _coerce_int(meta.get("compatibility_id"))
+                    lid = _coerce_int(meta.get("legacy_share_audit_id"))
+                    if cid is not None:
+                        compatibility_ids.add(cid)
+                        if cid > max_cid:
+                            max_cid = cid
+                    if lid is not None:
+                        legacy_ids.add(lid)
+                        compatibility_ids.add(lid)
+                        if lid > max_cid:
+                            max_cid = lid
+
+        return ShareAuditIdentityState(
+            compatibility_ids=compatibility_ids,
+            legacy_ids=legacy_ids,
+            max_compatibility_id=max_cid,
+        )
+
     async def import_legacy_event(
         self,
         *,
@@ -457,108 +612,45 @@ class UnifiedShareAuditWriter:
         metadata: dict[str, Any] | None = None,
         ip_address: str | None = None,
         user_agent: str | None = None,
-        created_at: Any = None,
+        created_at: str | None = None,
     ) -> bool:
-        compatibility_id = await self._write_event_transaction(
-            event_type=event_type,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            owner_user_id=owner_user_id,
-            actor_user_id=actor_user_id,
-            share_id=share_id,
-            token_id=token_id,
-            metadata=metadata,
+        """Import a single legacy share_audit_log row using its original id as compatibility_id.
+
+        Returns True if inserted, False if a row with that legacy id already exists.
+        """
+        await self.initialize()
+        # Check for duplicates
+        state = await self.get_identity_state()
+        if legacy_audit_id in state.legacy_ids:
+            return False
+
+        payload = dict(metadata or {})
+        payload.update(
+            {
+                "compatibility_id": legacy_audit_id,
+                "legacy_share_audit_id": legacy_audit_id,
+                "owner_user_id": owner_user_id,
+                "actor_user_id": actor_user_id,
+                "share_id": share_id,
+                "token_id": token_id,
+            }
+        )
+        if created_at is not None:
+            payload["_legacy_created_at"] = created_at
+        context = AuditContext(
+            user_id=str(actor_user_id) if actor_user_id is not None else None,
             ip_address=ip_address,
             user_agent=user_agent,
-            compatibility_id=int(legacy_audit_id),
-            legacy_share_audit_id=int(legacy_audit_id),
-            timestamp=created_at,
-            event_id=_legacy_event_id(int(legacy_audit_id)),
         )
-        return compatibility_id is not None
-
-    async def query_events(
-        self,
-        *,
-        owner_user_id: int | None = None,
-        resource_type: str | None = None,
-        resource_id: str | None = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        await self.initialize()
-        tenant_user_id = str(owner_user_id) if owner_user_id is not None else None
-        query = """
-            SELECT
-                timestamp,
-                event_type,
-                tenant_user_id,
-                context_user_id,
-                context_ip_address,
-                context_user_agent,
-                resource_type,
-                resource_id,
-                metadata
-            FROM audit_events
-            WHERE (event_type LIKE 'share.%' OR event_type LIKE 'token.%')
-              AND (? IS NULL OR tenant_user_id = ?)
-              AND (? IS NULL OR resource_type = ?)
-              AND (? IS NULL OR resource_id = ?)
-            ORDER BY timestamp DESC, event_id DESC
-            LIMIT ? OFFSET ?
-        """
-
-        db = await self._open_db()
-        try:
-            async with db.execute(
-                query,
-                (
-                    tenant_user_id,
-                    tenant_user_id,
-                    resource_type,
-                    resource_type,
-                    resource_id,
-                    resource_id,
-                    limit,
-                    offset,
-                ),
-            ) as cur:
-                rows = await cur.fetchall()
-        finally:
-            await db.close()
-
-        return [self._project_row(dict(row)) for row in rows]
-
-    def _project_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        metadata = _load_metadata(row.get("metadata"))
-        compatibility_id = _coerce_int(
-            metadata.get("compatibility_id")
-            or metadata.get("legacy_share_audit_id")
+        await self._service.log_event(
+            event_type=event_type,
+            context=context,
+            tenant_user_id_override=str(owner_user_id),
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=event_type,
+            result="success",
+            metadata=payload,
         )
-        if compatibility_id is None:
-            raise ValueError("Sharing audit row is missing a compatibility id")
-
-        owner_user_id = _coerce_int(row.get("tenant_user_id"))
-        if owner_user_id is None:
-            owner_user_id = _coerce_int(metadata.get("owner_user_id"))
-        if owner_user_id is None:
-            raise ValueError("Sharing audit row is missing an owner_user_id")
-
-        actor_user_id = _coerce_int(metadata.get("actor_user_id"))
-        if actor_user_id is None:
-            actor_user_id = _coerce_int(row.get("context_user_id"))
-
-        return {
-            "id": compatibility_id,
-            "event_type": str(row.get("event_type") or ""),
-            "actor_user_id": actor_user_id,
-            "resource_type": row.get("resource_type"),
-            "resource_id": row.get("resource_id"),
-            "owner_user_id": owner_user_id,
-            "share_id": _coerce_int(metadata.get("share_id")),
-            "token_id": _coerce_int(metadata.get("token_id")),
-            "metadata": _visible_metadata(metadata),
-            "ip_address": row.get("context_ip_address"),
-            "user_agent": row.get("context_user_agent"),
-            "created_at": row.get("timestamp"),
-        }
+        await self._service.flush(raise_on_failure=True)
+        return True

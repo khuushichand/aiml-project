@@ -39,6 +39,7 @@ router = APIRouter()
 _RUNTIME_ALERT_ID_PREFIX = "alert:"
 
 
+
 def _resolve_monitoring_alerts_db_path() -> str:
     """Resolve the monitoring alerts DB path the same way the monitoring service does.
 

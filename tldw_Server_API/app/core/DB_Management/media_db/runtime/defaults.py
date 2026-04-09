@@ -47,24 +47,37 @@ try:
     from threading import RLock
 
     _runtime_state_lock = RLock()
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover — environments without threading
     logger.warning("threading.RLock unavailable; runtime state will not be thread-safe")
     _runtime_state_lock = None  # type: ignore
 
 
 def _runtime_state_context() -> AbstractContextManager[None]:
+    """Return a context manager guarding runtime state mutations.
+
+    Uses an RLock when threading is available, otherwise a no-op context.
+    """
     if _runtime_state_lock is None:
         return nullcontext()
     return _runtime_state_lock
 
 
 def _clear_content_backend_cache_unlocked() -> None:
+    """Clear the cached content backend without acquiring the runtime lock.
+
+    Intended to be called from within a ``_runtime_state_context()`` block.
+    Swallows import and runtime errors so callers can proceed with reset.
+    """
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
         # clear_cached_backend() acquires _cache_lock internally, so no
         # external lock acquisition is needed here.
-        cb.clear_cached_backend()
+        if hasattr(cb, "_cache_lock") and cb._cache_lock:
+            with cb._cache_lock:  # type: ignore[attr-defined]
+                cb.clear_cached_backend()
+        else:
+            cb.clear_cached_backend()
     except ImportError as exc:
         logger.debug(f"reset_media_runtime_defaults: unable to import content_backend: {exc}")
     except MEDIA_DB_RUNTIME_EXCEPTIONS as exc:

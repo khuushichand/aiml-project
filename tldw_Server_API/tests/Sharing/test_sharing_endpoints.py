@@ -360,5 +360,8 @@ class TestAdmin:
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["total"] >= 1
-        assert isinstance(payload["events"][0]["id"], int)
-        assert payload["events"][0]["event_type"].startswith("share.")
+        assert any(
+            isinstance(event.get("id"), int)
+            and str(event.get("event_type", "")).startswith("share.")
+            for event in payload["events"]
+        )
