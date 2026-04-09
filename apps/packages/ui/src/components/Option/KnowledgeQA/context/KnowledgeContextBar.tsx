@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
+import { Tooltip } from "antd"
 import {
   ChevronDown,
   Layers,
@@ -9,6 +10,7 @@ import {
   Globe,
   Check,
   CircleHelp,
+  Info,
   Search,
   LoaderCircle,
   Filter,
@@ -456,6 +458,9 @@ export function KnowledgeContextBar({
             <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
               Source Scope
             </h3>
+            <Tooltip title="Choose which types of content to include in your search. Select categories, then optionally pick specific items within each.">
+              <Info className="h-3.5 w-3.5 text-text-subtle cursor-help" />
+            </Tooltip>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -713,6 +718,9 @@ export function KnowledgeContextBar({
             <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
               Search Profile
             </h3>
+            <Tooltip title="Controls how thorough the search is. Fast returns quickly with fewer sources checked. Deep searches more thoroughly but takes longer.">
+              <Info className="h-3.5 w-3.5 text-text-subtle cursor-help" />
+            </Tooltip>
           </div>
 
           <div
@@ -764,21 +772,23 @@ export function KnowledgeContextBar({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggleWeb}
-          className={cn(
-            "inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
-            webEnabled
-              ? "border-primary/40 bg-primary/10 text-primaryStrong"
-              : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-          )}
-          aria-pressed={webEnabled}
-          aria-label={`Web fallback is currently ${webEnabled ? "enabled" : "disabled"}. Click to toggle.`}
-        >
-          <Globe className={cn("h-3.5 w-3.5", webEnabled ? "fill-current" : "")} />
-          Web
-        </button>
+        <Tooltip title="When enabled, includes web search results alongside your documents. Useful when your documents don't cover the topic.">
+          <button
+            type="button"
+            onClick={onToggleWeb}
+            className={cn(
+              "inline-flex h-7 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+              webEnabled
+                ? "border-primary/40 bg-primary/10 text-primaryStrong"
+                : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+            )}
+            aria-pressed={webEnabled}
+            aria-label={`Web fallback is currently ${webEnabled ? "enabled" : "disabled"}. Click to toggle.`}
+          >
+            <Globe className={cn("h-3.5 w-3.5", webEnabled ? "fill-current" : "")} />
+            Web
+          </button>
+        </Tooltip>
 
         <AnswerModelMenu
           generationProvider={generationProvider}
