@@ -182,8 +182,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
       : READY_STATE_ONBOARDING_SUGGESTIONS
   const isDesktopReadyState = effectiveSimple && !isMobile && !hasVisibleResultsArea
 
-  const contextChangedSinceLastRun = useMemo(() => {
-    if (!lastSearchScope) return false
+  const scopeChangeDetails = useMemo<string[]>(() => {
+    if (!lastSearchScope) return []
+    const changes: string[] = []
     const currentMediaScope = [
       ...(Array.isArray(settings.include_media_ids) ? settings.include_media_ids : []),
       ...pinnedSourceFilters.mediaIds,
@@ -192,15 +193,50 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
       ...(Array.isArray(settings.include_note_ids) ? settings.include_note_ids : []),
       ...pinnedSourceFilters.noteIds,
     ]
-    return (
-      lastSearchScope.preset !== preset ||
-      lastSearchScope.webFallback !== settings.enable_web_fallback ||
-      normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources) ||
+    if (lastSearchScope.preset !== preset) {
+      const presetLabels: Record<string, string> = {
+        fast: "Fast",
+        balanced: "Balanced",
+        thorough: "Deep",
+        custom: "Custom",
+      }
+      changes.push(
+        `Preset: changed from '${presetLabels[lastSearchScope.preset] ?? lastSearchScope.preset}' to '${presetLabels[preset] ?? preset}'`
+      )
+    }
+    if (normalizeSourceSet(lastSearchScope.sources) !== normalizeSourceSet(settings.sources)) {
+      const formatSources = (s: string[]) =>
+        s.length === 0 ? "None" : s.length >= 5 ? "All sources" : s.join(", ")
+      changes.push(
+        `Sources: changed from '${formatSources(lastSearchScope.sources)}' to '${formatSources(settings.sources)}'`
+      )
+    }
+    if (lastSearchScope.webFallback !== settings.enable_web_fallback) {
+      changes.push(
+        `Web fallback: turned ${settings.enable_web_fallback ? "on" : "off"}`
+      )
+    }
+    if (
       normalizeNumberSet(lastSearchScope.includeMediaIds ?? []) !==
-        normalizeNumberSet(currentMediaScope) ||
+      normalizeNumberSet(currentMediaScope)
+    ) {
+      const prevCount = (lastSearchScope.includeMediaIds ?? []).length
+      const currCount = currentMediaScope.length
+      changes.push(
+        `Document filters: changed from ${prevCount === 0 ? "all" : `${prevCount} selected`} to ${currCount === 0 ? "all" : `${currCount} selected`}`
+      )
+    }
+    if (
       normalizeStringSet(lastSearchScope.includeNoteIds ?? []) !==
-        normalizeStringSet(currentNoteScope)
-    )
+      normalizeStringSet(currentNoteScope)
+    ) {
+      const prevCount = (lastSearchScope.includeNoteIds ?? []).length
+      const currCount = currentNoteScope.length
+      changes.push(
+        `Note filters: changed from ${prevCount === 0 ? "all" : `${prevCount} selected`} to ${currCount === 0 ? "all" : `${currCount} selected`}`
+      )
+    }
+    return changes
   }, [
     lastSearchScope,
     pinnedSourceFilters.mediaIds,
@@ -211,6 +247,8 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
     settings.include_note_ids,
     settings.sources,
   ])
+
+  const contextChangedSinceLastRun = scopeChangeDetails.length > 0
   const latestUserTurnKey = useMemo(() => getLatestUserTurnKey(messages), [messages])
 
   useEffect(() => {
@@ -364,6 +402,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                     updateSetting("generation_model", model)
                   }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
+                  scopeChangeDetails={scopeChangeDetails}
                   className={isDesktopReadyState ? "justify-center" : undefined}
                 />
               ) : (
@@ -391,6 +430,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                     updateSetting("generation_model", model)
                   }
                   contextChangedSinceLastRun={contextChangedSinceLastRun}
+                  scopeChangeDetails={scopeChangeDetails}
                   onOpenSettings={() => setSettingsPanelOpen(true)}
                 />
               )}

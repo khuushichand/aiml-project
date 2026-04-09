@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
-import { Tooltip } from "antd"
+import { Popover, Tooltip } from "antd"
 import {
   ChevronDown,
   Layers,
@@ -33,6 +33,7 @@ type KnowledgeContextBarProps = {
   onGenerationProviderChange: (provider: string | null) => void
   onGenerationModelChange: (model: string | null) => void
   contextChangedSinceLastRun: boolean
+  scopeChangeDetails?: string[]
   onOpenSettings: () => void
 }
 
@@ -242,6 +243,7 @@ export function KnowledgeContextBar({
   onGenerationProviderChange,
   onGenerationModelChange,
   contextChangedSinceLastRun,
+  scopeChangeDetails = [],
   onOpenSettings,
 }: KnowledgeContextBarProps) {
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false)
@@ -808,9 +810,36 @@ export function KnowledgeContextBar({
         </button>
 
         {contextChangedSinceLastRun ? (
-          <span className="inline-flex items-center rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
-            Scope changed
-          </span>
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            title="Scope changed since last search"
+            content={
+              <div className="max-w-xs space-y-1.5">
+                {scopeChangeDetails.length > 0 ? (
+                  <ul className="list-disc pl-4 text-xs text-text-muted space-y-1">
+                    {scopeChangeDetails.map((detail, index) => (
+                      <li key={index}>{detail}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-text-muted">
+                    Search settings have changed since your last query.
+                  </p>
+                )}
+                <p className="text-xs text-text-muted pt-1 border-t border-border/60">
+                  Run a new search to apply the updated settings.
+                </p>
+              </div>
+            }
+          >
+            <button
+              type="button"
+              className="inline-flex items-center rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+            >
+              Scope changed
+            </button>
+          </Popover>
         ) : null}
       </div>
     </div>
