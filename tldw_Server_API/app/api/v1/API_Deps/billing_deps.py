@@ -29,7 +29,16 @@ from tldw_Server_API.app.core.Resource_Governance import cost_units
 BILLING_WARNING_HEADER = "X-Billing-Warning"
 BILLING_LIMIT_HEADER = "X-Billing-Limit"
 BILLING_USAGE_HEADER = "X-Billing-Usage"
+_BILLING_HEADERS = (BILLING_LIMIT_HEADER, BILLING_USAGE_HEADER, BILLING_WARNING_HEADER)
 _ADMIN_CLAIM_PERMISSIONS = frozenset({"*", "system.configure"})
+
+
+def propagate_billing_headers(source: Response, target: Response) -> None:
+    """Copy billing headers written by ``require_within_limit`` onto an explicit JSONResponse."""
+    for name in _BILLING_HEADERS:
+        value = source.headers.get(name)
+        if value is not None:
+            target.headers[name] = value
 
 
 def _principal_has_admin_claims(principal: AuthPrincipal) -> bool:

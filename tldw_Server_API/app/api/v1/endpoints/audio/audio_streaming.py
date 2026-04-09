@@ -21,6 +21,7 @@ from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
 from tldw_Server_API.app.api.v1.API_Deps.billing_deps import resolve_org_id_for_principal
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Billing.enforcement import (
     LimitCategory,
     enforcement_enabled,
@@ -1378,6 +1379,15 @@ async def websocket_transcribe(
                         )
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                         pass  # fail-open
+                    # Durable cost-units ledger write
+                    try:
+                        await cost_units.record_cost_units_for_entity(
+                            entity_scope="org",
+                            entity_value=str(_ws_billing_org_id),
+                            minutes=float(_flush),
+                        )
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                        pass  # fail-open
 
         async def _on_heartbeat() -> None:
             """
@@ -1517,11 +1527,21 @@ async def websocket_transcribe(
     finally:
         # Billing: flush any remaining fractional minutes before closing
         if _ws_billing_org_id is not None and _billing_minutes_accumulator >= 0.5:
+            _final_flush = max(1, int(_billing_minutes_accumulator + 0.5))
             try:
                 get_billing_enforcer().apply_usage_delta(
                     _ws_billing_org_id,
                     LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
-                    max(1, int(_billing_minutes_accumulator + 0.5)),
+                    _final_flush,
+                )
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+                pass
+            # Durable cost-units ledger write
+            try:
+                await cost_units.record_cost_units_for_entity(
+                    entity_scope="org",
+                    entity_value=str(_ws_billing_org_id),
+                    minutes=float(_final_flush),
                 )
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
                 pass

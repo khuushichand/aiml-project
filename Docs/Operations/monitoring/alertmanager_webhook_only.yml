@@ -17,5 +17,5 @@ route:
 receivers:
   - name: tldw-webhook
     webhook_configs:
-      - url: "http://localhost:9095/webhook"
+      - url: "http://host.docker.internal:9095/webhook"
         send_resolved: true

@@ -25,6 +25,7 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_token_scope,
 )
 from tldw_Server_API.app.api.v1.API_Deps.billing_deps import get_billing_org_id, require_within_limit
+from tldw_Server_API.app.core.Resource_Governance import cost_units
 from tldw_Server_API.app.core.Billing.enforcement import (
     LimitCategory,
     enforcement_enabled,
@@ -865,6 +866,34 @@ async def create_transcription(
                     message="Transcription quota exceeded (daily minutes)",
                 ),
             )
+        # Secondary billing check with the real minute estimate (the dependency
+        # pre-check only gates on 1 unit to verify the org has *any* quota).
+        if enforcement_enabled() and billing_org_id is not None and minutes_est > 1:
+            _real_units = max(1, int(math.ceil(minutes_est)))
+            try:
+                _enforcer = get_billing_enforcer()
+                _recheck = await _enforcer.check_limit(
+                    billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    requested_units=_real_units,
+                )
+                if _recheck.should_block:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "error": "limit_exceeded",
+                            "category": "transcription_minutes_month",
+                            "current": _recheck.current,
+                            "limit": _recheck.limit,
+                            "message": _recheck.message or "Transcription minutes quota exceeded. Please upgrade your plan.",
+                            "upgrade_url": "/billing/plans",
+                        },
+                    )
+            except HTTPException:
+                raise
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as _billing_err:
+                logger.debug(f"Billing secondary minutes check failed (fail-open): {_billing_err}")
+
         detected_language: Optional[str] = None
         segments_for_timing: Optional[list[dict[str, Any]]] = None
         whisper_model_name = _map_openai_audio_model_to_whisper(model)
@@ -1072,11 +1101,21 @@ async def create_transcription(
             )
         # Billing: record actual transcription minutes to org-level enforcement
         if enforcement_enabled() and billing_org_id is not None and minutes_est > 0:
+            _billed_minutes = max(1, int(math.ceil(minutes_est)))
             try:
                 get_billing_enforcer().apply_usage_delta(
                     billing_org_id,
                     LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
-                    max(1, int(math.ceil(minutes_est))),
+                    _billed_minutes,
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # fail-open
+            # Durable cost-units ledger write so usage survives cache expiry/restart
+            try:
+                await cost_units.record_cost_units_for_entity(
+                    entity_scope="org",
+                    entity_value=str(billing_org_id),
+                    minutes=float(_billed_minutes),
                 )
             except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
                 pass  # fail-open

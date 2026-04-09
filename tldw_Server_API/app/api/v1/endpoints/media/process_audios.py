@@ -17,9 +17,7 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.billing_deps import (
-    BILLING_LIMIT_HEADER,
-    BILLING_USAGE_HEADER,
-    BILLING_WARNING_HEADER,
+    propagate_billing_headers,
     require_within_limit,
 )
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
@@ -55,18 +53,7 @@ from tldw_Server_API.app.api.v1.endpoints.media.deprecation_signals import (
 
 router = APIRouter()
 
-_BILLING_HEADERS = (BILLING_LIMIT_HEADER, BILLING_USAGE_HEADER, BILLING_WARNING_HEADER)
-
-
-def _propagate_billing_headers(
-    source: Response,
-    target: JSONResponse,
-) -> None:
-    """Copy billing headers written by ``require_within_limit`` onto the explicit JSONResponse."""
-    for name in _BILLING_HEADERS:
-        value = source.headers.get(name)
-        if value is not None:
-            target.headers[name] = value
+_propagate_billing_headers = propagate_billing_headers
 
 
 @router.post(
