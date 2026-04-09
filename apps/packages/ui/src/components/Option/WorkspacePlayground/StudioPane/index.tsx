@@ -490,6 +490,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
   const [selectedFlashcardDeck, setSelectedFlashcardDeck] = useState<"auto" | number>("auto")
   const [activeOutputType, setActiveOutputType] = useState<ArtifactType | null>(null)
   const [moreOutputsExpanded, setMoreOutputsExpanded] = useState(false)
+  const [generationElapsedSeconds, setGenerationElapsedSeconds] = useState(0)
 
   // Collapsible sections
   const [studioOptionsExpanded, setStudioOptionsExpanded] = useState(false)
@@ -650,6 +651,19 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       setSelectedFlashcardDeck("auto")
     }
   }, [availableDecks, selectedFlashcardDeck])
+
+  // Elapsed-time counter while generating an artifact
+  useEffect(() => {
+    if (!isGeneratingOutput) {
+      setGenerationElapsedSeconds(0)
+      return
+    }
+    setGenerationElapsedSeconds(0)
+    const id = setInterval(() => {
+      setGenerationElapsedSeconds((prev) => prev + 1)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [isGeneratingOutput])
 
   const audioTts = useAudioTtsSettings({
     audioSettings,
@@ -1227,6 +1241,11 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                               )?.label || generatingOutputType || "output"
                           }
                         )}
+                {generationElapsedSeconds > 0 && (
+                  <span className="ml-1 text-text-muted">
+                    ({generationElapsedSeconds}s)
+                  </span>
+                )}
               </p>
             </div>
             {/* Phase progress bar */}
@@ -1252,17 +1271,25 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               })}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-text-muted">
-              {t(
-                "playground:studio.generatingWithEta",
-                "~{{seconds}}s for {{count}} source{{suffix}}",
-                {
-                  seconds: etaSeconds ?? 15,
-                  count: Math.max(1, selectedMediaCount),
-                  suffix: Math.max(1, selectedMediaCount) === 1 ? "" : "s"
-                }
-              )}
-            </p>
+            <div>
+              <p className="text-[11px] text-text-muted">
+                {t(
+                  "playground:studio.generatingWithEta",
+                  "~{{seconds}}s for {{count}} source{{suffix}}",
+                  {
+                    seconds: etaSeconds ?? 15,
+                    count: Math.max(1, selectedMediaCount),
+                    suffix: Math.max(1, selectedMediaCount) === 1 ? "" : "s"
+                  }
+                )}
+              </p>
+              <p className="text-[10px] text-text-muted/70 mt-0.5">
+                {t(
+                  "playground:studio.generatingUsualDuration",
+                  "Usually takes 10\u201330 seconds"
+                )}
+              </p>
+            </div>
             <Button
               size="small"
               danger
