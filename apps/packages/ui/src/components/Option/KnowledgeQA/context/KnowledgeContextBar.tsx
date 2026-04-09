@@ -86,8 +86,8 @@ type PresetKey = Exclude<RagPresetName, "custom">
 type PresetDetails = {
   label: string
   summary: string
-  speed: string
-  coverage: string
+  responseTime: string
+  sourcesChecked: string
   bestFor: string
 }
 
@@ -107,22 +107,22 @@ const PRESET_DETAILS: Record<PresetKey, PresetDetails> = {
   fast: {
     label: "Fast",
     summary: "Quick lookup with minimal retrieval and rerank depth.",
-    speed: "Fastest",
-    coverage: "Lower",
+    responseTime: "Fastest",
+    sourcesChecked: "Fewer",
     bestFor: "Fact checks and quick lookups",
   },
   balanced: {
     label: "Balanced",
     summary: "Balanced retrieval depth for quality and speed.",
-    speed: "Medium",
-    coverage: "Medium",
+    responseTime: "Moderate",
+    sourcesChecked: "Moderate",
     bestFor: "Default day-to-day research",
   },
   thorough: {
     label: "Deep",
     summary: "Exhaustive retrieval plus extra verification steps.",
-    speed: "Slowest",
-    coverage: "Highest",
+    responseTime: "Slower",
+    sourcesChecked: "Most thorough",
     bestFor: "High-confidence synthesis",
   },
 }
@@ -845,7 +845,7 @@ export function KnowledgeContextBar({
               >
                 <span className="block text-[11px] font-semibold">{option.label}</span>
                 <span className="block text-[10px] opacity-80">
-                  {PRESET_DETAILS[option.value].speed}
+                  {PRESET_DETAILS[option.value].responseTime}
                 </span>
               </button>
             ))}
@@ -865,7 +865,7 @@ export function KnowledgeContextBar({
           <p id="knowledge-preset-description" className="mt-2 text-[11px] text-text-muted">
             {presetDescription}
             {presetDetail
-              ? ` Speed: ${presetDetail.speed}. Coverage: ${presetDetail.coverage}. Best for: ${presetDetail.bestFor}.`
+              ? ` Response time: ${presetDetail.responseTime}. Sources checked: ${presetDetail.sourcesChecked}. Best for: ${presetDetail.bestFor}.`
               : ""}
           </p>
         </section>

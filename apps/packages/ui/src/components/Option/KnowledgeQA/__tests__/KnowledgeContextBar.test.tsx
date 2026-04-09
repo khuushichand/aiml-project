@@ -52,7 +52,7 @@ describe("KnowledgeContextBar", () => {
 
     expect(
       screen.getByText(
-        "Quick lookup with minimal retrieval and rerank depth. Speed: Fastest. Coverage: Lower. Best for: Fact checks and quick lookups."
+        "Quick lookup with minimal retrieval and rerank depth. Response time: Fastest. Sources checked: Fewer. Best for: Fact checks and quick lookups."
       )
     ).toBeInTheDocument()
 
@@ -79,7 +79,7 @@ describe("KnowledgeContextBar", () => {
 
     expect(
       screen.getByText(
-        "Exhaustive retrieval plus extra verification steps. Speed: Slowest. Coverage: Highest. Best for: High-confidence synthesis."
+        "Exhaustive retrieval plus extra verification steps. Response time: Slower. Sources checked: Most thorough. Best for: High-confidence synthesis."
       )
     ).toBeInTheDocument()
   })

@@ -303,7 +303,15 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
 
   const handleSuggestedPrompt = (prompt: string) => {
     setQuery(prompt)
-    focusSearchInput()
+    // Select all text so the user can type to replace without manually clearing
+    requestAnimationFrame(() => {
+      const input = document.getElementById(
+        "knowledge-search-input"
+      ) as HTMLInputElement | null
+      if (!input) return
+      input.focus()
+      input.select()
+    })
   }
 
   const handleBroadenScope = () => {

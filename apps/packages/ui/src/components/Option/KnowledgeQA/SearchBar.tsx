@@ -469,6 +469,7 @@ export function SearchBar({
               onClick={cancelSearch}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-warn/40 bg-warn/10 text-warn hover:bg-warn/20 transition-colors whitespace-nowrap"
               aria-label="Cancel search"
+              title="Stop search. Partial results will be kept if available."
             >
               <Square className="w-3 h-3" />
               Stop
