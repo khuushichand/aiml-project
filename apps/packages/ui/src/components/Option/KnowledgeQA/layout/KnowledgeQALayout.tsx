@@ -495,9 +495,9 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
       <div className="fixed bottom-4 right-4 z-20 flex flex-col items-end gap-2">
         {showPromotionToast && !isMobile && (
           <div className="rounded-lg border border-border bg-surface px-4 py-3 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <p className="text-sm font-medium text-text">Switch to workspace view?</p>
+            <p className="text-sm font-medium text-text">Switch to detailed view?</p>
             <p className="mt-0.5 text-xs text-text-muted">
-              Get a full research layout with history sidebar and evidence panel.
+              Get a detailed layout with history sidebar and evidence panel.
             </p>
             <div className="mt-2 flex items-center gap-2">
               <button
@@ -505,7 +505,7 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
                 onClick={acceptPromotion}
                 className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
               >
-                Open workspace
+                Switch to detailed view
               </button>
               <button
                 type="button"
@@ -523,8 +523,8 @@ export function KnowledgeQALayout({ onExportClick }: KnowledgeQALayoutProps) {
             type="button"
             onClick={() => setLayoutMode(isSimple ? "research" : "simple")}
             className="rounded-lg border border-border bg-surface p-2 shadow-sm hover:bg-hover transition-colors"
-            title={isSimple ? "Open workspace view" : "Simplify view"}
-            aria-label={isSimple ? "Open workspace view" : "Simplify view"}
+            title={isSimple ? "Switch to detailed view" : "Switch to simple view"}
+            aria-label={isSimple ? "Switch to detailed view" : "Switch to simple view"}
           >
             {isSimple ? (
               <PanelLeftOpen className="h-4 w-4 text-text-muted" />
