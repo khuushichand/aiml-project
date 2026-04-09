@@ -52,6 +52,18 @@ This review excludes:
 - speculative rewrites that are not supported by concrete evidence
 - large remediation refactors during the review itself
 
+Representative admin or control-surface endpoints are in scope only when at
+least one of these is true:
+
+- they directly use `get_auth_principal`, `require_permissions(...)`,
+  `require_roles(...)`, or related AuthNZ claim-first dependencies
+- they are a high-fan-out or high-risk consumer of AuthNZ authentication or
+  authorization behavior
+- recent churn or prior findings suggest they are a likely regression surface
+
+This keeps the integration review focused on AuthNZ contract boundaries rather
+than drifting into a general endpoint audit.
+
 ## Approaches Considered
 
 ### Recommended: Layered risk audit
@@ -132,6 +144,16 @@ The review will rely on:
 - recent git history when it helps explain regression-prone areas or newly
   changed contracts
 
+Documentation review should start from a bounded seed set and expand only when
+those docs point to another behavior-defining source. The seed set is:
+
+- `tldw_Server_API/app/core/AuthNZ/README.md`
+- `Docs/Code_Documentation/Guides/AuthNZ_Code_Guide.md`
+- `Docs/API-related/User_Registration_API_Documentation.md`
+- `Docs/Operations/Env_Vars.md`
+- relevant quickstart or troubleshooting docs only when they claim current auth
+  behavior that may affect runtime expectations
+
 The review is evidence-first, not style-first. A concern becomes a reported
 finding only when there is concrete support from code, tests, docs drift that
 creates real risk, or targeted verification.
@@ -147,6 +169,11 @@ weakens a specific claim. It should answer narrow questions such as:
 If verification cannot be run, the limitation should be stated explicitly and
 the issue should remain a probable risk unless source evidence is already
 conclusive.
+
+Feature-flagged, enterprise, federation, or secret-backend paths remain in
+scope, but any path that cannot be exercised or strongly validated from local
+evidence must be reported as a probable risk unless the source alone proves a
+confirmed defect.
 
 ## Review Focus Areas
 
@@ -190,6 +217,25 @@ of these signals:
 - security sensitivity
 - backend divergence
 - unusually large or multi-responsibility implementations
+
+## Review Artifact Contract
+
+The audit should leave a traceable review workspace under:
+
+- `Docs/superpowers/reviews/authnz-full-module/`
+
+That workspace should contain:
+
+- a `README.md` that fixes the stage order and links the stage reports
+- stage artifacts that separate inventory, runtime and authz analysis,
+  persistence/config review, and test/docs synthesis
+- a final synthesis artifact that captures the highest-confidence findings,
+  open questions, and verification limits before the final user-facing report is
+  written
+
+The user-facing final response should be based on those staged artifacts rather
+than on ad hoc notes. This keeps the audit resumable and preserves pre-fix
+evidence when narrow proof-of-fix patches are applied later in the review.
 
 ## Findings Model
 
@@ -280,6 +326,15 @@ A proof-of-fix patch is permitted only if it satisfies this decision rule:
 
 If any of these are false, the issue stays in the report and roadmap only.
 
+Before any proof-of-fix patch is applied, the review must first preserve the
+pre-fix evidence in the stage artifacts or review notes so the final report can
+describe the original defect and not just the repaired state.
+
+Proof-of-fix patches should generally be applied after the relevant stage has
+gathered enough surrounding context to avoid masking a broader pattern. If a
+patch would interfere with continued evidence gathering, defer it and keep the
+issue in the roadmap.
+
 ## Testing And Verification Strategy
 
 Testing effort during the review should remain targeted, not exhaustive.
@@ -291,6 +346,12 @@ focused tests or equivalent concrete checks before claiming success.
 Because touched code may include security-sensitive paths, completion for any
 proof-of-fix patch should also include Bandit on the touched scope using the
 project virtual environment.
+
+The final report should include a short verification section summarizing:
+
+- files and docs inspected
+- tests or checks run
+- what remains unverified
 
 ## Execution Boundaries
 
