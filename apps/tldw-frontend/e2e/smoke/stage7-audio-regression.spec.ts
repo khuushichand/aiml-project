@@ -64,7 +64,7 @@ async function openSpeechInputSourcePicker(page: Page) {
     }
   }
   await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
-  await inputSourcePicker.click()
+  await inputSourcePicker.click({ force: true })
 }
 
 test.describe("Stage 7 audio regression gate", () => {
