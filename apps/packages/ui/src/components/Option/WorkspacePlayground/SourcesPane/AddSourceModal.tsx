@@ -1719,14 +1719,17 @@ export const AddSourceModal: React.FC = () => {
     }
   ]
 
+  // Use a fixed tab order so tabs don't shift based on usage frequency.
+  // Tab usage is still tracked (for potential analytics) but no longer
+  // drives the rendered order.
   const orderedTabItems = React.useMemo(() => {
     const itemMap = new Map<AddSourceTab, (typeof tabItems)[number]>(
       tabItems.map((item) => [item.key as AddSourceTab, item])
     )
-    return orderAddSourceTabs(tabUsage)
+    return DEFAULT_ADD_SOURCE_TAB_ORDER
       .map((tab) => itemMap.get(tab))
       .filter((item): item is (typeof tabItems)[number] => Boolean(item))
-  }, [tabItems, tabUsage])
+  }, [tabItems])
 
   const handleTabChange = React.useCallback(
     (key: string) => {
