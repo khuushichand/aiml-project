@@ -178,24 +178,34 @@ export const WorkspaceStatusBar: React.FC<WorkspaceStatusBarProps> = ({
       </div>
 
       {/* Active operations */}
-      {activeOperations.length > 0 && (
-        <div
-          data-testid="workspace-statusbar-activity"
-          role="status"
-          aria-live="polite"
-          className="flex items-center gap-3"
+      <div className="flex items-center gap-3">
+        {activeOperations.length > 0 && (
+          <div
+            data-testid="workspace-statusbar-activity"
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-3"
+          >
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            {activeOperations.map((op, i) => (
+              <span key={i} className="inline-flex items-center gap-1">
+                <span className="truncate">{op}</span>
+                {i < activeOperations.length - 1 && (
+                  <span className="text-text-subtle">&bull;</span>
+                )}
+              </span>
+            ))}
+          </div>
+        )}
+        <a
+          href="https://github.com/rmusser01/tldw_server2#readme"
+          target="_blank"
+          rel="noreferrer"
+          className="text-[10px] text-text-muted hover:text-primary transition-colors"
         >
-          <Loader2 className="h-3 w-3 animate-spin text-primary" />
-          {activeOperations.map((op, i) => (
-            <span key={i} className="inline-flex items-center gap-1">
-              <span className="truncate">{op}</span>
-              {i < activeOperations.length - 1 && (
-                <span className="text-text-subtle">&bull;</span>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
+          Help
+        </a>
+      </div>
       <Modal
         title={t("playground:statusBar.storageTitle", "Workspace Storage")}
         open={storageModalOpen}

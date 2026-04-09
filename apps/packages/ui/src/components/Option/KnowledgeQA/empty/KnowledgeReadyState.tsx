@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react"
-import { BookOpen, ChevronDown, ChevronUp, CircleHelp, Clock3, SlidersHorizontal } from "lucide-react"
+import { Link } from "react-router-dom"
+import { BookOpen, ChevronDown, ChevronUp, CircleHelp, Clock3, FolderPlus, HelpCircle, MessageSquare, SlidersHorizontal } from "lucide-react"
 import { cn } from "@/libs/utils"
 
 type KnowledgeReadyStateProps = {
@@ -77,33 +78,56 @@ export function KnowledgeReadyState({
             </p>
           ) : !hasSources ? (
             <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
-              <li>
-                <span className="font-medium text-primary">1.</span>{" "}
-                <button
-                  type="button"
-                  onClick={onSelectSources}
-                  className="font-medium text-primary hover:underline"
-                >
-                  Add documents first
-                </button>
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-white">1</span>
+                <span>
+                  <FolderPlus className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-primary" />
+                  <button
+                    type="button"
+                    onClick={onSelectSources}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    Add documents first
+                  </button>
+                </span>
               </li>
-              <li>
-                <span className="font-medium text-text">2.</span> Ask a question
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-text/20 text-[10px] font-bold text-text">2</span>
+                <span>
+                  <MessageSquare className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-text-muted" />
+                  Ask a question
+                </span>
               </li>
-              <li>
-                <span className="font-medium text-text">3.</span> Review cited answer
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-text/20 text-[10px] font-bold text-text">3</span>
+                <span>
+                  <HelpCircle className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-text-muted" />
+                  Review cited answer
+                </span>
               </li>
             </ol>
           ) : (
             <ol className="mt-2 grid gap-1 text-sm text-text-muted sm:grid-cols-3 sm:gap-3">
-              <li>
-                <span className="font-medium text-text">1.</span> Select sources
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-white">1</span>
+                <span>
+                  <SlidersHorizontal className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-primary" />
+                  Select sources
+                </span>
               </li>
-              <li>
-                <span className="font-medium text-text">2.</span> Ask a question
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-text/20 text-[10px] font-bold text-text">2</span>
+                <span>
+                  <MessageSquare className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-text-muted" />
+                  Ask a question
+                </span>
               </li>
-              <li>
-                <span className="font-medium text-text">3.</span> Review cited answer
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-text/20 text-[10px] font-bold text-text">3</span>
+                <span>
+                  <HelpCircle className="mb-0.5 mr-1 inline h-3.5 w-3.5 text-text-muted" />
+                  Review cited answer
+                </span>
               </li>
             </ol>
           )
@@ -181,6 +205,13 @@ export function KnowledgeReadyState({
           {hasSources ? "Select sources" : "No sources selected"}
         </button>
       </div>
+
+      <p className="text-[11px] text-text-subtle">
+        Need a full workspace?{" "}
+        <Link to="/workspace-playground" className="text-primary/70 hover:text-primary transition-colors">
+          Try Research Studio &rarr;
+        </Link>
+      </p>
     </div>
   )
 }

@@ -42,6 +42,7 @@ import {
 } from "@/utils/message-variants"
 import { buildConversationShareUrl } from "@/components/Layouts/chat-share-links"
 import { PlaygroundMessage } from "@/components/Common/Playground/Message"
+import { Link } from "react-router-dom"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { buildChatLorebookDebugPath } from "@/routes/route-paths"
 import {
@@ -856,16 +857,23 @@ const WorkspaceChatEmpty: React.FC<{
         icon={MessageSquarePlus}
         title={t("playground:chat.emptyTitle", "Start your research")}
         description={
-          hasSelectedSources
-            ? t(
-                "playground:chat.emptyWithSources",
-                "Ask questions about your {{count}} selected source(s)",
-                { count: sourceCount }
-              )
-            : t(
-                "playground:chat.emptyNoSources",
-                getWorkspaceChatNoSourcesHint(isMobile)
-              )
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-text-muted">
+              {t("playground:chat.emptyTagline", "Your research assistant — grounded in your sources")}
+            </p>
+            <p className="text-xs text-text-subtle">
+              {hasSelectedSources
+                ? t(
+                    "playground:chat.emptyWithSources",
+                    "Ask questions about your {{count}} selected source(s)",
+                    { count: sourceCount }
+                  )
+                : t(
+                    "playground:chat.emptyNoSources",
+                    getWorkspaceChatNoSourcesHint(isMobile)
+                  )}
+            </p>
+          </div>
         }
         examples={examples.map((example, index) => (
           <button
@@ -883,6 +891,13 @@ const WorkspaceChatEmpty: React.FC<{
           </button>
         ))}
       />
+
+      <p className="mt-3 text-center text-[11px] text-text-subtle">
+        {t("playground:chat.knowledgeHint", "Quick document search?")}{" "}
+        <Link to="/knowledge" className="text-primary/70 hover:text-primary transition-colors">
+          {t("playground:chat.knowledgeHintLink", "Try Knowledge QA \u2192")}
+        </Link>
+      </p>
 
       {totalSourceCount === 0 && (
         <div className="mt-4 space-y-3" data-testid="workspace-chat-empty-guidance">
