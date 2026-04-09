@@ -262,7 +262,7 @@ const renderArtifactModalContent = (node: React.ReactNode) => (
   <Suspense
     fallback={
       <div className="flex min-h-[200px] items-center justify-center text-sm text-text-muted">
-        Loading artifact viewer...
+        Loading output viewer...
       </div>
     }
   >
@@ -1771,7 +1771,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                           artifact.estimatedCostUsd) && (
                           <p className="text-[11px] text-text-muted">
                             {t(
-                              "playground:studio.usagePerArtifact",
+                              "playground:studio.usagePerOutput",
                               "Tokens: {{tokens}} • Cost: ${{cost}}",
                               {
                                 tokens: Math.round(

@@ -40,7 +40,7 @@ export const SharedWorkspaceBanner: React.FC = () => {
       </Tag>
       {accessLevel === "view_chat" && (
         <span className="text-xs text-text-muted">
-          Sources and artifacts are read-only
+          Sources and outputs are read-only
         </span>
       )}
       {accessLevel === "view_chat_add" && (
