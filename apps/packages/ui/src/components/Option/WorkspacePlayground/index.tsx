@@ -5,6 +5,7 @@ import type { InputRef } from "antd"
 import {
   AlertTriangle,
   FileText,
+  Keyboard,
   MessageSquare,
   Sparkles,
   Search,
@@ -33,6 +34,7 @@ import {
 } from "@/utils/workspace-playground-prefill"
 import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
+import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { WorkspaceHeader } from "./WorkspaceHeader"
 import { WorkspaceBanner } from "./WorkspaceBanner"
 import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
@@ -860,6 +862,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const onboardingInitializedRef = React.useRef(false)
   const [showTutorialPrompt, setShowTutorialPrompt] = React.useState(false)
+  const [showShortcutsModal, setShowShortcutsModal] = React.useState(false)
   const startTutorial = useTutorialStore((s) => s.startTutorial)
 
   // Shared workspace state (from ?shared= query param)
@@ -1786,6 +1789,26 @@ const WorkspacePlaygroundBody: React.FC = () => {
       if (event.key === "Escape") {
         event.preventDefault()
         closeGlobalSearch()
+        return
+      }
+
+      if (
+        event.key === "?" &&
+        !hasModifier &&
+        !event.altKey
+      ) {
+        const target = event.target as HTMLElement | null
+        const tag = target?.tagName?.toLowerCase()
+        if (
+          tag === "input" ||
+          tag === "textarea" ||
+          tag === "select" ||
+          target?.isContentEditable
+        ) {
+          return
+        }
+        event.preventDefault()
+        setShowShortcutsModal(true)
       }
     }
 
@@ -2690,6 +2713,43 @@ const WorkspacePlaygroundBody: React.FC = () => {
         request={transferSourcesRequest}
         onCancel={closeTransferSourcesModal}
       />
+
+      {/* Workspace keyboard shortcuts legend */}
+      <Modal
+        open={showShortcutsModal}
+        onCancel={() => setShowShortcutsModal(false)}
+        title={
+          <span className="flex items-center gap-2">
+            <Keyboard className="h-4 w-4 text-text-muted" />
+            {t("playground:workspace.shortcutsTitle", "Keyboard Shortcuts")}
+          </span>
+        }
+        footer={null}
+        centered
+        destroyOnClose
+      >
+        <div className="space-y-2 py-2 text-sm">
+          {(
+            [
+              [t("playground:workspace.shortcutFocusSources", "Focus sources pane"), `${isMac ? "\u2318" : "Ctrl+"} 1`],
+              [t("playground:workspace.shortcutFocusChat", "Focus chat pane"), `${isMac ? "\u2318" : "Ctrl+"} 2`],
+              [t("playground:workspace.shortcutFocusStudio", "Focus studio pane"), `${isMac ? "\u2318" : "Ctrl+"} 3`],
+              [t("playground:workspace.shortcutGlobalSearch", "Global search"), `${isMac ? "\u2318" : "Ctrl+"}K`],
+              [t("playground:workspace.shortcutNewNote", "New note"), `${isMac ? "\u2318" : "Ctrl+"}N`],
+              [t("playground:workspace.shortcutNewWorkspace", "New workspace"), `${isMac ? "\u21E7\u2318" : "Ctrl+Shift+"}N`],
+              [t("playground:workspace.shortcutUndo", "Undo"), `${isMac ? "\u2318" : "Ctrl+"}Z`],
+              [t("playground:workspace.shortcutShowShortcuts", "Show shortcuts"), "?"]
+            ] as const
+          ).map(([label, keys]) => (
+            <div key={label} className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-surface2">
+              <span className="text-text">{label}</span>
+              <kbd className="ml-4 rounded border border-border bg-surface2 px-1.5 py-0.5 text-xs font-mono text-text-muted">
+                {keys}
+              </kbd>
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       {showWorkspaceTransitionCue && (
         <div
