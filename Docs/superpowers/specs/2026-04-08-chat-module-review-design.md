@@ -28,9 +28,13 @@ Included:
   - `tldw_Server_API/app/api/v1/endpoints/chat_loop.py`
   - `tldw_Server_API/app/api/v1/endpoints/chat_grammars.py`
   - `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
-  - `tldw_Server_API/app/api/v1/endpoints/chat_workflows.py`
+- `tldw_Server_API/app/api/v1/endpoints/chat_workflows.py`
 - Primary test evidence under `tldw_Server_API/tests/Chat`
-- Directly relevant newer chat tests when they cover the same scoped routes or shared helpers
+- Additional evidence suites when they directly exercise the scoped routes or shared helpers:
+  - `tldw_Server_API/tests/Chat_NEW`
+  - `tldw_Server_API/tests/Chat_Workflows`
+  - `tldw_Server_API/tests/Streaming`
+  - targeted auth or adapter suites when the risk being checked is permission wiring or scoped SSE behavior rather than generic provider internals
 
 Excluded unless a shared defect crosses the boundary:
 
@@ -41,6 +45,8 @@ Excluded unless a shared defect crosses the boundary:
 ## Review Method
 
 The review will use an endpoint-by-endpoint sweep rather than a shared-subsystem-first audit.
+
+Before reviewing each group, freeze the concrete route and matching-test inventory so low-traffic endpoints such as queue, analytics, share-link, and loop routes are not skipped by accident.
 
 Planned review order:
 
@@ -82,6 +88,8 @@ Evidence rules:
 - Passing tests do not overrule a concrete code-level defect.
 - Failing or flaky tests count as findings when they imply product risk or weak coverage.
 - The review will not claim safety for untouched paths just because adjacent tests pass.
+- Environment or fixture failures will be reported separately from product defects unless the scoped code is responsible for the fragility.
+- For each targeted test run, record whether it passed, failed, was flaky, or could not be run, plus the reason.
 
 ## Success Criteria
 
@@ -91,6 +99,15 @@ The review is successful when it produces:
 - clear distinction between implementation bugs, test gaps, and lower-severity maintenance risks
 - targeted test evidence for ambiguous or high-risk paths
 - a short synthesis of recurring structural risks across the scoped Chat surfaces
+
+## Severity Rubric
+
+Use a consistent severity model in the final review:
+
+- Critical: cross-user data exposure, authz bypass, destructive persistence corruption, or similarly severe security failures
+- High: primary-path correctness failures, streaming contract breaks, serious resource or concurrency hazards, or information leakage with meaningful user impact
+- Medium: narrower endpoint bugs, incomplete validation, non-fatal persistence inconsistencies, or important missing coverage around risky behavior
+- Low: maintainability, observability, or cleanup issues that have limited immediate user impact but raise future defect risk
 
 ## Deliverable
 
