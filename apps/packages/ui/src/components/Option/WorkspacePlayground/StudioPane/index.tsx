@@ -1723,6 +1723,10 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                   "playground:studio.deleteFailedOutput",
                   "Delete failed output"
                 )
+                const failedRetryLabel = t(
+                  "playground:studio.retryFailedOutput",
+                  "Retry"
+                )
 
                 return (
                   <div
@@ -1740,22 +1744,42 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                             {artifact.title}
                           </p>
                           {artifact.status === "failed" ? (
-                            <Tooltip title={failedStatusDeleteLabel}>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  handleDeleteArtifact(artifact)
-                                }}
-                                onKeyDown={handleIconButtonKeyDown}
-                                className="rounded p-0.5 hover:bg-error/10"
-                                aria-label={failedStatusDeleteLabel}
-                              >
-                                <StatusIcon
-                                  className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
-                                />
-                              </button>
-                            </Tooltip>
+                            <>
+                              <Tooltip title={failedRetryLabel}>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    handleGenerateOutput(artifact.type, {
+                                      mode: "replace",
+                                      targetArtifactId: artifact.id
+                                    })
+                                  }}
+                                  onKeyDown={handleIconButtonKeyDown}
+                                  className="rounded p-0.5 hover:bg-primary/10"
+                                  aria-label={failedRetryLabel}
+                                  data-testid={`studio-artifact-retry-${artifact.id}`}
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5 shrink-0 text-text-muted hover:text-primary" />
+                                </button>
+                              </Tooltip>
+                              <Tooltip title={failedStatusDeleteLabel}>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    handleDeleteArtifact(artifact)
+                                  }}
+                                  onKeyDown={handleIconButtonKeyDown}
+                                  className="rounded p-0.5 hover:bg-error/10"
+                                  aria-label={failedStatusDeleteLabel}
+                                >
+                                  <StatusIcon
+                                    className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
+                                  />
+                                </button>
+                              </Tooltip>
+                            </>
                           ) : (
                             <StatusIcon
                               className={`h-4 w-4 shrink-0 ${StatusConfig.className}`}
