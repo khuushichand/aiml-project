@@ -2387,14 +2387,35 @@ async def test_legacy_migration_populated_rows_preserves_chain_hash_binding(tmp_
     finally:
         await service.stop()
 
-    with sqlite3.connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM audit_events WHERE action = ?",
-            ("post_migration_read",),
-        ).fetchone()
+    # Verify post-migration row exists and chain integrity holds for new rows.
+    # Legacy migrated rows have empty chain_hash (by design), so we verify only
+    # the post-migration sub-chain which starts a fresh hash sequence.
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT action, context_user_id, timestamp, event_type, chain_hash "
+            "FROM audit_events ORDER BY timestamp ASC, event_id ASC"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
 
-    assert row is not None
-    assert row[0] == 1
+    assert len(rows) >= 2, "Expected at least the migrated row and the post-migration row"
+    assert len([r for r in rows if r["action"] == "post_migration_read"]) == 1
+
+    # Rows with non-empty chain_hash form the verifiable chain
+    chained_rows = [r for r in rows if r.get("chain_hash")]
+    assert len(chained_rows) >= 1, "Post-migration row should have a chain_hash"
+
+    result = verify_audit_chain([
+        {
+            "action": row.get("action", ""),
+            "user_id": row.get("context_user_id"),
+            "timestamp": row.get("timestamp", ""),
+            "detail": row.get("event_type", ""),
+            "chain_hash": row.get("chain_hash", ""),
+        }
+        for row in chained_rows
+    ])
+    assert result["valid"] is True, f"Chain integrity broken after migration: {result}"
 
 
 @pytest.mark.asyncio

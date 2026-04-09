@@ -1663,7 +1663,7 @@ class UnifiedAuditService:
                         }
                         if self._shared_mode:
                             record["tenant_user_id"] = self._resolve_tenant_id_for_write(
-                                raw_tenant=tenant_user_id_override,
+                                raw_tenant=data.get("tenant_user_id"),
                                 context_user_id=context_user_id,
                                 event_type=event_type_val,
                                 category=record.get("category"),

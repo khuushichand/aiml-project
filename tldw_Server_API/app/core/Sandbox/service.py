@@ -47,6 +47,7 @@ from .runners.lima_runner import LimaRunner, lima_available
 from .runners.seatbelt_runner import SeatbeltRunner
 from .runners.vz_linux_runner import VZLinuxRunner
 from .runners.vz_macos_runner import VZMacOSRunner
+from .runners.worktree_runner import WorktreeRunner, worktree_available
 from .snapshots import SnapshotManager
 from .store import get_store_mode
 from .streams import get_hub
@@ -311,6 +312,22 @@ class SandboxService:
         )
         return SeatbeltRunner().start_run(run_id, spec, workspace_path)
 
+    def _start_worktree_run_with_execution_preflight(
+        self,
+        run_id: str,
+        spec: RunSpec,
+        workspace_path: str | None,
+    ) -> RunStatus:
+        preflight = WorktreeRunner().preflight(network_policy=spec.network_policy)
+        if not preflight.available:
+            raise SandboxPolicy.RuntimeUnavailable(RuntimeType.worktree, reasons=list(preflight.reasons or []))
+        self.policy._require_trust_level_supported(
+            RuntimeType.worktree,
+            spec.trust_level or TrustLevel.standard,
+            runtime_preflights={RuntimeType.worktree: preflight},
+        )
+        return WorktreeRunner().start_run(run_id, spec, workspace_path)
+
     def _effective_claim_lease_seconds(self) -> int:
         try:
             raw = os.getenv("SANDBOX_RUN_CLAIM_LEASE_SEC")
@@ -353,6 +370,12 @@ class SandboxService:
                     runtime=RuntimeType.vz_macos,
                     available=False,
                     reasons=["vz_macos_unavailable"],
+                ),
+                RuntimeType.worktree: RuntimePreflightResult(
+                    runtime=RuntimeType.worktree,
+                    available=bool(worktree_available()),
+                    reasons=[] if worktree_available() else ["worktree_unavailable"],
+                    supported_trust_levels=["trusted", "standard"],
                 ),
             }
 
@@ -1688,6 +1711,17 @@ class SandboxService:
                 failed_reason="seatbelt_failed",
                 policy_exceptions=(SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported),
             )
+        elif execute_enabled and spec.runtime == RuntimeType.worktree:
+            ws = self._orch.get_session_workspace_path(spec.session_id) if spec.session_id else None
+            return self._execute_single_runtime_scaffold(
+                status=status,
+                spec=spec,
+                workspace_path=ws,
+                start_run_fn=self._start_worktree_run_with_execution_preflight,
+                policy_failed_reason="worktree_policy_failed",
+                failed_reason="worktree_failed",
+                policy_exceptions=(SandboxPolicy.RuntimeUnavailable, SandboxPolicy.PolicyUnsupported),
+            )
         else:
             # Stub artifacts even without execution
             artifacts: dict[str, bytes] = {}
@@ -1754,6 +1788,8 @@ class SandboxService:
                 cancelled = VZLinuxRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.vz_macos:
                 cancelled = VZMacOSRunner.cancel_run(run_id)
+            elif st.runtime == RuntimeType.worktree:
+                cancelled = WorktreeRunner.cancel_run(run_id)
         except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"cancel_run failed: {e}")
             cancelled = False

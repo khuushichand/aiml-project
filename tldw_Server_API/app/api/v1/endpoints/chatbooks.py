@@ -114,6 +114,69 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
     return temp_dir
 
 
+def _persist_completed_sync_export_job(
+    service: ChatbookService,
+    user_id: str,
+    chatbook_name: str,
+    output_path: str | Path,
+) -> tuple[str, str, Path, int]:
+    """Persist a sync export result as a completed job for job-backed downloads."""
+    job_id = str(uuid4())
+    file_path = Path(output_path).resolve()
+    expected_base = Path(service.export_dir).resolve()
+    try:
+        file_path.relative_to(expected_base)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Export path validation failed") from None
+
+    try:
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=500, detail="Export archive was not created")
+        file_size = file_path.stat().st_size
+    except HTTPException:
+        raise
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
+        raise HTTPException(status_code=500, detail="Export archive validation failed") from None
+
+    now_utc = datetime.now(timezone.utc)
+    expires_at = service._get_export_expiry(now_utc)
+    download_expires_at = service._get_download_expiry(now_utc, expires_at)
+    download_url = service._build_download_url(job_id, download_expires_at)
+
+    job = ExportJob(
+        job_id=job_id,
+        user_id=user_id,
+        status=ExportStatus.COMPLETED,
+        chatbook_name=chatbook_name,
+        output_path=str(file_path),
+        created_at=now_utc,
+        started_at=now_utc,
+        completed_at=now_utc,
+        error_message=None,
+        progress_percentage=100,
+        total_items=0,
+        processed_items=0,
+        file_size_bytes=file_size,
+        download_url=download_url,
+        expires_at=expires_at,
+    )
+    try:
+        service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(f"Failed to persist completed export job for sync path: {exc}")
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as cleanup_err:
+            logger.warning(f"Failed to remove export archive after job persistence failure: {cleanup_err}")
+        raise HTTPException(
+            status_code=500,
+            detail="Export completed but failed to persist job metadata",
+        ) from None
+
+    return job_id, download_url, file_path, file_size
+
+
 def get_chatbook_service(
     user: User = Depends(get_request_user),
     db: CharactersRAGDB = Depends(get_chacha_db)
@@ -196,7 +259,7 @@ async def create_chatbook(
         user: Current authenticated user
 
     Returns:
-        CreateChatbookResponse with job ID (async) or file path (sync)
+        CreateChatbookResponse with job ID (async) or job-backed download metadata (sync)
     """
     try:
         # Validate metadata
@@ -278,66 +341,12 @@ async def create_chatbook(
                     job_id=result
                 )
             else:
-                # Sync mode - create a completed export job with a UUID as job_id
-                import uuid
-                from datetime import datetime, timezone
-
-                job_id = str(uuid.uuid4())
-                file_path = Path(result).resolve()
-                expected_base = Path(service.export_dir).resolve()
-                try:
-                    file_path.relative_to(expected_base)
-                except ValueError:
-                    raise HTTPException(status_code=500, detail="Export path validation failed") from None
-                file_size = None
-                try:
-                    if file_path.exists() and file_path.is_file():
-                        file_size = file_path.stat().st_size
-                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
-                    pass
-
-                # Expiry and signed download URL per configuration
-                now_utc = datetime.now(timezone.utc)
-                expires_at = service._get_export_expiry(now_utc)
-                download_expires_at = service._get_download_expiry(now_utc, expires_at)
-                download_url = service._build_download_url(job_id, download_expires_at)
-
-                # Persist the completed job so the download endpoint can serve it
-                job = ExportJob(
-                    job_id=job_id,
+                job_id, download_url, file_path, file_size = _persist_completed_sync_export_job(
+                    service=service,
                     user_id=str(user.id),
-                    status=ExportStatus.COMPLETED,
                     chatbook_name=request_data.name,
-                    output_path=str(file_path),
-                    created_at=now_utc,
-                    started_at=now_utc,
-                    completed_at=now_utc,
-                    error_message=None,
-                    progress_percentage=100,
-                    total_items=0,
-                    processed_items=0,
-                    file_size_bytes=file_size,
-                    download_url=download_url,
-                    expires_at=expires_at,
+                    output_path=result,
                 )
-                save_ok = True
-                try:
-                    # Save job using the service helper
-                    service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
-                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as _e:
-                    save_ok = False
-                    logger.warning(f"Failed to persist completed export job for sync path: {_e}")
-                if not save_ok:
-                    # Best-effort cleanup to avoid orphaned exports
-                    try:
-                        if file_path and file_path.exists():
-                            file_path.unlink()
-                    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as cleanup_err:
-                        logger.warning(f"Failed to remove export archive after job persistence failure: {cleanup_err}")
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Export completed but failed to persist job metadata",
-                    )
 
                 # Audit completed export in sync path
                 try:
@@ -409,6 +418,8 @@ async def continue_chatbook_export(
     try:
         if not request_data.continuations:
             raise HTTPException(status_code=400, detail="No continuation tokens provided")
+        if request_data.async_mode:
+            raise HTTPException(status_code=400, detail="Async continuation exports are not supported")
 
         rid = ensure_request_id(request)
         ensure_traceparent(request)
@@ -424,12 +435,34 @@ async def continue_chatbook_export(
                 "chatbooks_continuation_exports_total",
                 {"user_id": str(user.id), "status": "success"},
             )
-            if request_data.async_mode:
-                return CreateChatbookResponse(
-                    success=True, message=message, job_id=result
+            job_id, download_url, file_path, file_size = _persist_completed_sync_export_job(
+                service=service,
+                user_id=str(user.id),
+                chatbook_name=request_data.name or f"Continuation of {request_data.export_id}",
+                output_path=result,
+            )
+            try:
+                context = AuditContext(
+                    user_id=str(user.id),
+                    endpoint="/chatbooks/export/continue",
+                    method="POST",
+                    ip_address=request.client.host if request and hasattr(request, 'client') else None,
                 )
+                await audit_service.log_event(
+                    event_type=AuditEventType.DATA_EXPORT,
+                    context=context,
+                    resource_type="chatbook_export_job",
+                    resource_id=job_id,
+                    action="chatbook_export_completed_sync",
+                    metadata={"filename": file_path.name, "file_size": file_size},
+                )
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
+                logger.warning(f"Failed to log audit event for continuation export completion: {audit_err}")
             return CreateChatbookResponse(
-                success=True, message=message, file_path=result
+                success=True,
+                message=message,
+                job_id=job_id,
+                download_url=download_url,
             )
         raise HTTPException(status_code=500, detail=message)
 
@@ -618,8 +651,7 @@ async def import_chatbook(
                     job_id=result
                 )
             else:
-                # Sync mode - return import results
-                # TODO: Parse message for imported item counts
+                # Sync mode - return the structured import result from the service wrapper.
                 try:
                     context = AuditContext(
                         user_id=str(user.id),
@@ -635,11 +667,12 @@ async def import_chatbook(
                     )
                 except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                     logger.warning(f"Failed to log audit event for import completion: {audit_err}")
-                warnings_out = result if isinstance(result, list) else None
+                result_data = result if isinstance(result, dict) else {"imported_items": {}, "warnings": result or []}
                 return ImportChatbookResponse(
                     success=True,
                     message=message,
-                    warnings=warnings_out
+                    imported_items=result_data.get("imported_items") or {},
+                    warnings=result_data.get("warnings") or []
                 )
         else:
             # For async jobs, return a failure response with job_id so clients can inspect status.
@@ -785,67 +818,73 @@ async def preview_chatbook(
                 error_context="chatbooks preview_cleanup_failed",
             )
 
-        if manifest:
-            # Convert manifest to response model
-            # Coerce model enum to schema enum value safely, map legacy 1.0 -> 1.0.0
-            ver_str = getattr(manifest.version, 'value', str(manifest.version))
-            if ver_str == "1.0":
-                ver_str = "1.0.0"
-            metadata_payload = dict(manifest.metadata or {})
-            if manifest.binary_limits:
-                metadata_payload.setdefault("binary_limits", manifest.binary_limits)
-            manifest_response = ChatbookManifestResponse(
-                version=SchemaChatbookVersion(ver_str),
-                name=manifest.name,
-                description=manifest.description,
-                author=manifest.author,
-                created_at=manifest.created_at,
-                updated_at=manifest.updated_at,
-                export_id=manifest.export_id,
-                content_items=[],  # Simplified for preview
-                include_media=manifest.include_media,
-                include_embeddings=manifest.include_embeddings,
-                include_generated_content=manifest.include_generated_content,
-                media_quality=manifest.media_quality,
-                max_file_size_mb=manifest.max_file_size_mb,
-                total_conversations=manifest.total_conversations,
-                total_notes=manifest.total_notes,
-                total_characters=manifest.total_characters,
-                total_media_items=manifest.total_media_items,
-                total_prompts=manifest.total_prompts,
-                total_evaluations=manifest.total_evaluations,
-                total_embeddings=manifest.total_embeddings,
-                total_world_books=manifest.total_world_books,
-                total_dictionaries=manifest.total_dictionaries,
-                total_documents=manifest.total_documents,
-                total_size_bytes=manifest.total_size_bytes,
-                tags=manifest.tags,
-                categories=manifest.categories,
-                language=manifest.language,
-                license=manifest.license,
-                metadata=metadata_payload,
-                truncation=manifest.truncation or {}
+        if manifest is None:
+            raise HTTPException(status_code=400, detail=error or "Invalid chatbook")
+
+        # Convert manifest to response model
+        # Coerce model enum to schema enum value safely, map legacy 1.0 -> 1.0.0
+        ver_str = getattr(manifest.version, 'value', str(manifest.version))
+        if ver_str == "1.0":
+            ver_str = "1.0.0"
+        try:
+            schema_version = SchemaChatbookVersion(ver_str)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"Unsupported chatbook version: {ver_str}"
+            ) from None
+        metadata_payload = dict(manifest.metadata or {})
+        if manifest.binary_limits:
+            metadata_payload.setdefault("binary_limits", manifest.binary_limits)
+        manifest_response = ChatbookManifestResponse(
+            version=schema_version,
+            name=manifest.name,
+            description=manifest.description,
+            author=manifest.author,
+            created_at=manifest.created_at,
+            updated_at=manifest.updated_at,
+            export_id=manifest.export_id,
+            content_items=[],  # Simplified for preview
+            include_media=manifest.include_media,
+            include_embeddings=manifest.include_embeddings,
+            include_generated_content=manifest.include_generated_content,
+            media_quality=manifest.media_quality,
+            max_file_size_mb=manifest.max_file_size_mb,
+            total_conversations=manifest.total_conversations,
+            total_notes=manifest.total_notes,
+            total_characters=manifest.total_characters,
+            total_media_items=manifest.total_media_items,
+            total_prompts=manifest.total_prompts,
+            total_evaluations=manifest.total_evaluations,
+            total_embeddings=manifest.total_embeddings,
+            total_world_books=manifest.total_world_books,
+            total_dictionaries=manifest.total_dictionaries,
+            total_documents=manifest.total_documents,
+            total_size_bytes=manifest.total_size_bytes,
+            tags=manifest.tags,
+            categories=manifest.categories,
+            language=manifest.language,
+            license=manifest.license,
+            metadata=metadata_payload,
+            truncation=manifest.truncation or {}
+        )
+        # Audit successful preview
+        try:
+            context = AuditContext(
+                user_id=str(user.id),
+                endpoint="/chatbooks/preview",
+                method="POST",
+                ip_address=request.client.host if request and hasattr(request, 'client') else None,
             )
-            # Audit successful preview
-            try:
-                context = AuditContext(
-                    user_id=str(user.id),
-                    endpoint="/chatbooks/preview",
-                    method="POST",
-                    ip_address=request.client.host if request and hasattr(request, 'client') else None,
-                )
-                await audit_service.log_event(
-                    event_type=AuditEventType.DATA_READ,
-                    context=context,
-                    resource_type="chatbook_preview",
-                    action="chatbook_preview",
-                    metadata={"filename": file.filename},
-                )
-            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
-                logger.warning(f"Failed to log audit event for preview: {audit_err}")
-            return PreviewChatbookResponse(manifest=manifest_response)
-        else:
-            return PreviewChatbookResponse(error=error)
+            await audit_service.log_event(
+                event_type=AuditEventType.DATA_READ,
+                context=context,
+                resource_type="chatbook_preview",
+                action="chatbook_preview",
+                metadata={"filename": file.filename},
+            )
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
+            logger.warning(f"Failed to log audit event for preview: {audit_err}")
+        return PreviewChatbookResponse(manifest=manifest_response)
 
     except HTTPException:
         raise
@@ -1453,7 +1492,9 @@ async def remove_export_job(
     audit_service=Depends(get_audit_service_for_user),
 ):
     """
-    Remove a completed or cancelled export job.
+    Remove a terminal export job.
+
+    Completed, cancelled, failed, or expired export jobs can be removed.
 
     Args:
         job_id: The export job ID to remove
@@ -1461,7 +1502,7 @@ async def remove_export_job(
     try:
         ok = service.delete_export_job(job_id)
         if not ok:
-            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+            raise HTTPException(status_code=400, detail="Only terminal export jobs can be removed")
         try:
             context = AuditContext(
                 user_id=str(user.id),
@@ -1504,7 +1545,9 @@ async def remove_import_job(
     audit_service=Depends(get_audit_service_for_user),
 ):
     """
-    Remove a completed or cancelled import job.
+    Remove a terminal import job.
+
+    Completed, cancelled, or failed import jobs can be removed.
 
     Args:
         job_id: The import job ID to remove
@@ -1512,7 +1555,7 @@ async def remove_import_job(
     try:
         ok = service.delete_import_job(job_id)
         if not ok:
-            raise HTTPException(status_code=400, detail="Only cancelled or completed jobs can be removed")
+            raise HTTPException(status_code=400, detail="Only terminal import jobs can be removed")
         try:
             context = AuditContext(
                 user_id=str(user.id),

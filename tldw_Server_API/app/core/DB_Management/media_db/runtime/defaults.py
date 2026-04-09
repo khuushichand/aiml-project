@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import configparser
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from typing import Optional
 
 from loguru import logger
@@ -42,17 +42,26 @@ try:
     from threading import RLock
 
     _runtime_state_lock = RLock()
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover — environments without threading
     _runtime_state_lock = None  # type: ignore
 
 
-def _runtime_state_context():
+def _runtime_state_context() -> AbstractContextManager[None]:
+    """Return a context manager guarding runtime state mutations.
+
+    Uses an RLock when threading is available, otherwise a no-op context.
+    """
     if _runtime_state_lock is None:
         return nullcontext()
     return _runtime_state_lock
 
 
-def _clear_content_backend_cache_inner() -> None:
+def _clear_content_backend_cache_unlocked() -> None:
+    """Clear the cached content backend without acquiring the runtime lock.
+
+    Intended to be called from within a ``_runtime_state_context()`` block.
+    Swallows import and runtime errors so callers can proceed with reset.
+    """
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
@@ -72,7 +81,7 @@ def _clear_content_backend_cache() -> None:
 
     with _runtime_state_context():
         content_db_backend = None
-        _clear_content_backend_cache_inner()
+        _clear_content_backend_cache_unlocked()
 
 
 def ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
@@ -113,7 +122,7 @@ def reset_media_runtime_defaults(
     with _runtime_state_context():
         cfg = config or single_user_config
         content_db_backend = None
-        _clear_content_backend_cache_inner()
+        _clear_content_backend_cache_unlocked()
 
         single_user_config = cfg
         content_db_settings = load_content_db_settings(cfg)

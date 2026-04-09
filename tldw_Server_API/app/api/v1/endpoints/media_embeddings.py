@@ -8,7 +8,7 @@
 
 import json
 import os
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
@@ -196,9 +196,11 @@ class BatchMediaEmbeddingsRequest(BaseModel):
 
 
 class BatchMediaEmbeddingsResponse(BaseModel):
-    status: str
+    status: Literal["accepted", "partial"]
     job_ids: list[str]
     submitted: int
+    failed_media_ids: list[int] = Field(default_factory=list)
+    failure_reasons: list[str] = Field(default_factory=list)
 
 
 class EmbeddingsSearchRequest(BaseModel):
@@ -431,28 +433,24 @@ async def generate_embeddings_for_media(
                     return "Embedding service returned invalid embedding vectors"
             return None
 
-        # Generate embeddings
-        try:
-            embeddings = await create_embeddings_batch_async(
-                texts=chunk_texts,
-                provider=embedding_provider,
-                model_id=embedding_model,
-                metadata=request_metadata,
-            )
-            validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
-            if validation_error:
-                return {
-                    "status": "error",
-                    "message": validation_error,
-                    "error": validation_error,
-                    "embedding_count": len(embeddings) if embeddings else 0,
-                    "chunks_processed": len(chunks),
-                }
+        def _storage_failure_result(exc: Exception, embedding_count: int) -> dict[str, Any]:
+            message = f"Storage failure while saving embeddings to ChromaDB: {exc}"
+            return {
+                "status": "error",
+                "message": message,
+                "error": message,
+                "embedding_count": embedding_count,
+                "chunks_processed": len(chunks),
+            }
 
-            # Store in ChromaDB using per-user collections
+        def _store_embeddings(
+            *,
+            model_name: str,
+            provider_name: str,
+            embeddings_to_store: list[Any],
+        ) -> None:
             collection_name = f"user_{user_id}_media_embeddings"
 
-            # Prepare metadata for each chunk
             extra_metadata = {}
             try:
                 media_item_meta = media_content.get("media_item", {})
@@ -460,6 +458,7 @@ async def generate_embeddings_for_media(
                     extra_metadata = media_item_meta.get("metadata") or {}
             except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 extra_metadata = {}
+
             metadatas = []
             for _i, chunk in enumerate(chunks):
                 metadata = {
@@ -470,25 +469,29 @@ async def generate_embeddings_for_media(
                     "chunk_type": _chunk_type_for_metadata(chunk),
                     "title": media_content["media_item"].get("title", ""),
                     "author": media_content["media_item"].get("author", ""),
-                    "embedding_model": embedding_model,
-                    "embedding_provider": embedding_provider
+                    "embedding_model": model_name,
+                    "embedding_provider": provider_name,
                 }
                 if isinstance(extra_metadata, dict) and extra_metadata:
                     metadata["extra"] = dict(extra_metadata)
                 metadatas.append(metadata)
 
-            # Store embeddings
             ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
 
-            # Convert embeddings to list format if they're numpy arrays
-            logger.info(f"Embeddings type: {type(embeddings)}, first item type: {type(embeddings[0]) if embeddings else 'None'}")
-            if embeddings and hasattr(embeddings[0], 'tolist'):
-                embeddings_list = [emb.tolist() for emb in embeddings]
+            logger.info(
+                f"Embeddings type: {type(embeddings_to_store)}, first item type: {type(embeddings_to_store[0]) if embeddings_to_store else 'None'}"
+            )
+            if embeddings_to_store and hasattr(embeddings_to_store[0], "tolist"):
+                embeddings_list = [emb.tolist() for emb in embeddings_to_store]
             else:
-                embeddings_list = embeddings
+                embeddings_list = embeddings_to_store
 
-            logger.info(f"After conversion - embeddings_list type: {type(embeddings_list)}, first item type: {type(embeddings_list[0]) if embeddings_list else 'None'}")
-            logger.info(f"First embedding length: {len(embeddings_list[0]) if embeddings_list and embeddings_list[0] else 0}")
+            logger.info(
+                f"After conversion - embeddings_list type: {type(embeddings_list)}, first item type: {type(embeddings_list[0]) if embeddings_list else 'None'}"
+            )
+            logger.info(
+                f"First embedding length: {len(embeddings_list[0]) if embeddings_list and embeddings_list[0] else 0}"
+            )
 
             manager = ChromaDBManager(
                 user_id=str(user_id),
@@ -500,26 +503,36 @@ async def generate_embeddings_for_media(
                 embeddings=embeddings_list,
                 ids=ids,
                 metadatas=metadatas,
-                embedding_model_id_for_dim_check=embedding_model,
+                embedding_model_id_for_dim_check=model_name,
             )
 
-            return {
-                "status": "success",
-                "message": f"Successfully generated {len(embeddings)} embeddings",
-                "embedding_count": len(embeddings),
-                "chunks_processed": len(chunks)
-            }
-
+        try:
+            embeddings = await create_embeddings_batch_async(
+                texts=chunk_texts,
+                provider=embedding_provider,
+                model_id=embedding_model,
+                metadata=request_metadata,
+            )
         except Exception:
-            # Try fallback model if primary fails
             if embedding_model != FALLBACK_EMBEDDING_MODEL:
                 logger.warning(f"Failed with {embedding_model}, trying fallback {FALLBACK_EMBEDDING_MODEL}")
-                embeddings = await create_embeddings_batch_async(
-                    texts=chunk_texts,
-                    provider="huggingface",
-                    model_id=FALLBACK_EMBEDDING_MODEL,
-                    metadata=request_metadata,
-                )
+                try:
+                    embeddings = await create_embeddings_batch_async(
+                        texts=chunk_texts,
+                        provider="huggingface",
+                        model_id=FALLBACK_EMBEDDING_MODEL,
+                        metadata=request_metadata,
+                    )
+                except Exception as exc:
+                    logger.error(f"Fallback embedding generation failed: {exc}")
+                    return {
+                        "status": "error",
+                        "message": f"Failed to generate embeddings: {exc}",
+                        "error": str(exc),
+                        "embedding_count": 0,
+                        "chunks_processed": len(chunks),
+                    }
+
                 validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
                 if validation_error:
                     return {
@@ -530,62 +543,50 @@ async def generate_embeddings_for_media(
                         "chunks_processed": len(chunks),
                     }
 
-                # Store with fallback model info in per-user collection
-                collection_name = f"user_{user_id}_media_embeddings"
-
-                metadatas = []
-                extra_metadata = {}
                 try:
-                    media_item_meta = media_content.get("media_item", {})
-                    if isinstance(media_item_meta, dict):
-                        extra_metadata = media_item_meta.get("metadata") or {}
-                except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-                    extra_metadata = {}
-                for _i, chunk in enumerate(chunks):
-                    metadata = {
-                        "media_id": str(media_id),
-                        "chunk_index": chunk["index"],
-                        "chunk_start": chunk["start"],
-                        "chunk_end": chunk["end"],
-                        "chunk_type": _chunk_type_for_metadata(chunk),
-                        "title": media_content["media_item"].get("title", ""),
-                        "author": media_content["media_item"].get("author", ""),
-                        "embedding_model": FALLBACK_EMBEDDING_MODEL,
-                        "embedding_provider": "huggingface"
-                    }
-                    if isinstance(extra_metadata, dict) and extra_metadata:
-                        metadata["extra"] = dict(extra_metadata)
-                    metadatas.append(metadata)
-
-                ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
-
-                # Convert embeddings to list format if they're numpy arrays
-                if embeddings and hasattr(embeddings[0], 'tolist'):
-                    embeddings_list = [emb.tolist() for emb in embeddings]
-                else:
-                    embeddings_list = embeddings
-
-                manager = ChromaDBManager(
-                    user_id=str(user_id),
-                    user_embedding_config=_user_embedding_config(),
-                )
-                manager.store_in_chroma(
-                    collection_name=collection_name,
-                    texts=chunk_texts,
-                    embeddings=embeddings_list,
-                    ids=ids,
-                    metadatas=metadatas,
-                    embedding_model_id_for_dim_check=FALLBACK_EMBEDDING_MODEL,
-                )
+                    _store_embeddings(
+                        model_name=FALLBACK_EMBEDDING_MODEL,
+                        provider_name="huggingface",
+                        embeddings_to_store=embeddings,
+                    )
+                except Exception as exc:
+                    logger.error(f"Error storing fallback embeddings: {exc}")
+                    return _storage_failure_result(exc, len(embeddings) if embeddings else 0)
 
                 return {
                     "status": "success",
                     "message": f"Generated embeddings using fallback model {FALLBACK_EMBEDDING_MODEL}",
                     "embedding_count": len(embeddings),
-                    "chunks_processed": len(chunks)
+                    "chunks_processed": len(chunks),
                 }
-            else:
-                raise
+            raise
+
+        validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
+        if validation_error:
+            return {
+                "status": "error",
+                "message": validation_error,
+                "error": validation_error,
+                "embedding_count": len(embeddings) if embeddings else 0,
+                "chunks_processed": len(chunks),
+            }
+
+        try:
+            _store_embeddings(
+                model_name=embedding_model,
+                provider_name=embedding_provider,
+                embeddings_to_store=embeddings,
+            )
+        except Exception as exc:
+            logger.error(f"Error storing primary embeddings: {exc}")
+            return _storage_failure_result(exc, len(embeddings) if embeddings else 0)
+
+        return {
+            "status": "success",
+            "message": f"Successfully generated {len(embeddings)} embeddings",
+            "embedding_count": len(embeddings),
+            "chunks_processed": len(chunks),
+        }
 
     except _MEDIA_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error generating embeddings: {e}")
@@ -796,10 +797,9 @@ async def generate_embeddings_batch(
     for media_id in media_ids:
         media_item = get_media_by_id(db, media_id)
         if not media_item:
-            raise HTTPException(
-                status_code=http_status.HTTP_404_NOT_FOUND,
-                detail=f"Media item {media_id} not found"
-            )
+            failed_media_ids.append(int(media_id))
+            failure_reasons.append(f"media_id={media_id}: not found")
+            continue
         job_id: Optional[str] = None
         try:
             job_row = adapter.create_job(
@@ -826,17 +826,26 @@ async def generate_embeddings_batch(
                 f"(user_id={user_id}, media_id={media_id}, reason={type(exc).__name__}: {exc})"
             )
 
-    if failed_media_ids:
+    if failed_media_ids and not job_ids:
         detail = {
             "error": "batch_enqueue_failed",
             "message": "Failed to queue one or more embedding jobs",
-            "submitted": len(job_ids),
+            "submitted": 0,
             "failed_media_ids": failed_media_ids,
             "failure_reasons": failure_reasons,
         }
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail,
+        )
+
+    if failed_media_ids:
+        return BatchMediaEmbeddingsResponse(
+            status="partial",
+            job_ids=job_ids,
+            submitted=len(job_ids),
+            failed_media_ids=failed_media_ids,
+            failure_reasons=failure_reasons,
         )
 
     return BatchMediaEmbeddingsResponse(

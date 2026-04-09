@@ -15,6 +15,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
+    DatabaseBackend,
     DatabaseConfig,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -161,7 +162,7 @@ except Exception:  # pragma: no cover
     _cache_lock = None  # type: ignore
 
 
-def _close_backend_pool(backend) -> None:
+def _close_backend_pool(backend: DatabaseBackend | None) -> None:
     """Best-effort close for pooled shared content backends."""
     if backend is None:
         return

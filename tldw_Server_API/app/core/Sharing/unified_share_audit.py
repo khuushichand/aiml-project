@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import aiosqlite
+from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditContext,
@@ -34,7 +35,9 @@ _RESERVED_METADATA_KEYS = {
     "actor_user_id",
     "share_id",
     "token_id",
+    "_legacy_created_at",
 }
+
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -100,10 +103,19 @@ class SharingIdentityState:
 class UnifiedShareAuditWriter:
     """Write Sharing events into unified audit and project them back compatibly."""
 
-    def __init__(self, db_path: str | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | None = None,
+        service: UnifiedAuditService | None = None,
+    ) -> None:
         resolved = Path(db_path) if db_path else DatabasePaths.get_shared_audit_db_path()
         self.db_path = str(resolved)
-        self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+        if service is not None:
+            self._service = service
+            self._owns_service = False
+        else:
+            self._service = UnifiedAuditService(db_path=self.db_path, storage_mode="shared")
+            self._owns_service = True
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -117,7 +129,8 @@ class UnifiedShareAuditWriter:
     async def stop(self) -> None:
         if not self._initialized:
             return
-        await self._service.stop()
+        if self._owns_service:
+            await self._service.stop()
         self._initialized = False
 
     async def _open_db(self) -> aiosqlite.Connection:
@@ -528,26 +541,43 @@ class UnifiedShareAuditWriter:
         finally:
             await db.close()
 
-        return [self._project_row(dict(row)) for row in rows]
+        projected: list[dict[str, Any]] = []
+        for row in rows:
+            result = self._project_row(dict(row))
+            if result is not None:
+                projected.append(result)
+        return projected
 
-    def _project_row(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _project_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
         metadata = _load_metadata(row.get("metadata"))
         compatibility_id = _coerce_int(
             metadata.get("compatibility_id")
             or metadata.get("legacy_share_audit_id")
         )
         if compatibility_id is None:
-            raise ValueError("Sharing audit row is missing a compatibility id")
+            logger.warning(
+                "Skipping sharing audit row without compatibility_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
 
         owner_user_id = _coerce_int(row.get("tenant_user_id"))
         if owner_user_id is None:
             owner_user_id = _coerce_int(metadata.get("owner_user_id"))
         if owner_user_id is None:
-            raise ValueError("Sharing audit row is missing an owner_user_id")
+            logger.warning(
+                "Skipping sharing audit row without owner_user_id: event_id={}, event_type={}",
+                row.get("event_id", "?"),
+                row.get("event_type", "?"),
+            )
+            return None
 
         actor_user_id = _coerce_int(metadata.get("actor_user_id"))
         if actor_user_id is None:
             actor_user_id = _coerce_int(row.get("context_user_id"))
+
+        created_at = metadata.get("_legacy_created_at") or row.get("timestamp")
 
         return {
             "id": compatibility_id,
@@ -561,5 +591,5 @@ class UnifiedShareAuditWriter:
             "metadata": _visible_metadata(metadata),
             "ip_address": row.get("context_ip_address"),
             "user_agent": row.get("context_user_agent"),
-            "created_at": row.get("timestamp"),
+            "created_at": created_at,
         }

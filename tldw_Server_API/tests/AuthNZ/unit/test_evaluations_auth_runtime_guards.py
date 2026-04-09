@@ -113,3 +113,14 @@ async def test_get_eval_request_user_testing_bypass_allows_under_explicit_pytest
     )
 
     assert getattr(user, "id", None) == 7
+
+
+def test_enforce_heavy_admin_only_treats_on_as_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "on")
+
+    with pytest.raises(HTTPException) as exc:
+        eval_auth.enforce_heavy_evaluations_admin(
+            SimpleNamespace(roles=[], permissions=[])
+        )
+
+    assert exc.value.status_code == 403

@@ -558,9 +558,10 @@ class SQLiteBackend(DatabaseBackend):
 
         # Add MATCH clause
         query_parts.append(f"WHERE {self.escape_identifier(fts_query.table)} MATCH ?")
-        normalized_query = FTSQueryTranslator.normalize_query(fts_query.query_text, "sqlite")
-        if not normalized_query:
-            raise DatabaseError("FTS query normalized to empty for sqlite")
+        normalized_query = (
+            FTSQueryTranslator.normalize_query(fts_query.query_text, "sqlite")
+            or fts_query.query_text
+        )
         params.append(normalized_query)
 
         # Add additional filters

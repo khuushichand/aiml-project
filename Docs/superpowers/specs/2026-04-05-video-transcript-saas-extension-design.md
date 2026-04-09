@@ -2,13 +2,15 @@
 
 ## Summary
 
-This design defines a lightweight SaaS product for users who want to ingest video URLs, read transcripts, receive eagerly generated summaries, and chat against transcript content without entering the full `tldw` product surface.
+This design defines a private browser-extension plus hosted-web product for users who want to ingest video URLs, read transcripts, view summaries, and chat against transcript content without entering the full `tldw` product surface.
 
-The product should ship as a browser extension plus a reduced hosted web experience backed by the existing `tldw-hosted` / `tldw_server` platform. The extension is the discovery and launch surface. The hosted web app is the primary workspace.
+The product should ship from a private overlay repo outside `tldw_server`, but it should reuse the existing hosted backend and existing backend contracts. The extension stays narrow and launcher-oriented. The hosted app is the primary workspace.
 
-V1 should reuse the existing hosted backend, auth, and billing foundations where possible, but the product frontend should live in a separate private project outside the open-source `tldw_server` repository.
+The key architectural rule is:
 
-V1 should also treat auth and subscription gating, lightweight upgrade flow, and repo separation as explicit delivery scope rather than assuming those SaaS pieces already exist in fully productized form.
+- no new product-specific OSS backend endpoints for `video-lite`
+- reuse existing media ingest jobs, media detail, auth, billing, and chat surfaces
+- put any dedupe optimization behind the existing ingest-job worker path rather than in a new public API contract
 
 ## Goals
 
@@ -18,28 +20,27 @@ V1 should also treat auth and subscription gating, lightweight upgrade flow, and
   - `Transcript`
   - `Summary`
   - `Chat`
-- Generate the default summary eagerly as part of backend workspace readiness rather than as a client-triggered action.
-- Reuse the existing `tldw` backend for ingestion, transcript retrieval, summarization, and chat.
+- Reuse the existing backend for ingestion, transcript retrieval, summarization, and chat.
 - Keep the store-facing extension and hosted app in a separate private project so the product is not directly packaged as part of the open-source monorepo.
 - Reuse the existing app through an upstream sync plus private patch-overlay model rather than rebuilding the frontend from scratch.
 - Require sign-in and an active subscription before users can ingest content or enter the transcript-backed workspace.
-- Keep the extension small and opinionated while allowing the hosted app to accept any URL the backend can ingest.
+- Keep transcripts and summaries stored per-user even when backend processing work is deduplicated internally.
 
 ## Non-Goals
 
-- Rebuilding the existing `tldw` backend around a new product-specific media model.
+- Adding new public `video-lite` endpoints to `tldw_server`.
+- Rebuilding the existing backend around a new product-specific media model.
 - Shipping a greenfield standalone SaaS frontend unrelated to the existing app surfaces in V1.
 - Reproducing the full `tldw` workspace, notebook, or library feature set inside the lightweight mode.
 - Building a rich extension-side history manager.
 - Exposing all ingestion, RAG, or model configuration knobs in the lightweight experience.
-- Restricting the hosted product only to YouTube when the current backend can ingest broader sources.
-- Shipping the store-facing product from `apps/extension` or `apps/tldw-frontend` inside the open-source repo.
+- Sharing user transcript records or user summary records across users.
 
 ## Requirements Confirmed With User
 
 - The product should function as a SaaS-oriented frontend distributed via the extension store.
 - The backend should be the existing hosted `tldw` project.
-- The store-facing product should live in a new project folder outside `tldw_server` so it is not directly associated with the open-source repo.
+- The store-facing product should live in a new project folder outside `tldw_server`.
 - The extension UI should stay limited to:
   - quick ingest
   - launcher actions for transcript and chat
@@ -59,142 +60,51 @@ V1 should also treat auth and subscription gating, lightweight upgrade flow, and
   - `Transcript`
   - `Summary`
   - `Chat`
-- V1 ingestion scope should remain broad in the hosted app:
-  - any URL the current backend can ingest
-- The preferred product direction is:
-  - use the existing `tldw` app/auth/billing foundations
-  - apply custom branding and labeling for the lightweight mode
+- Hosted intake should use the existing async ingest-jobs flow, not the synchronous add-media flow.
+- The private frontend should not perform cross-user search.
+- Reuse should happen via a backend dedupe shim behind the existing ingest-job worker.
+- Dedupe should still create a normal ingest job that finishes quickly.
+- Transcripts and summaries should still be stored per-user.
+- On a dedupe hit, the backend should not copy another user’s summary; it should generate the new user’s summary as part of that user’s ingest lifecycle.
 
 ## Current State
 
-- The repo already contains a shared browser extension and web UI monorepo under [`/Users/macbook-dev/Documents/GitHub/tldw_server2/apps`](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps).
-- The extension already uses a background-centered architecture and shared UI package as described in [`/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/extension/AGENTS.md`](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/extension/AGENTS.md).
-- The shared UI monorepo already supports extension and hosted UI coexistence through [`/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/Shared_UI_Monorepo.md`](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/Shared_UI_Monorepo.md).
-- The backend already exposes the main primitives needed for the product:
-  - media ingestion via `/api/v1/media/process`
-  - transcript/audio APIs
-  - transcript-grounded retrieval via `/api/v1/rag/search`
-  - chat via `/api/v1/chat/completions`
-- The repo already includes billing primitives and subscription status surfaces, but the lightweight product still needs a clean sign-in and paid-access flow.
-- A recent extension design already established the pattern of using the extension as a focused workflow surface rather than a full product clone in [`/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md`](/Users/macbook-dev/Documents/GitHub/tldw_server2/Docs/superpowers/specs/2026-04-03-browser-extension-web-clipper-design.md).
-- The existing monorepo should be treated as implementation reference only, not the delivery location for this product frontend.
+The backend already exposes the core public primitives needed for this product:
 
-## Design Constraints Discovered During Review
+- `POST /api/v1/media/ingest/jobs`
+- `GET /api/v1/media/ingest/jobs/{job_id}`
+- `GET /api/v1/media/ingest/jobs?batch_id=...`
+- `GET /api/v1/media/{media_id}`
+- existing auth and billing surfaces
+- existing chat surfaces such as `/api/v1/chat/completions`
 
-### Access Gate Constraint
+The existing media-ingest worker already returns `result.media_id` in completed job status. That means the private frontend can submit a normal ingest job, poll status, and open the resulting media item without any new orchestration endpoint.
 
-The repo contains billing primitives, but the lightweight product still needs explicit sign-in and subscription gating behavior. V1 therefore must explicitly include:
+The existing media detail response already exposes the core hosted workspace fields the private app needs:
 
-- signed-out routing into login
-- signed-in but unsubscribed routing into a branded lightweight upgrade wrapper
-- subscribed access to ingest and workspace entry
-- deterministic launcher behavior across those access states
+- transcript text via `content.text`
+- source URL via `source.url`
+- stable per-user summary storage via `processing.safe_metadata`, which should carry a reserved `video_lite` summary payload for this product
 
-These are not optional follow-up polish items.
+## Recommended Approach
 
-### Repo Separation Constraint
+Use a private overlay repo on top of the existing app, but reuse existing public backend contracts only.
 
-The user wants the extension and hosted app to live in a separate project outside `tldw_server`. That means the current open-source monorepo can inform implementation patterns, but it should not be the shipping home for the store-facing product.
+The private product should:
 
-Any new product shell, extension package, and upgrade surfaces should therefore be planned as a private sibling project that consumes the hosted backend APIs.
+- submit ingest through existing ingest-job endpoints
+- poll existing job status endpoints
+- open existing media detail by `media_id`
+- use existing chat/auth/billing surfaces
+- keep all product-specific logic in the private frontend and in internal backend worker behavior
 
-### Overlay Maintenance Constraint
-
-The user wants to reuse the existing app rather than build an unrelated private frontend. That makes an upstream-sync plus patch-overlay model preferable to a greenfield rewrite.
-
-The private product should therefore:
-
-- sync selected frontend surfaces from the existing app
-- keep product-specific changes in a clearly bounded private patch layer
-- minimize deep invasive divergence where possible
-- treat upstream sync cost as part of the architecture, not an afterthought
-- record exactly which upstream paths were synced and from which upstream commit
-
-### Launcher State Constraint
-
-The extension action set only works if each action has deterministic behavior across backend states. `Ingest`, `Open transcript`, and `Quick chat` must each define behavior for:
-
-- not yet ingested
-- ingest in progress
-- transcript ready
-- transcript failed
-- signed out
-- signed in but unsubscribed
-
-Without that matrix, the launcher will produce dead-end or inconsistent flows.
-
-### Orchestration Contract Constraint
-
-The launcher and lightweight workspace both need one canonical answer to: "What is the state of this source for this identity?" That makes a thin backend orchestration contract effectively required for V1, even if it is implemented as a narrow adapter over existing APIs.
-
-That contract must also be idempotent for repeated submissions of the same normalized source, or the product risks duplicate ingests and inconsistent launcher state.
-
-### Privacy And Retention Constraint
-
-A browser extension that sends video URLs and transcript-derived content to a hosted backend needs an explicit user-facing privacy and retention policy. V1 must define what is stored for signed-in subscribed users and how that data is managed through the hosted account experience.
-
-## Approaches Considered
-
-### Approach 1: Lightweight Product Mode Inside Existing `tldw`
-
-Add a dedicated reduced route set and branded mode inside the existing hosted app, while keeping the extension as the launch and paid-access surface.
-
-Pros:
-
-- Fastest path to market
-- Reuses current backend, auth, billing, and app shell
-- Keeps transcript/chat objects unified with the rest of the platform
-- Minimizes product duplication
-
-Cons:
-
-- Requires careful UX discipline to avoid feeling like a trimmed-down admin screen
-- Branding separation is partial rather than absolute
-
-### Approach 2: Private Overlay Repo On Top Of The Existing App
-
-Create a dedicated private product repo that imports or syncs selected frontend surfaces from the existing app, then applies a private patch layer for branding, lightweight routing, extension behavior, and upgrade flow.
-
-Pros:
-
-- Cleanest product story for extension-store users
-- Reuses proven frontend patterns and components instead of starting from zero
-- Keeps store-facing delivery separate from the open-source repo
-
-Cons:
-
-- Requires an explicit sync strategy and patch-drift discipline
-- Still adds maintenance overhead compared with shipping directly from the existing app
-- Poor boundaries could turn the private repo into a messy long-lived fork
-
-### Approach 3: Extension-Heavy Product
-
-Keep transcript viewing and most chat interactions in the extension, using the hosted app only for upgrade or advanced flows.
-
-Pros:
-
-- Strong in-browser workflow pitch
-- Minimal handoff once launched
-
-Cons:
-
-- Highest UI and state-management complexity
-- Hardest place to handle auth, subscriptions, and durable history well
-- Weakest fit for long-form transcript reading
-
-## Recommendation
-
-Use **Approach 2**.
-
-Build the product as a separate private overlay repo that reuses selected existing app surfaces through sync plus a bounded private patch layer, while still relying on the hosted backend APIs, auth, and billing foundations. The extension stays intentionally narrow: detect supported pages, launch ingestion, surface shallow status, and hand the user into the hosted transcript workspace.
+It should not add a public `video-lite` backend contract.
 
 ## Product Architecture
 
-V1 should have two intentionally different surfaces.
-
 ### Extension Surface
 
-The extension is the entry point, launcher, and upgrade funnel.
+The extension is the discovery and launch surface.
 
 Its responsibilities are:
 
@@ -204,12 +114,9 @@ Its responsibilities are:
   - `Ingest`
   - `Open transcript`
   - `Quick chat`
-- initiate ingest against the hosted backend
-- show lightweight readiness or progress status
-- hand off to the hosted lightweight workspace
+- hand the user into the hosted app with preserved intent
 
 It should not own full transcript reading, durable chat history, or broad media-library functionality.
-`Open transcript` and `Quick chat` are entry actions that preserve user intent and deep-link into the hosted workspace; they are not separate in-extension transcript or chat surfaces in V1.
 
 ### Hosted Lightweight Web Surface
 
@@ -221,310 +128,186 @@ This should live in a separate private hosted app repo, not inside the open-sour
 - `Summary`
 - `Chat`
 
-This product should keep a narrow information architecture and avoid exposing the full open-source app surface. It should reuse selected upstream UI patterns and components where they reduce implementation cost, but product-specific behavior should stay in the private patch layer.
+The private hosted app should act as an orchestrator over existing backend endpoints, not as a client for new product-specific backend routes.
 
 ### Backend Surface
 
 The backend remains the existing `tldw_server` platform.
 
-V1 should compose existing capabilities rather than invent a separate open-source backend feature set. V1 should add one thin orchestration contract in the backend and consume it from the private overlay product to normalize:
+The public backend surface used by this product should remain:
 
-- submit URL for ingest
-- query existing ingest status
-- resolve the transcript-backed media record
-- generate and cache the default transcript summary once transcript readiness is reached
-- route chat and summary calls against that record
-- return one canonical workspace answer for the launcher and hosted workspace
-- derive and persist a canonical normalized-source identity for reuse across extension and hosted lightweight mode
-- make repeated submit requests for the same normalized source idempotent
+- existing ingest-job submission and polling
+- existing media detail retrieval
+- existing auth, billing, and chat endpoints
 
-The launcher-facing source response must include identity-aware access state, not just normalized source identity.
+The product should not add public `video-lite` source-state, workspace, or summary-refresh endpoints.
 
-The contract should expose a `launcher_access` field with these exact V1 values:
+## Same-User Idempotency
 
-- `login_required`
-- `subscription_required`
-- `allowed`
+Repeated submits for the same normalized source must not create duplicate media rows for the same user.
 
-`launcher_access` is the canonical extension-routing field and should be shared consistently across backend, hosted UI helpers, and extension launcher logic.
+Rules:
 
-The contract should also expose an `entitlement` field with these exact V1 values:
+- if the same user already has an active media record for the same normalized source and that record already has a transcript, the ingest path should resolve to that existing `media_id`
+- the backend may still create a normal ingest job for user-facing consistency, but the job should complete quickly and return the existing `media_id`
+- `Ingest`, `Open transcript`, and `Quick chat` must all converge on that same-user idempotent behavior
 
-- `signed_out`
-- `signed_in_unsubscribed`
-- `signed_in_subscribed`
+This is separate from cross-user dedupe. Cross-user dedupe is an internal compute optimization. Same-user idempotency is a user-facing correctness rule.
 
-## Workspace Contract And Summary Lifecycle
+## Dedupe Boundary
 
-The backend should grow from a source-state contract into a small workspace contract.
-
-The recommended contract shape is:
-
-- keep `POST /api/v1/media/video-lite/source` for normalization, entitlement checks, and ingest kickoff
-- require that `POST /api/v1/media/video-lite/source` returns:
-  - `launcher_access`
-  - `entitlement`
-  - the normalized source identity fields needed for routing
-- add a backend-backed workspace/status response that includes:
-  - `source_key`
-  - `source_url`
-  - `state`
-  - `transcript`
-  - `summary`
-  - `summary_state`
-  - optional `chat_preview` only if the hosted page wants presentational empty-state copy; it is not a separate chat API surface
-  - `entitlement`
+Dedupe should be an internal compute and artifact optimization behind the existing ingest-job worker path.
 
-Because V1 now prefers eager summary generation, summary lifecycle belongs to the backend rather than the hosted page. New source flows should normally move through:
+What may be reused internally:
 
-- media `processing`
-- media `ready` plus summary `processing`
-- media `ready` plus summary `ready`
+- normalized source identity
+- downloaded media artifacts
+- canonical transcript artifacts
+- other non-user-owned processing artifacts that are safe to reuse internally
 
-`summary_state` should be explicit. The useful V1 states are:
+V1 should scope reuse conservatively:
 
-- `not_requested`
-  - legacy or incomplete records only
-- `processing`
-- `ready`
-- `failed`
+- prefer reuse for sources with stable canonical identity, such as normalized YouTube video IDs
+- for mutable or weakly identified sources, only reuse artifacts when a freshness or canonical-source fingerprint check passes
+- if freshness cannot be established cheaply, fall back to the normal ingest path
 
-The hosted page should open once transcript-ready, even if `summary_state` is still `processing`. `Transcript` should render transcript or transcript-processing state, `Summary` should render summary or summary-processing state, and `Chat` should remain grounded on transcript-ready content.
+What must remain per-user:
 
-V1 should not expose a client-triggered summary creation, regeneration, or retry control in the lightweight product. The hosted page should render backend workspace state only. Any summary retry behavior remains a backend concern.
+- media row
+- transcript record stored in that user’s media DB
+- summary stored in that user’s record
+- any later edits, keywords, notes, chat history, or reprocessing state
 
-Summary generation should not happen inline on workspace reads. Transcript readiness should enqueue at most one background summary job per normalized source or transcript hash, protected by a dedupe key or equivalent lock. `GET /video-lite/workspace/...` should stay read-only and report `summary_state` without spawning duplicate summarization work during polling.
+Operationally:
 
-## User Flow
+- on no dedupe hit:
+  - run normal download and transcription
+  - persist transcript into the user’s record
+  - generate first summary for that user
+- on same-user repeat ingest with an existing active transcript-backed record:
+  - skip duplicate media-row creation
+  - return the existing `media_id`
+  - do not re-transcribe
+  - do not regenerate summary unless the existing record is missing its dedicated summary artifact
+- on dedupe hit:
+  - skip download and transcription work
+  - materialize transcript into that user’s record
+  - generate first summary for that user
+  - complete the job quickly with the normal `result.media_id` payload
 
-The primary user flow is:
+The private frontend should not know whether a job was deduped. It should only observe a normal ingest-job lifecycle.
 
-1. User opens a supported YouTube page.
-2. Extension detects the current video and offers `Ingest`, `Open transcript`, and `Quick chat`.
-3. If the user is signed out, the extension routes them into login.
-4. If the user is signed in but unsubscribed, the extension routes them into the branded lightweight upgrade wrapper.
-5. If the user is signed in and subscribed, the extension triggers ingest when needed and shows shallow progress feedback.
-6. Once transcript-ready, the user is routed into the hosted lightweight workspace.
-7. The backend generates the default summary as part of the same workspace lifecycle.
-8. The user reads the transcript, reviews the ready or in-progress summary, and asks questions grounded in the transcript.
+## Hosted Flow
 
-The hosted experience may also accept direct pasted URLs for sources beyond YouTube, but extension auto-detection in V1 should stay focused on YouTube pages.
+The hosted flow should be:
 
-Signed-in users should have an explicit hosted intake surface for pasted non-YouTube URLs. That flow should not depend on the extension launcher.
+1. User lands on the private hosted intake screen, typically from extension handoff.
+2. Hosted app checks sign-in and subscription state using existing auth and billing surfaces.
+3. Hosted app submits `POST /api/v1/media/ingest/jobs` with the source URL.
+4. Hosted app stores the returned `job_id` and `batch_id`.
+5. Hosted app polls `GET /api/v1/media/ingest/jobs/{job_id}` or the batch list endpoint.
+6. Once the job reaches `completed`, the hosted app reads `result.media_id`.
+7. Hosted app loads `GET /api/v1/media/{media_id}`.
+8. Workspace renders:
+   - transcript from `content.text`
+   - summary from the dedicated `processing.safe_metadata.video_lite.summary` value
+   - chat entry using the existing media/chat flows
 
-## Launcher Action Matrix
+If the completed job result does not include `media_id`, the hosted app should treat that as failure.
 
-The extension should use the following deterministic behavior.
+For V1, ingest job completion should mean:
 
-### `Ingest`
+- transcript persistence is finished
+- the initial summary attempt has also finished
 
-- `Signed out`
-  - route to login and preserve source intent
-- `Signed in, unsubscribed`
-  - route directly to upgrade without a redundant sign-up step
-- `Not ingested`
-  - start ingest and show progress
-- `Ingestion in progress`
-  - reopen status and continue polling
-- `Transcript ready`
-  - deep-link to hosted lightweight workspace
-- `Transcript failed`
-  - offer retry and fallback to hosted app
+That keeps the lightweight hosted flow simple. The Summary tab should not need a long-lived “summary still generating” state after job completion. If summary generation fails, the backend should persist a terminal summary status for that user and the hosted app should render that failure or unavailable state.
 
-`Ingest` should only be reachable when `launcher_access == "allowed"`.
+## Launcher Behavior
 
-### `Open transcript`
+The extension should not depend on a backend `launcher_access` route.
 
-- `Signed out`
-  - route to login and preserve transcript destination intent
-- `Signed in, unsubscribed`
-  - route directly to upgrade and preserve transcript destination intent
-- `Not ingested`
-  - start ingest first, then route to transcript when ready
-- `Ingestion in progress`
-  - open hosted status or waiting screen
-- `Transcript ready`
-  - deep-link to hosted `Transcript` tab
-- `Transcript failed`
-  - show plain-language failure and retry path
+Instead:
 
-### `Quick chat`
+- `Ingest` should deep-link into the hosted intake screen
+- `Open transcript` should deep-link into the hosted app with transcript intent
+- `Quick chat` should deep-link into the hosted app with chat intent
 
-- `Signed out`
-  - route to login and preserve chat destination intent
-- `Signed in, unsubscribed`
-  - route directly to upgrade and preserve chat destination intent
-- `Not ingested`
-  - start ingest first; do not open an empty chat shell
-- `Ingestion in progress`
-  - open hosted waiting state with `Chat` as intended destination
-- `Transcript ready`
-  - deep-link to hosted `Chat` tab
-- `Transcript failed`
-  - show transcript-preparation failure, not a generic chat error
+The hosted app should then decide whether to:
 
-## Core Components
+- route the user into login
+- route the user into upgrade
+- submit a new ingest job
+- reopen a locally known in-progress job
+- open an already-known media item in the workspace
 
-The design should keep the system split into five clear units.
+This keeps auth and subscription routing in the hosted app rather than in a new backend launcher contract.
 
-### 1. Extension Launcher
+## Summary Lifecycle
 
-Owns supported-page detection, page metadata extraction, shallow status display, and launch/handoff behavior.
+Summary generation should remain tied to first ingest and explicit full-app re-request behavior.
 
-### 2. Lightweight SaaS Web Mode
+Rules:
 
-Owns the reduced branded workspace and the three-tab video screen. This is the main user experience.
+- the lightweight hosted app should not trigger summary generation through a dedicated lite endpoint
+- first-ingest jobs should generate the user’s summary automatically
+- dedupe hits should still generate the user’s summary automatically after the transcript is materialized into that user’s record
+- later regeneration should happen through existing full-app behavior, not a lightweight product-specific API
 
-### 3. Backend Orchestration Layer
+The lightweight product must not treat generic `processing.analysis` as its canonical summary field. That field represents the last analysis or summary generated in the broader app and can be overwritten by unrelated later actions.
 
-Owns ingest initiation, record reuse, status lookup, and transcript/media resolution. This should be thin and built from existing APIs where possible.
+Instead, V1 should reserve a stable summary slot inside existing per-user media metadata, exposed through the existing detail response. The recommended shape is:
 
-### 4. Auth And Subscription Gate
+- `processing.safe_metadata.video_lite.summary`
+- optional companion fields such as:
+  - `processing.safe_metadata.video_lite.summary_status`
+  - `processing.safe_metadata.video_lite.summary_generated_at`
+  - `processing.safe_metadata.video_lite.summary_source`
 
-Owns sign-in checks, subscription enforcement, and upgrade boundaries. This must be enforced server-side.
+The hosted Summary tab should read that reserved summary payload only.
 
-### 5. Product-Mode Routing And Branding
+## Error Handling
 
-Owns route gating, reduced navigation, labels, onboarding copy, and upgrade messaging for the lightweight mode without creating a second product brain.
+The product should handle these states explicitly:
 
-## Data Flow
+- sign-in required
+- active subscription required
+- ingest job queued or processing
+- ingest job failed
+- completed job missing `media_id`
+- media detail fetch failed
+- transcript unavailable after ingest failure
+- summary unavailable or failed after job completion
 
-The main data flow should be:
+The lightweight experience should remain intentionally small and avoid exposing low-level backend controls.
 
-1. Extension or hosted lightweight mode submits a URL.
-2. Backend creates or reuses the media-processing record.
-3. Ingestion and transcription run to readiness.
-4. Once transcript-ready, the backend generates or reuses the default summary for that record.
-5. Hosted app polls or subscribes for workspace state.
-6. Transcript, summary, and chat all bind to the same underlying transcript-backed media record.
+## Privacy And Data Ownership
 
-The main design rule is to avoid inventing a separate “extension-only video” entity. Extension, hosted lightweight mode, and existing product surfaces should all reference the same underlying backend objects.
+This product should not share transcript or summary records across users.
 
-## Access And Subscription Model
+Even when internal dedupe avoids repeat compute, the resulting user-visible content should be persisted per-user in that user’s own backend records.
 
-V1 should have no anonymous or free usage path.
-V1 should also have no anonymous accounts, anonymous trial identities, guest ingest sessions, or claimable pre-account workspace state.
+That keeps user data ownership aligned with the rest of the hosted platform and avoids cross-user product semantics.
 
-### Access Rules
+## Testing Requirements
 
-Users must be signed in and have an active subscription before they can:
+Verification should cover:
 
-- ingest a source
-- enter the transcript-backed workspace
-- view generated summaries
-- chat against transcript content
+- private hosted intake submitting existing ingest jobs correctly
+- dedupe-hit worker behavior still returning a normal completed job with `result.media_id`
+- same-user repeated ingest resolving to the existing `media_id` instead of creating duplicate rows
+- per-user transcript persistence after dedupe
+- per-user first summary generation after dedupe
+- hosted workspace rendering transcript from `GET /api/v1/media/{media_id}`
+- hosted workspace rendering summary from the reserved `processing.safe_metadata.video_lite.summary` field
+- an integration path that submits a real ingest job, observes completed status, and then fetches the resulting media detail successfully
+- extension handoff into hosted ingest and workspace flow
+- paid-only gating through existing login and subscription surfaces
 
-### State Model
+## Design Rules
 
-Recommended user states:
-
-- `Signed out`
-  - can see product entry points
-  - cannot start ingest or enter the transcript-backed workspace
-- `Signed in, unsubscribed`
-  - can access account context and purchase flow
-  - cannot start ingest or enter the transcript-backed workspace
-- `Signed in, subscribed`
-  - full product behavior
-
-### Enforcement Rules
-
-- Auth and subscription enforcement must be server-side.
-- `launcher_access` must be the canonical launcher-routing field.
-- Signed-out users should be routed into login.
-- Signed-in but unsubscribed users should be routed into a branded lightweight upgrade wrapper, not directly into a generic app shell.
-- Signed-in subscribed users may access broader source ingest according to product entitlement.
-
-The core conversion message should be value-based and direct:
-
-> Sign in and subscribe to ingest videos, read transcripts, review summaries, and chat with the content.
-
-### Upgrade And Billing Boundary
-
-V1 should assume billing primitives exist, but should not assume the end-user upgrade flow is already shaped for this lightweight product. The implementation plan should therefore include:
-
-- a branded upgrade entry point from lightweight mode
-- a dedicated branded wrapper that hands off into the existing checkout or subscription primitives
-- a branded post-purchase return path into the lightweight workspace
-
-The upgrade flow should preserve user intent. At minimum it should carry forward:
-
-- the normalized source or resolved media identity
-- the intended destination tab such as `Transcript` or `Chat`
-- enough context to resume the in-progress lightweight flow after purchase
-
-## Error Handling And Limits
-
-V1 should define explicit failure and boundary states.
-
-### Supported Input Boundary
-
-- Extension auto-detects YouTube pages only.
-- Hosted lightweight mode can accept any URL the backend can ingest for signed-in subscribed users.
-- Unsupported sources should fail clearly with retry and fallback paths.
-
-### Failure States
-
-- `Unsupported URL`
-- `Ingestion in progress`
-- `Transcript unavailable`
-- `Summary in progress`
-- `Summary unavailable`
-- `Login required`
-- `Subscription required`
-- `Chat unavailable`
-
-Each state should have plain-language copy and a clear next action.
-
-## Privacy And Retention
-
-V1 should define explicit storage and retention behavior for hosted ingestion.
-
-### Signed-In User Data
-
-- Store the source metadata, transcript artifact references, and derived workspace state needed to support the subscribed account experience.
-- Disclose clearly that transcript processing and chat occur on the hosted `tldw` service.
-- Route data management and deletion through the signed-in account experience.
-
-### User-Facing Disclosure
-
-The extension and hosted lightweight mode should both disclose:
-
-- that source URLs and transcript-derived content are sent to the hosted backend
-- where users go to manage or delete their data once signed in
-
-### V1 Scope Discipline
-
-The lightweight mode should not become a full clone of `tldw`. V1 should exclude:
-
-- general media-library redesign
-- full notebook/workspace behavior
-- extension-side advanced history management
-- full configuration surfaces for ingest or model tuning
-- multi-document or broad knowledge-base chat
-
-## Testing Strategy
-
-Implementation should verify the following flows:
-
-- YouTube page detection and launcher actions in the extension
-- ingest handoff from extension to hosted lightweight mode
-- ingest status transitions and ready-state rendering
-- launcher action behavior across all source states
-- eager summary generation once transcript-ready
-- transcript, summary, and chat behavior on transcript-backed media
-- server-side auth and subscription enforcement across signed-out, unsubscribed, and subscribed states
-- login routing and upgrade gating before protected actions
-- signed-in data-management and disclosure behavior
-
-## Open Implementation Questions
-
-These do not block the design, but they must be answered in planning:
-
-- What should the new private overlay project be named and where should it live as a sibling to `tldw_server`?
-- Which frontend paths should be synced from the existing app versus replaced by private-only implementations?
-- Will the overlay use a fork, vendored sync, or scripted copy-plus-patch workflow?
-
-## Decision
-
-Ship V1 as a separate private overlay product repo with its own hosted frontend and extension, backed by the existing `tldw` hosted ingestion, transcript, summary, chat, auth, and billing foundations, with explicit V1 delivery scope for subscription gating, launcher state handling, orchestration, privacy/retention behavior, repo separation, upstream sync/patch-overlay maintenance, and a branded lightweight upgrade wrapper over existing billing primitives.
+- No new public OSS backend endpoints for this product.
+- Reuse existing ingest jobs as the canonical ingest path.
+- Keep dedupe internal to backend worker logic.
+- Keep transcript and summary storage per-user.
+- Keep the extension narrow and launcher-oriented.
+- Keep the hosted app as the primary workspace.

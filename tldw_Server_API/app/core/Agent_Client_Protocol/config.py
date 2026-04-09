@@ -228,6 +228,62 @@ def _parse_string_list(raw: str | None) -> list[str]:
     return [s.strip() for s in text.split(",") if s.strip()]
 
 
+##############################################################################
+# Permission policy templates
+# ---
+# Preset policy configurations that serve as base layers for the permission
+# system.  Loaded by ``ACPRuntimePolicyService.build_snapshot()`` and merged
+# with user customisations (user overrides take precedence).
+##############################################################################
+
+PERMISSION_POLICY_TEMPLATES: dict[str, dict] = {
+    "read-only": {
+        "tool_tier_overrides": {
+            "Read(*)": "auto",
+            "Glob(*)": "auto",
+            "Grep(*)": "auto",
+            "Bash(git:log*)": "auto",
+            "Bash(git:status*)": "auto",
+            "Bash(git:diff*)": "auto",
+            "*": "individual",
+        },
+        "description": "Read-only access. All write/exec tools require individual approval.",
+    },
+    "developer": {
+        "tool_tier_overrides": {
+            "Bash(git:*)": "auto",
+            "Bash(npm:*)": "auto",
+            "Bash(yarn:*)": "auto",
+            "Bash(pip:*)": "auto",
+            "Read(*)": "auto",
+            "Glob(*)": "auto",
+            "Grep(*)": "auto",
+            "Write(*)": "batch",
+            "Edit(*)": "batch",
+            "Bash(rm:*)": "individual",
+            "Bash(*)": "individual",
+        },
+        "description": "Developer access. Git/npm auto, file writes batch, shell exec individual.",
+    },
+    "admin": {
+        "tool_tier_overrides": {
+            "Bash(rm:-rf*)": "individual",
+            "Bash(git:push*--force*)": "individual",
+            "Bash(git:reset*--hard*)": "individual",
+            "Bash(drop*)": "individual",
+            "*": "auto",
+        },
+        "description": "Admin access. Everything auto except destructive operations.",
+    },
+    "lockdown": {
+        "tool_tier_overrides": {
+            "*": "individual",
+        },
+        "description": "Full lockdown. Every tool requires individual approval.",
+    },
+}
+
+
 def load_acp_sandbox_config() -> ACPSandboxConfig:
     section = get_config_section("ACP-SANDBOX")
     enabled = _parse_bool(os.getenv("ACP_SANDBOX_ENABLED") or section.get("enabled"), False)

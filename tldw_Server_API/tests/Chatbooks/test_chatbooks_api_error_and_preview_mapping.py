@@ -99,6 +99,20 @@ class _PreviewStatsService:
         return manifest, None
 
 
+class _PreviewInvalidManifestService:
+    db = None
+
+    def preview_chatbook(self, _file_path: str):
+        return None, "Invalid chatbook manifest"
+
+
+class _PreviewExplodingService:
+    db = None
+
+    def preview_chatbook(self, _file_path: str):
+        raise RuntimeError("preview exploded")
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -148,3 +162,25 @@ def test_preview_preserves_prompt_eval_embedding_stats():
     assert manifest.get("total_prompts") == 7
     assert manifest.get("total_evaluations") == 5
     assert manifest.get("total_embeddings") == 9
+
+
+def test_preview_maps_service_validation_errors_to_400():
+    app = _make_app(_PreviewInvalidManifestService())
+    files = {"file": ("preview.chatbook", _make_chatbook_bytes(), "application/zip")}
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/chatbooks/preview", files=files)
+
+    assert response.status_code == 400
+    assert response.json().get("detail") == "Invalid chatbook manifest"
+
+
+def test_preview_maps_unexpected_service_failures_to_500():
+    app = _make_app(_PreviewExplodingService())
+    files = {"file": ("preview.chatbook", _make_chatbook_bytes(), "application/zip")}
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/chatbooks/preview", files=files)
+
+    assert response.status_code == 500
+    assert response.json().get("detail") == "An error occurred while previewing the chatbook"

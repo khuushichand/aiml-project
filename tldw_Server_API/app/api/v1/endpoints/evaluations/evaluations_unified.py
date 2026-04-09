@@ -1337,12 +1337,13 @@ async def evaluate_propositions_endpoint(
             )
 
         svc = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         result = await svc.evaluate_propositions(
             extracted=request.extracted,
             reference=request.reference,
             method=request.method or 'semantic',
             threshold=request.threshold or 0.7,
-            user_id=user_id
+            user_id=stable_user_id
         )
 
         metrics = result["results"].get("metrics", {})
@@ -1515,6 +1516,9 @@ async def batch_evaluate(
                 headers={"Retry-After": str(retry_after)},
             )
 
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
+        batch_webhook_user_id = webhook_user_id_from_user(current_user)
+
         results = []
         failed_count = 0
         eval_type = request.evaluation_type
@@ -1539,7 +1543,8 @@ async def batch_evaluate(
                         metrics=eval_request.get("metrics", ["coherence"]),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id,
+                        user_id=stable_user_id,
+                        webhook_user_id=batch_webhook_user_id,
                     )
                 if eval_type == "rag":
                     return service.evaluate_rag(
@@ -1550,7 +1555,8 @@ async def batch_evaluate(
                         metrics=eval_request.get("metrics", ["relevance", "faithfulness"]),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id,
+                        user_id=stable_user_id,
+                        webhook_user_id=batch_webhook_user_id,
                     )
                 if eval_type == "response_quality":
                     return service.evaluate_response_quality(
@@ -1560,7 +1566,8 @@ async def batch_evaluate(
                         custom_criteria=eval_request.get("evaluation_criteria"),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id,
+                        user_id=stable_user_id,
+                        webhook_user_id=batch_webhook_user_id,
                     )
                 if eval_type == "ocr":
                     return service.evaluate_ocr(
@@ -1568,7 +1575,7 @@ async def batch_evaluate(
                         metrics=eval_request.get("metrics"),
                         ocr_options=eval_request.get("ocr_options"),
                         thresholds=eval_request.get("thresholds"),
-                        user_id=user_id,
+                        user_id=stable_user_id,
                     )
                 if eval_type == "propositions":
                     return service.evaluate_propositions(
@@ -1576,7 +1583,7 @@ async def batch_evaluate(
                         reference=eval_request.get("reference", []),
                         method=eval_request.get("method", "semantic"),
                         threshold=eval_request.get("threshold", 0.7),
-                        user_id=user_id,
+                        user_id=stable_user_id,
                     )
                 return None
 
@@ -1755,7 +1762,8 @@ async def batch_evaluate(
                             metrics=eval_request.get("metrics", ["coherence"]),
                             api_name=provider_name,
                             api_key=provider_api_key,
-                            user_id=user_id
+                            user_id=stable_user_id,
+                            webhook_user_id=batch_webhook_user_id,
                         )
                     elif eval_type == "rag":
                         result = await service.evaluate_rag(
@@ -1766,7 +1774,8 @@ async def batch_evaluate(
                             metrics=eval_request.get("metrics", ["relevance", "faithfulness"]),
                             api_name=provider_name,
                             api_key=provider_api_key,
-                            user_id=user_id
+                            user_id=stable_user_id,
+                            webhook_user_id=batch_webhook_user_id,
                         )
                     elif eval_type == "response_quality":
                         result = await service.evaluate_response_quality(
@@ -1776,7 +1785,8 @@ async def batch_evaluate(
                             custom_criteria=eval_request.get("evaluation_criteria"),
                             api_name=provider_name,
                             api_key=provider_api_key,
-                            user_id=user_id
+                            user_id=stable_user_id,
+                            webhook_user_id=batch_webhook_user_id,
                         )
                     elif eval_type == "ocr":
                         result = await service.evaluate_ocr(
@@ -1784,7 +1794,7 @@ async def batch_evaluate(
                             metrics=eval_request.get("metrics"),
                             ocr_options=eval_request.get("ocr_options"),
                             thresholds=eval_request.get("thresholds"),
-                            user_id=user_id,
+                            user_id=stable_user_id,
                         )
                     elif eval_type == "propositions":
                         result = await service.evaluate_propositions(
@@ -1792,7 +1802,7 @@ async def batch_evaluate(
                             reference=eval_request.get("reference", []),
                             method=eval_request.get("method", "semantic"),
                             threshold=eval_request.get("threshold", 0.7),
-                            user_id=user_id,
+                            user_id=stable_user_id,
                         )
                     else:
                         results.append({
@@ -1887,12 +1897,13 @@ async def evaluate_ocr_endpoint(
             raise HTTPException(status_code=429, detail=meta.get("error", "Rate limit exceeded"), headers={"Retry-After": str(retry_after)})
 
         service = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         result = await service.evaluate_ocr(
             items=[i.model_dump() for i in request.items],
             metrics=request.metrics,
             ocr_options=request.ocr_options,
             thresholds=request.thresholds,
-            user_id=user_id,
+            user_id=stable_user_id,
         )
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
@@ -2004,6 +2015,7 @@ async def evaluate_ocr_pdf_endpoint(
         }
 
         service = get_unified_evaluation_service_for_user(current_user.id)
+        stable_user_id = getattr(current_user, "id_str", None) or str(current_user.id)
         thresholds = None
         if thresholds_json:
             try:
@@ -2018,7 +2030,7 @@ async def evaluate_ocr_pdf_endpoint(
             metrics=metrics,
             ocr_options=ocr_options,
             thresholds=thresholds,
-            user_id=user_id,
+            user_id=stable_user_id,
         )
         try:
             usage = result.get("usage") if isinstance(result, dict) else None

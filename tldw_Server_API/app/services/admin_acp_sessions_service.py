@@ -274,9 +274,6 @@ class ACPSessionStore:
         # Agent configs — keyed by id (in-memory for now)
         self._agent_configs: dict[int, AgentConfig] = {}
         self._agent_config_seq = 0
-        # Permission policies — keyed by id (in-memory for now)
-        self._permission_policies: dict[int, PermissionPolicy] = {}
-        self._permission_policy_seq = 0
         # Session TTL cleanup task
         self._cleanup_task: asyncio.Task | None = None
         # Quotas (loaded from config on first use)
@@ -284,6 +281,10 @@ class ACPSessionStore:
         self._max_concurrent_per_user: int = 5
         self._max_tokens_per_session: int = 1_000_000
         self._max_session_duration_seconds: int = 14400
+
+    def get_db(self) -> ACPSessionsDB:
+        """Return the underlying database instance."""
+        return self._db
 
     # ------------------------------------------------------------------
     # Internal helpers — convert DB dicts to public dataclasses
@@ -670,6 +671,78 @@ class ACPSessionStore:
 
         return metrics
 
+    # -- Run history queries ------------------------------------------------
+
+    async def list_runs(
+        self,
+        *,
+        user_id: int | None = None,
+        status: str | None = None,
+        agent_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Query session records with filters. Returns paged results."""
+        rows, total = self._db.list_runs(
+            user_id=user_id,
+            status=status,
+            agent_type=agent_type,
+            from_date=from_date,
+            to_date=to_date,
+            limit=limit,
+            offset=offset,
+        )
+        records = [self._dict_to_record(d) for d in rows]
+        items = [rec.to_info_dict() for rec in records]
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    async def aggregate_runs(
+        self,
+        *,
+        user_id: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate token usage and costs across sessions."""
+        agg = self._db.aggregate_runs(
+            user_id=user_id,
+            from_date=from_date,
+            to_date=to_date,
+        )
+
+        # Compute estimated total cost from per-session data using Decimal
+        # to avoid floating-point accumulation errors.
+        from decimal import Decimal
+
+        estimated_cost: float | None = None
+        cost_rows = agg.pop("_cost_rows", [])
+        try:
+            total_cost = Decimal("0")
+            has_any_cost = False
+            for row in cost_rows:
+                cost = compute_token_cost(
+                    model=row.get("model"),
+                    prompt_tokens=row.get("prompt_tokens", 0) or 0,
+                    completion_tokens=row.get("completion_tokens", 0) or 0,
+                )
+                if cost is not None:
+                    total_cost += Decimal(str(cost))
+                    has_any_cost = True
+            if has_any_cost:
+                estimated_cost = float(total_cost.quantize(Decimal("0.000001")))
+        except Exception as exc:
+            logger.warning("Failed to compute aggregate cost: {}", exc)
+
+        agg["estimated_cost_usd"] = estimated_cost
+        return agg
+
     # -- Agent Config CRUD --------------------------------------------------
 
     async def create_agent_config(self, data: dict[str, Any]) -> AgentConfig:
@@ -740,45 +813,43 @@ class ACPSessionStore:
     # -- Permission Policy CRUD --------------------------------------------
 
     async def create_permission_policy(self, data: dict[str, Any]) -> PermissionPolicy:
-        async with self._lock:
-            self._permission_policy_seq += 1
-            now = datetime.now(timezone.utc).isoformat()
-            rules = [
-                PermissionPolicyRule(tool_pattern=r["tool_pattern"], tier=r["tier"])
-                for r in data.get("rules", [])
-            ]
-            policy = PermissionPolicy(
-                id=self._permission_policy_seq,
-                name=data["name"],
-                description=data.get("description", ""),
-                rules=rules,
-                org_id=data.get("org_id"),
-                team_id=data.get("team_id"),
-                priority=data.get("priority", 0),
-                created_at=now,
-            )
-            self._permission_policies[policy.id] = policy
-        return policy
+        import json as _json
+        rules_raw = data.get("rules", [])
+        rules_json = _json.dumps(rules_raw)
+        policy_id = self._db.create_permission_policy(
+            name=data["name"],
+            rules_json=rules_json,
+            priority=data.get("priority", 0),
+            description=data.get("description", ""),
+            org_id=data.get("org_id"),
+            team_id=data.get("team_id"),
+        )
+        row = self._db.get_permission_policy(policy_id)
+        return self._db_row_to_permission_policy(row)  # type: ignore[arg-type]
 
     async def update_permission_policy(self, policy_id: int, data: dict[str, Any]) -> PermissionPolicy | None:
-        async with self._lock:
-            policy = self._permission_policies.get(policy_id)
-            if not policy:
+        import json as _json
+        kwargs: dict[str, Any] = {}
+        for key in ("name", "description", "org_id", "team_id", "priority"):
+            if key in data:
+                kwargs[key] = data[key]
+        if "rules" in data:
+            kwargs["rules_json"] = _json.dumps(data["rules"])
+        if not kwargs:
+            row = self._db.get_permission_policy(policy_id)
+            if row is None:
                 return None
-            for key in ("name", "description", "org_id", "team_id", "priority"):
-                if key in data:
-                    setattr(policy, key, data[key])
-            if "rules" in data:
-                policy.rules = [
-                    PermissionPolicyRule(tool_pattern=r["tool_pattern"], tier=r["tier"])
-                    for r in data["rules"]
-                ]
-            policy.updated_at = datetime.now(timezone.utc).isoformat()
-        return policy
+            return self._db_row_to_permission_policy(row)
+        updated = self._db.update_permission_policy(policy_id, **kwargs)
+        if not updated:
+            return None
+        row = self._db.get_permission_policy(policy_id)
+        if row is None:
+            return None
+        return self._db_row_to_permission_policy(row)
 
     async def delete_permission_policy(self, policy_id: int) -> bool:
-        async with self._lock:
-            return self._permission_policies.pop(policy_id, None) is not None
+        return self._db.delete_permission_policy(policy_id)
 
     async def list_permission_policies(
         self,
@@ -786,31 +857,49 @@ class ACPSessionStore:
         org_id: int | None = None,
         team_id: int | None = None,
     ) -> list[PermissionPolicy]:
-        results = []
-        for pol in self._permission_policies.values():
+        rows = self._db.list_permission_policies()
+        results: list[PermissionPolicy] = []
+        for row in rows:
+            pol = self._db_row_to_permission_policy(row)
             if org_id is not None and pol.org_id is not None and pol.org_id != org_id:
                 continue
             if team_id is not None and pol.team_id is not None and pol.team_id != team_id:
                 continue
             results.append(pol)
-        results.sort(key=lambda p: (-p.priority, p.name))
         return results
 
     def resolve_permission_tier(self, tool_name: str) -> str | None:
-        """Consult stored policies to determine a permission tier for a tool.
+        """Consult DB-backed policies to determine a permission tier for a tool.
 
         Returns None if no policy rule matches (caller should fall back to
         the default heuristic).
         """
-        best_priority = -1
-        best_tier: str | None = None
-        for pol in self._permission_policies.values():
-            for rule in pol.rules:
-                if fnmatch.fnmatch(tool_name.lower(), rule.tool_pattern.lower()):
-                    if pol.priority > best_priority:
-                        best_priority = pol.priority
-                        best_tier = rule.tier
-        return best_tier
+        return self._db.resolve_permission_tier(tool_name)
+
+    @staticmethod
+    def _db_row_to_permission_policy(row: dict[str, Any]) -> PermissionPolicy:
+        """Convert a DB dict row to a PermissionPolicy dataclass."""
+        import json as _json
+        raw = row.get("rules_json", "[]")
+        try:
+            rules_list = _json.loads(raw) if isinstance(raw, str) else raw
+        except (_json.JSONDecodeError, TypeError):
+            rules_list = []
+        rules = [
+            PermissionPolicyRule(tool_pattern=r.get("tool_pattern", ""), tier=r.get("tier", ""))
+            for r in (rules_list or [])
+        ]
+        return PermissionPolicy(
+            id=row["id"],
+            name=row["name"],
+            description=row.get("description", ""),
+            rules=rules,
+            org_id=row.get("org_id"),
+            team_id=row.get("team_id"),
+            priority=row.get("priority", 0),
+            created_at=row.get("created_at", ""),
+            updated_at=row.get("updated_at"),
+        )
 
 
 # ---------------------------------------------------------------------------
