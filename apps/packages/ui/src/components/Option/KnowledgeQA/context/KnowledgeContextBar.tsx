@@ -14,8 +14,52 @@ import {
   Search,
   LoaderCircle,
   Filter,
+  Bookmark,
+  Trash2,
 } from "lucide-react"
 import { AnswerModelMenu } from "./AnswerModelMenu"
+
+// ---------------------------------------------------------------------------
+// Saved search profiles
+// ---------------------------------------------------------------------------
+
+const PROFILES_STORAGE_KEY = "tldw:knowledge-qa:saved-profiles"
+const MAX_SAVED_PROFILES = 5
+
+type SearchProfile = {
+  name: string
+  sources: RagSource[]
+  preset: RagPresetName
+  enableWebFallback: boolean
+}
+
+function loadSavedProfiles(): SearchProfile[] {
+  try {
+    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item: unknown): item is SearchProfile =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as SearchProfile).name === "string" &&
+        Array.isArray((item as SearchProfile).sources) &&
+        typeof (item as SearchProfile).preset === "string" &&
+        typeof (item as SearchProfile).enableWebFallback === "boolean"
+    ).slice(0, MAX_SAVED_PROFILES)
+  } catch {
+    return []
+  }
+}
+
+function persistProfiles(profiles: SearchProfile[]): void {
+  try {
+    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles.slice(0, MAX_SAVED_PROFILES)))
+  } catch {
+    // localStorage full or unavailable -- silently ignore
+  }
+}
 
 type KnowledgeContextBarProps = {
   preset: RagPresetName
@@ -256,6 +300,13 @@ export function KnowledgeContextBar({
   const [mediaOptions, setMediaOptions] = useState<GranularSourceOption<number>[]>([])
   const [noteOptions, setNoteOptions] = useState<GranularSourceOption<string>[]>([])
 
+  // Saved search profiles state
+  const [savedProfiles, setSavedProfiles] = useState<SearchProfile[]>(loadSavedProfiles)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [profileSaveMode, setProfileSaveMode] = useState(false)
+  const [profileNameInput, setProfileNameInput] = useState("")
+  const profileMenuRef = useRef<HTMLDivElement | null>(null)
+
   const sourceMenuRef = useRef<HTMLDivElement | null>(null)
   const granularMenuRef = useRef<HTMLDivElement | null>(null)
   const granularLoadRequestIdRef = useRef(0)
@@ -363,19 +414,24 @@ export function KnowledgeContextBar({
   }, [])
 
   useEffect(() => {
-    if (!sourceMenuOpen && !granularMenuOpen) return
+    if (!sourceMenuOpen && !granularMenuOpen && !profileMenuOpen) return
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node
       if (sourceMenuRef.current?.contains(target)) return
       if (granularMenuRef.current?.contains(target)) return
+      if (profileMenuRef.current?.contains(target)) return
       setSourceMenuOpen(false)
       setGranularMenuOpen(false)
+      setProfileMenuOpen(false)
+      setProfileSaveMode(false)
     }
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       setSourceMenuOpen(false)
       setGranularMenuOpen(false)
+      setProfileMenuOpen(false)
+      setProfileSaveMode(false)
     }
 
     document.addEventListener("mousedown", handleClickOutside)
@@ -384,7 +440,7 @@ export function KnowledgeContextBar({
       document.removeEventListener("mousedown", handleClickOutside)
       document.removeEventListener("keydown", handleEscape)
     }
-  }, [sourceMenuOpen, granularMenuOpen])
+  }, [sourceMenuOpen, granularMenuOpen, profileMenuOpen])
 
   useEffect(() => {
     if (!granularMenuOpen || granularLoaded || granularLoading) return
@@ -448,6 +504,48 @@ export function KnowledgeContextBar({
     onIncludeMediaIdsChange([])
     onIncludeNoteIdsChange([])
   }
+
+  // ---- Saved search profile handlers ----
+
+  const saveCurrentProfile = useCallback(() => {
+    const trimmed = profileNameInput.trim()
+    if (!trimmed) return
+    const newProfile: SearchProfile = {
+      name: trimmed,
+      sources: [...normalizedSources],
+      preset,
+      enableWebFallback: webEnabled,
+    }
+    const updated = [newProfile, ...savedProfiles.filter((p) => p.name !== trimmed)].slice(
+      0,
+      MAX_SAVED_PROFILES
+    )
+    setSavedProfiles(updated)
+    persistProfiles(updated)
+    setProfileSaveMode(false)
+    setProfileNameInput("")
+  }, [profileNameInput, normalizedSources, preset, webEnabled, savedProfiles])
+
+  const loadProfile = useCallback(
+    (profile: SearchProfile) => {
+      onSourcesChange(profile.sources)
+      onPresetChange(profile.preset)
+      if (profile.enableWebFallback !== webEnabled) {
+        onToggleWeb()
+      }
+      setProfileMenuOpen(false)
+    },
+    [onSourcesChange, onPresetChange, onToggleWeb, webEnabled]
+  )
+
+  const deleteProfile = useCallback(
+    (name: string) => {
+      const updated = savedProfiles.filter((p) => p.name !== name)
+      setSavedProfiles(updated)
+      persistProfiles(updated)
+    },
+    [savedProfiles]
+  )
 
   const activeGranularOptions = granularTab === "media" ? filteredMediaOptions : filteredNoteOptions
 
@@ -799,6 +897,125 @@ export function KnowledgeContextBar({
           onGenerationModelChange={onGenerationModelChange}
           menuAlign="right"
         />
+
+        <div className="relative" ref={profileMenuRef}>
+          <Tooltip title="Save or load search profiles to quickly switch between common configurations">
+            <button
+              type="button"
+              onClick={() => {
+                setProfileMenuOpen((prev) => !prev)
+                setProfileSaveMode(false)
+                setProfileNameInput("")
+              }}
+              className={cn(
+                "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors",
+                profileMenuOpen
+                  ? "border-primary/40 bg-primary/10 text-primaryStrong"
+                  : "border-border text-text-muted hover:bg-surface2 hover:text-text"
+              )}
+              aria-expanded={profileMenuOpen}
+              aria-controls={profileMenuOpen ? "knowledge-profile-menu" : undefined}
+            >
+              <Bookmark className="h-3.5 w-3.5" />
+              Profiles
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+          {profileMenuOpen ? (
+            <div
+              id="knowledge-profile-menu"
+              role="menu"
+              aria-label="Saved search profiles"
+              className="absolute left-0 bottom-full z-30 mb-2 w-64 rounded-lg border border-border/80 bg-surface p-2 shadow-lg"
+            >
+              <div className="mb-1.5 px-1 text-xs font-semibold text-text-muted">
+                Saved Profiles
+              </div>
+              {savedProfiles.length === 0 && !profileSaveMode ? (
+                <p className="px-2 py-3 text-center text-[11px] text-text-muted">
+                  No saved profiles yet.
+                </p>
+              ) : null}
+              {savedProfiles.map((profile) => (
+                <div
+                  key={profile.name}
+                  className="group flex items-center gap-1 rounded-md px-2 py-1.5 hover:bg-surface2 transition-colors"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => loadProfile(profile)}
+                    className="flex min-w-0 flex-1 flex-col text-left text-xs text-text"
+                  >
+                    <span className="truncate font-medium">{profile.name}</span>
+                    <span className="text-[10px] text-text-muted">
+                      {profile.preset} &middot;{" "}
+                      {profile.sources.length === 0
+                        ? "no sources"
+                        : profile.sources.length >= 5
+                          ? "all sources"
+                          : `${profile.sources.length} source${profile.sources.length === 1 ? "" : "s"}`}
+                      {profile.enableWebFallback ? " &middot; web" : ""}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteProfile(profile.name)}
+                    className="invisible group-hover:visible shrink-0 rounded p-0.5 text-text-muted hover:bg-danger/10 hover:text-danger transition-colors"
+                    aria-label={`Delete profile ${profile.name}`}
+                    title="Delete profile"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+              <div className="mt-1 border-t border-border/60 pt-1.5">
+                {profileSaveMode ? (
+                  <div className="flex items-center gap-1.5 px-1">
+                    <input
+                      type="text"
+                      value={profileNameInput}
+                      onChange={(e) => setProfileNameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveCurrentProfile()
+                        if (e.key === "Escape") {
+                          setProfileSaveMode(false)
+                          setProfileNameInput("")
+                        }
+                      }}
+                      placeholder="Profile name"
+                      maxLength={40}
+                      autoFocus
+                      className="h-7 flex-1 rounded-md border border-border bg-surface2/70 px-2 text-[11px] text-text outline-none placeholder:text-text-muted focus:border-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveCurrentProfile}
+                      disabled={!profileNameInput.trim()}
+                      className="inline-flex h-7 items-center rounded-md bg-primary px-2 text-[11px] font-medium text-white disabled:opacity-50 hover:bg-primary/90 transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (savedProfiles.length >= MAX_SAVED_PROFILES) return
+                      setProfileSaveMode(true)
+                    }}
+                    disabled={savedProfiles.length >= MAX_SAVED_PROFILES}
+                    className="w-full rounded-md px-2 py-1.5 text-left text-xs text-primary hover:bg-primary/10 disabled:text-text-muted disabled:hover:bg-transparent transition-colors"
+                  >
+                    {savedProfiles.length >= MAX_SAVED_PROFILES
+                      ? `Limit reached (${MAX_SAVED_PROFILES})`
+                      : "Save current settings..."}
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         <button
           type="button"
