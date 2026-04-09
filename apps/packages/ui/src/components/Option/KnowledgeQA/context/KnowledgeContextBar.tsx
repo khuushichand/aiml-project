@@ -127,6 +127,13 @@ const PRESET_DETAILS: Record<PresetKey, PresetDetails> = {
   },
 }
 
+/** Short comparison tooltips shown on hover for each preset button. */
+const PRESET_COMPARISON_TOOLTIPS: Record<PresetKey, string> = {
+  fast: "Checks fewer sources, fastest response (~2-5s)",
+  balanced: "Moderate depth, good for most queries (~5-15s)",
+  thorough: "Checks most sources, slowest but most thorough (~15-30s)",
+}
+
 const SOURCE_LABELS: Record<RagSource, string> = {
   media_db: "Documents & Media",
   notes: "Notes",
@@ -809,6 +816,19 @@ export function KnowledgeContextBar({
           <p className="mt-2 text-[11px] text-text-muted">
             Scope: {summarizeSources(normalizedSources)} • Specific filters:{" "}
             {summarizeSpecificSources(normalizedMediaIds, normalizedNoteIds)}
+            {normalizedSources.length > 0 && (
+              <>
+                {" "}
+                &mdash;{" "}
+                {normalizedMediaIds.length > 0 || normalizedNoteIds.length > 0
+                  ? `Searching ${normalizedMediaIds.length + normalizedNoteIds.length} item${
+                      normalizedMediaIds.length + normalizedNoteIds.length === 1 ? "" : "s"
+                    }`
+                  : granularLoaded
+                    ? `${mediaOptions.length + noteOptions.length} items in scope`
+                    : `${normalizedSources.length} of ${SOURCE_OPTIONS.length} categories selected`}
+              </>
+            )}
           </p>
         </section>
 
@@ -830,24 +850,29 @@ export function KnowledgeContextBar({
             className="grid grid-cols-3 gap-2"
           >
             {PRESET_OPTIONS.map((option) => (
-              <button
+              <Tooltip
                 key={option.value}
-                type="button"
-                onClick={() => onPresetChange(option.value)}
-                className={cn(
-                  "rounded-md border px-2 py-2 text-left text-[11px] transition-colors",
-                  preset === option.value
-                    ? "border-primary bg-primary text-white"
-                    : "border-border bg-surface2/70 text-text hover:bg-surface2"
-                )}
-                aria-pressed={preset === option.value}
-                title={`${PRESET_DETAILS[option.value].label}: ${PRESET_DETAILS[option.value].summary}`}
+                title={PRESET_COMPARISON_TOOLTIPS[option.value]}
+                placement="bottom"
+                mouseEnterDelay={0.3}
               >
-                <span className="block text-[11px] font-semibold">{option.label}</span>
-                <span className="block text-[10px] opacity-80">
-                  {PRESET_DETAILS[option.value].responseTime}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onPresetChange(option.value)}
+                  className={cn(
+                    "rounded-md border px-2 py-2 text-left text-[11px] transition-colors",
+                    preset === option.value
+                      ? "border-primary bg-primary text-white"
+                      : "border-border bg-surface2/70 text-text hover:bg-surface2"
+                  )}
+                  aria-pressed={preset === option.value}
+                >
+                  <span className="block text-[11px] font-semibold">{option.label}</span>
+                  <span className="block text-[10px] opacity-80">
+                    {PRESET_DETAILS[option.value].responseTime}
+                  </span>
+                </button>
+              </Tooltip>
             ))}
           </div>
 

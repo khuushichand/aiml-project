@@ -275,7 +275,38 @@ function KnowledgeQAContent() {
     void refreshCapabilities()
   }
 
+  // -----------------------------------------------------------------------
+  // Offline-state priority chain (checked in order of severity):
+  //   1. Unconfigured  -- needs first-time setup before anything works
+  //   2. Auth error    -- server reachable but credentials missing/invalid
+  //   3. Unreachable   -- server configured but not responding
+  //   4. Generic offline (fallback for any other !online state)
+  //   5. No RAG        -- server online but embedding model not configured
+  // -----------------------------------------------------------------------
   if (!online && uxState !== "testing") {
+    if (uxState === "unconfigured" || uxState === "configuring_url") {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center max-w-md">
+            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
+            <h2 className="text-xl font-semibold mb-2">
+              Setup Required
+            </h2>
+            <p className="text-text-muted mb-4">
+              Complete the server setup to start searching your documents.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
+            >
+              Finish Setup
+            </button>
+          </div>
+        </div>
+      )
+    }
+
     if (uxState === "error_auth" || uxState === "configuring_auth") {
       return (
         <div className="flex-1 flex items-center justify-center">
@@ -293,29 +324,6 @@ function KnowledgeQAContent() {
               className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
               Open Settings
-            </button>
-          </div>
-        </div>
-      )
-    }
-
-    if (uxState === "unconfigured" || uxState === "configuring_url") {
-      return (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <WifiOff className="w-16 h-16 mx-auto mb-4 text-text-muted" />
-            <h2 className="text-xl font-semibold mb-2">
-              Finish setup to use Knowledge QA
-            </h2>
-            <p className="text-text-muted mb-4">
-              Complete the tldw server setup flow, then return here to search your knowledge base.
-            </p>
-            <button
-              type="button"
-              onClick={() => navigate("/")}
-              className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
-            >
-              Finish Setup
             </button>
           </div>
         </div>
