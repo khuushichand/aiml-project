@@ -5,12 +5,14 @@ import functools
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import propagate_billing_headers, require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_documents_form,
@@ -66,9 +68,14 @@ ALLOWED_DOC_EXTENSIONS = [
     "/process-documents",
     summary="Extract, chunk, analyse Documents (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
-    dependencies=[Depends(guard_storage_quota)],
+    dependencies=[
+        Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
 )
 async def process_documents_endpoint(
+    injected_response: Response,
     db: Any = Depends(get_media_db_for_user),
     form_data: ProcessDocumentsForm = Depends(get_process_documents_form),
     files: list[UploadFile] | None = File(
@@ -337,6 +344,7 @@ async def process_documents_endpoint(
             response = JSONResponse(status_code=status_code, content=batch_result)
             if legacy_signal is not None:
                 apply_media_legacy_headers(response, legacy_signal)
+            propagate_billing_headers(injected_response, response)
             return response
 
         logger.info(
@@ -570,6 +578,7 @@ async def process_documents_endpoint(
     response = JSONResponse(status_code=final_status_code, content=batch_result)
     if legacy_signal is not None:
         apply_media_legacy_headers(response, legacy_signal)
+    propagate_billing_headers(injected_response, response)
     return response
 
 

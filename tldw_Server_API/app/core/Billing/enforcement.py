@@ -886,8 +886,11 @@ class BillingEnforcer:
             summary.rag_queries_today += delta
         elif category == LimitCategory.CONCURRENT_JOBS:
             summary.concurrent_jobs += delta
+        elif category == LimitCategory.TRANSCRIPTION_MINUTES_MONTH:
+            summary.transcription_minutes_month += delta
+        elif category == LimitCategory.STORAGE_MB:
+            summary.storage_bytes += delta * (1024 ** 2)
         else:
-            # Other categories (e.g., storage) are not backed by this summary.
             updated = False
 
         if not updated:

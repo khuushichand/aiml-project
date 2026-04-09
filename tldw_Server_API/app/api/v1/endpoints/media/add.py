@@ -5,7 +5,9 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Request, UploadFile
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
@@ -29,6 +31,8 @@ router = APIRouter()
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
         Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
     ],
     summary="Add media (URLs/files) with processing and persistence",
     tags=["Media Ingestion & Persistence"],

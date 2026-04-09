@@ -30,6 +30,7 @@ from loguru import logger  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (  # noqa: E402
     CharactersRAGDB,
     ConflictError,
+    InputError,
 )
 
 # ---------------------------------------------------------------------------
@@ -220,18 +221,18 @@ class ManuscriptDBHelper:
     ) -> None:
         """Verify an entity belongs to the expected project.
 
-        Raises :class:`ValueError` on mismatch or missing row.
+        Raises :class:`InputError` on missing row, :class:`ConflictError` on mismatch.
         """
         if table not in self._PROJECT_CHECK_TABLES:
-            raise ValueError(f"Internal error: unknown table '{table}'")
+            raise InputError(f"Internal error: unknown table '{table}'")
         row = conn.execute(
             f"SELECT project_id FROM {table} WHERE id = ? AND deleted = 0",  # nosec B608
             (entity_id,),
         ).fetchone()
         if row is None:
-            raise ValueError(f"{label} '{entity_id}' not found or deleted")
+            raise InputError(f"{label} '{entity_id}' not found or deleted")
         if row["project_id"] != expected_project_id:
-            raise ValueError(f"{label} '{entity_id}' belongs to a different project")
+            raise ConflictError(f"{label} '{entity_id}' belongs to a different project")
 
     def _validate_plot_refs(
         self,
@@ -539,12 +540,16 @@ class ManuscriptDBHelper:
                 (now, self._client_id, part_id),
             )
             if chapter_ids:
-                placeholders = ", ".join("?" for _ in chapter_ids)
-                conn.execute(
-                    "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
-                    f"WHERE chapter_id IN ({placeholders}) AND deleted = 0",  # nosec B608
-                    (now, self._client_id, *chapter_ids),
-                )
+                # Process in chunks to avoid hitting SQLite's SQLITE_MAX_VARIABLE_NUMBER limit (999).
+                _BATCH = 900
+                for i in range(0, len(chapter_ids), _BATCH):
+                    batch = chapter_ids[i:i + _BATCH]
+                    placeholders = ", ".join("?" for _ in batch)
+                    conn.execute(
+                        "UPDATE manuscript_scenes SET deleted = 1, last_modified = ?, client_id = ? "
+                        f"WHERE chapter_id IN ({placeholders}) AND deleted = 0",  # nosec B608
+                        (now, self._client_id, *batch),
+                    )
 
     # ------------------------------------------------------------------
     # Chapters

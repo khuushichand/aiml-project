@@ -1,5 +1,6 @@
 import i18n from "i18next"
 import { formatErrorMessage } from "@/utils/format-error-message"
+import { parseBillingLimitError } from "@/utils/billing-error"
 
 export const TLDW_ERROR_BUBBLE_PREFIX = "__tldw_error__:"
 
@@ -7,6 +8,8 @@ export type ChatErrorPayload = {
   summary: string
   hint: string
   detail: string
+  upgradeUrl?: string
+  category?: string
 }
 
 export const encodeChatErrorPayload = (payload: ChatErrorPayload): string =>
@@ -27,7 +30,9 @@ export const decodeChatErrorPayload = (
     return {
       summary: parsed.summary,
       hint: parsed.hint,
-      detail: typeof parsed.detail === "string" ? parsed.detail : ""
+      detail: typeof parsed.detail === "string" ? parsed.detail : "",
+      upgradeUrl: typeof parsed.upgradeUrl === "string" ? parsed.upgradeUrl : undefined,
+      category: typeof parsed.category === "string" ? parsed.category : undefined,
     }
   } catch {
     return null
@@ -158,6 +163,34 @@ export const buildFriendlyErrorMessage = (rawError: unknown): string => {
       "common:error.friendlyConnectionHint",
       "Check that the server is running, then try again. Open Health & diagnostics for more details."
     )
+  } else if (
+    lower.includes("limit_exceeded") ||
+    lower.includes("feature_not_available") ||
+    lower.includes("quota exceeded") ||
+    lower.includes("upgrade your plan")
+  ) {
+    const billingInfo = parseBillingLimitError(rawError)
+    summary = i18n.t(
+      "common:error.billingLimitSummary",
+      "You've reached a plan limit."
+    )
+    hint = billingInfo?.category
+      ? i18n.t(
+          "common:error.billingLimitHint",
+          "Your {{category}} usage has reached the limit for your current plan. Upgrade to continue.",
+          { category: billingInfo.category.replace(/_/g, " ") }
+        )
+      : i18n.t(
+          "common:error.billingFeatureHint",
+          "This feature is not available on your current plan. Upgrade to unlock it."
+        )
+    return encodeChatErrorPayload({
+      summary,
+      hint,
+      detail,
+      upgradeUrl: billingInfo?.upgradeUrl || "/billing/plans",
+      category: billingInfo?.category,
+    })
   } else {
     summary = i18n.t(
       "common:error.friendlyGenericSummary",

@@ -10,13 +10,16 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Response,
     UploadFile,
     status,
 )
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import propagate_billing_headers, require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_pdfs_form,
@@ -68,10 +71,15 @@ ALLOWED_PDF_EXTENSIONS = [".pdf"]
     "/process-pdfs",
     summary="Extract, chunk, analyse PDFs (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
-    dependencies=[Depends(guard_storage_quota)],
+    dependencies=[
+        Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
 )
 async def process_pdfs_endpoint(
     background_tasks: BackgroundTasks,  # Parity with legacy endpoint signature
+    injected_response: Response,
     db: Any = Depends(get_media_db_for_user),
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
     files: list[UploadFile] | None = File(None, description="PDF uploads"),
@@ -246,6 +254,7 @@ async def process_pdfs_endpoint(
             response = JSONResponse(status_code=status_code, content=batch)
             if legacy_signal is not None:
                 apply_media_legacy_headers(response, legacy_signal)
+            propagate_billing_headers(injected_response, response)
             return response
 
         # Prepare chunking options (including templates/hierarchical when requested).
@@ -460,6 +469,7 @@ async def process_pdfs_endpoint(
     response = JSONResponse(status_code=final_status_code, content=batch)
     if legacy_signal is not None:
         apply_media_legacy_headers(response, legacy_signal)
+    propagate_billing_headers(injected_response, response)
     return response
 
 

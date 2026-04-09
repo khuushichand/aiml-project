@@ -9,6 +9,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Response,
     UploadFile,
     status,
 )
@@ -19,7 +20,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
 )
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import propagate_billing_headers, require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_videos_form,
@@ -63,10 +66,13 @@ router = APIRouter()
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
         Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
     ],
 )
 async def process_videos_endpoint(
     background_tasks: BackgroundTasks,
+    injected_response: Response,
     db: Any = Depends(get_media_db_for_user),
     form_data: ProcessVideosForm = Depends(get_process_videos_form),
     files: list[UploadFile] | None = File(
@@ -225,6 +231,7 @@ async def process_videos_endpoint(
                 )
                 if legacy_signal is not None:
                     apply_media_legacy_headers(response, legacy_signal)
+                propagate_billing_headers(injected_response, response)
                 return response
 
             logger.warning("No video sources provided.")
@@ -377,6 +384,7 @@ async def process_videos_endpoint(
     response = JSONResponse(status_code=final_status_code, content=batch_result)
     if legacy_signal is not None:
         apply_media_legacy_headers(response, legacy_signal)
+    propagate_billing_headers(injected_response, response)
     return response
 
 

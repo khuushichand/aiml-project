@@ -285,6 +285,8 @@ def _discover_openrouter_models_for_chat(*, force_refresh: bool = False) -> tupl
 
 def _normalize_conversation_assistant_context(
     conversation: dict[str, Any] | None,
+    *,
+    default_character_id: int | None = None,
 ) -> dict[str, Any]:
     """Normalize persisted conversation assistant identity into a small runtime dict."""
     if not conversation:
@@ -292,19 +294,140 @@ def _normalize_conversation_assistant_context(
             "assistant_kind": None,
             "assistant_id": None,
             "persona_memory_mode": None,
+            "is_default_character": False,
         }
 
     character_id = conversation.get("character_id")
-    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     assistant_id = conversation.get("assistant_id")
+    # Mirror the assistant_id fallback used by _resolve_assistant_context_for_chat
+    # so moderation scope stays consistent with the runtime character resolution.
+    if character_id is None and assistant_id is not None:
+        character_id = assistant_id
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     if assistant_id is None and character_id is not None:
         assistant_id = str(character_id)
+    is_default_character = _is_default_character_reference(
+        character_id if character_id is not None else assistant_id,
+        default_character_id=default_character_id,
+    )
+    if assistant_kind == "character" and is_default_character:
+        assistant_kind = "regular"
 
     return {
         "assistant_kind": assistant_kind,
         "assistant_id": assistant_id,
         "persona_memory_mode": conversation.get("persona_memory_mode"),
+        "is_default_character": is_default_character,
     }
+
+
+def resolve_moderation_chat_type(
+    *,
+    request_data: Any | None,
+    assistant_context: dict[str, Any] | None = None,
+    default_character_id: int | None = None,
+) -> str:
+    """Resolve moderation chat scope, treating the default assistant as regular when that context is available."""
+    if isinstance(assistant_context, dict):
+        assistant_kind = str(assistant_context.get("assistant_kind") or "").strip().lower()
+        if assistant_kind == "character" and not bool(assistant_context.get("is_default_character")):
+            return "character"
+        if assistant_kind in {"regular", "persona"} or bool(assistant_context.get("is_default_character")):
+            return "regular"
+
+    requested_character_id = getattr(request_data, "character_id", None) if request_data is not None else None
+    if requested_character_id:
+        return "regular" if _is_default_character_reference(
+            requested_character_id,
+            default_character_id=default_character_id,
+        ) else "character"
+
+    return "regular"
+
+
+async def _resolve_default_character_id(
+    chat_db: Any,
+    loop: Any,
+) -> int | None:
+    """Return the persisted default assistant character ID when available."""
+    get_character_card_by_name = getattr(chat_db, "get_character_card_by_name", None)
+    if not callable(get_character_card_by_name):
+        return None
+
+    try:
+        default_character = await loop.run_in_executor(
+            None,
+            get_character_card_by_name,
+            DEFAULT_CHARACTER_NAME,
+        )
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return None
+    if not isinstance(default_character, dict):
+        return None
+
+    try:
+        return int(default_character.get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_default_character_reference(
+    character_reference: Any,
+    *,
+    default_character_id: int | None,
+) -> bool:
+    """Return whether the provided character reference points at the default assistant."""
+    normalized_reference = str(character_reference or "").strip()
+    if not normalized_reference:
+        return False
+    if normalized_reference == DEFAULT_CHARACTER_NAME:
+        return True
+    if default_character_id is None:
+        return False
+    try:
+        return int(normalized_reference) == int(default_character_id)
+    except (TypeError, ValueError):
+        return False
+
+
+async def resolve_input_moderation_chat_type(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: Any,
+) -> str:
+    """Resolve chat_type for input moderation from request fields and saved conversation state."""
+    default_character_id = await _resolve_default_character_id(chat_db, loop)
+    requested_character_id = getattr(request_data, "character_id", None)
+    # Also check legacy persona_id alias so moderation scope is consistent
+    # even before the endpoint normalizes persona_id -> character_id.
+    if not requested_character_id:
+        raw_persona_id = getattr(request_data, "persona_id", None)
+        if raw_persona_id is not None:
+            persona_id_str = str(raw_persona_id).strip()
+            if persona_id_str:
+                requested_character_id = persona_id_str
+    if requested_character_id:
+        return "regular" if _is_default_character_reference(
+            requested_character_id,
+            default_character_id=default_character_id,
+        ) else "character"
+
+    conversation_id = getattr(request_data, "conversation_id", None)
+    existing_conversation: dict[str, Any] | None = None
+    get_conversation_by_id = getattr(chat_db, "get_conversation_by_id", None)
+    if conversation_id and callable(get_conversation_by_id):
+        existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
+
+    assistant_context = _normalize_conversation_assistant_context(
+        existing_conversation,
+        default_character_id=default_character_id,
+    )
+    return resolve_moderation_chat_type(
+        request_data=request_data,
+        assistant_context=assistant_context,
+        default_character_id=default_character_id,
+    )
 
 
 def _build_persona_chat_projection(
@@ -337,7 +460,11 @@ async def _resolve_assistant_context_for_chat(
     if conversation_id and callable(get_conversation_by_id):
         existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
 
-    assistant_context = _normalize_conversation_assistant_context(existing_conversation)
+    default_character_id = await _resolve_default_character_id(chat_db, loop)
+    assistant_context = _normalize_conversation_assistant_context(
+        existing_conversation,
+        default_character_id=default_character_id,
+    )
     assistant_kind = assistant_context.get("assistant_kind")
     assistant_id = assistant_context.get("assistant_id")
 
@@ -375,10 +502,15 @@ async def _resolve_assistant_context_for_chat(
 
     character_card, character_db_id = await get_or_create_character_context(chat_db, character_lookup, loop)
     if character_db_id is not None:
+        is_default_character = _is_default_character_reference(
+            character_db_id,
+            default_character_id=default_character_id,
+        )
         assistant_context = {
-            "assistant_kind": "character",
+            "assistant_kind": "regular" if is_default_character else "character",
             "assistant_id": str(character_db_id),
             "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+            "is_default_character": is_default_character,
         }
     return character_card, character_db_id, existing_conversation, assistant_context
 

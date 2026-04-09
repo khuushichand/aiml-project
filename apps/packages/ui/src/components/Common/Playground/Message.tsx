@@ -1440,6 +1440,32 @@ export const PlaygroundMessage = (props: Props) => {
         onClick: props.onContinue
       })
     }
+    if (errorPayload.upgradeUrl) {
+      actions.unshift({
+        id: "upgrade",
+        label: t(
+          "playground:errorRecovery.upgradePlan",
+          "Upgrade plan"
+        ),
+        onClick: async () => {
+          let url = errorPayload.upgradeUrl!
+          // Resolve relative upgrade URLs against the configured server origin
+          // so they don't resolve against the extension origin in Plasmo.
+          if (url.startsWith("/")) {
+            try {
+              const cfg = await tldwClient.getConfig()
+              const base = String(cfg?.serverUrl || "").replace(/\/$/, "")
+              if (base) {
+                url = `${base}${url}`
+              }
+            } catch {
+              // best-effort; fall through with relative URL
+            }
+          }
+          window.open(url, "_blank", "noopener")
+        }
+      })
+    }
     return actions
   }, [
     errorPayload,

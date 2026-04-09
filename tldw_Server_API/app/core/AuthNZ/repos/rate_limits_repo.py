@@ -25,6 +25,41 @@ class AuthnzRateLimitsRepo:
         """Return True when the underlying DatabasePool is using PostgreSQL."""
         return bool(getattr(self.db_pool, "pool", None))
 
+    async def _ensure_sqlite_account_lockouts_schema(self, conn: Any) -> None:
+        """Upgrade legacy identifier-only lockout tables to attempt-type scope (SQLite)."""
+        lockout_ddl = """
+            CREATE TABLE IF NOT EXISTS account_lockouts (
+                identifier TEXT NOT NULL,
+                attempt_type TEXT NOT NULL,
+                locked_until TEXT NOT NULL,
+                reason TEXT,
+                PRIMARY KEY (identifier, attempt_type)
+            )
+            """
+        cursor = await conn.execute("PRAGMA table_info(account_lockouts)")
+        rows = await cursor.fetchall()
+        if not rows:
+            # Table does not exist yet; create it fresh.
+            await conn.execute(lockout_ddl)
+            return
+
+        column_names = {row[1] if not isinstance(row, dict) else row["name"] for row in rows}
+        if "attempt_type" in column_names:
+            return
+
+        # Legacy table lacks attempt_type -- rebuild with the new schema.
+        await conn.execute("ALTER TABLE account_lockouts RENAME TO account_lockouts_legacy")
+        await conn.execute(lockout_ddl)
+        await conn.execute(
+            """
+            INSERT INTO account_lockouts (identifier, attempt_type, locked_until, reason)
+            SELECT identifier, 'login', locked_until, reason
+            FROM account_lockouts_legacy
+            """
+        )
+        await conn.execute("DROP TABLE IF EXISTS account_lockouts_legacy")
+
+
     async def _ensure_postgres_account_lockouts_schema(self, conn: Any) -> None:
         """Upgrade legacy identifier-only lockout tables to attempt-type scope."""
         lockout_ddl = """
@@ -159,7 +194,13 @@ class AuthnzRateLimitsRepo:
                     for sql in ddl_postgres[-1:]:
                         await conn.execute(sql)
                 else:
-                    for sql in ddl_sqlite:
+                    # Run rate_limits and failed_attempts DDL, then
+                    # handle account_lockouts with legacy upgrade logic.
+                    for sql in ddl_sqlite[:2]:
+                        await conn.execute(sql)
+                    await self._ensure_sqlite_account_lockouts_schema(conn)
+                    # Create the index
+                    for sql in ddl_sqlite[3:]:
                         await conn.execute(sql)
                     try:
                         await conn.commit()

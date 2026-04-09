@@ -815,19 +815,23 @@ class RiskScorer:
             except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return default
 
-        # Event type risk
-        if event.event_type in [
-            AuditEventType.SECURITY_VIOLATION,
-            AuditEventType.PERMISSION_DENIED,
-            AuditEventType.SUSPICIOUS_ACTIVITY,
-            AuditEventType.SYSTEM_ERROR,
-        ]:
+        # Event type risk — normalize to string so raw string callers
+        # receive the same risk bonuses as enum callers.
+        _et = _event_type_value(event.event_type).lower()
+        _high_risk_types = {
+            AuditEventType.SECURITY_VIOLATION.value,
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+            AuditEventType.SYSTEM_ERROR.value,
+        }
+        _medium_risk_types = {
+            AuditEventType.AUTH_LOGIN_FAILURE.value,
+            AuditEventType.DATA_DELETE.value,
+            AuditEventType.CONFIG_CHANGED.value,
+        }
+        if _et in _high_risk_types:
             score += 50
-        elif event.event_type in [
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            AuditEventType.DATA_DELETE,
-            AuditEventType.CONFIG_CHANGED
-        ]:
+        elif _et in _medium_risk_types:
             score += 30
 
         # Failed operations (case-insensitive)
@@ -1659,7 +1663,7 @@ class UnifiedAuditService:
                         }
                         if self._shared_mode:
                             record["tenant_user_id"] = self._resolve_tenant_id_for_write(
-                                raw_tenant=tenant_user_id_override,
+                                raw_tenant=data.get("tenant_user_id"),
                                 context_user_id=context_user_id,
                                 event_type=event_type_val,
                                 category=record.get("category"),
@@ -3122,24 +3126,24 @@ class UnifiedAuditService:
     ) -> int:
         """Count audit events with filters."""
         self._touch()
-        await self.flush(raise_on_failure=True)
-        base_query, params = self._build_events_query(
-            start_time=start_time,
-            end_time=end_time,
-            event_types=event_types,
-            categories=categories,
-            user_id=user_id,
-            request_id=request_id,
-            correlation_id=correlation_id,
-            ip_address=ip_address,
-            session_id=session_id,
-            endpoint=endpoint,
-            method=method,
-            min_risk_score=min_risk_score,
-            allow_cross_tenant=allow_cross_tenant,
-        )
-        query = "SELECT COUNT(*) as cnt " + base_query
         try:
+            await self.flush(raise_on_failure=True)
+            base_query, params = self._build_events_query(
+                start_time=start_time,
+                end_time=end_time,
+                event_types=event_types,
+                categories=categories,
+                user_id=user_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                ip_address=ip_address,
+                session_id=session_id,
+                endpoint=endpoint,
+                method=method,
+                min_risk_score=min_risk_score,
+                allow_cross_tenant=allow_cross_tenant,
+            )
+            query = "SELECT COUNT(*) as cnt " + base_query
             async with self._read_db() as db, db.execute(query, params) as cursor:
                 row = await cursor.fetchone()
                 return int(row[0]) if row else 0
@@ -3192,7 +3196,11 @@ class UnifiedAuditService:
             If file_path is provided: the number of rows written
         """
         self._touch()
-        await self.flush(raise_on_failure=True)
+        try:
+            await self.flush(raise_on_failure=True)
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Failed to flush before export: {e}")
+            raise AuditReadError("Failed to flush audit buffer before export") from e
         fmt = (format or "json").lower()
         if fmt not in {"json", "csv", "jsonl"}:
             raise ValueError("format must be 'json', 'csv', or 'jsonl'")

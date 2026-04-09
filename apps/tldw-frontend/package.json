@@ -59,6 +59,7 @@
     "e2e:all-tiers": "playwright test --project=tier-1 --project=tier-2 --project=tier-3 --project=tier-4 --project=tier-5 --project=journeys"
   },
   "dependencies": {
+    "@sentry/nextjs": "^9.27.0",
     "@ant-design/cssinjs": "^2.0.3",
     "@ant-design/icons": "^5.5.0",
     "@dnd-kit/abstract": "^0.1.21",

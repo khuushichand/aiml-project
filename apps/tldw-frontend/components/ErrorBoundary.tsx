@@ -1,4 +1,5 @@
 import { Component, Fragment, type ReactNode, type ErrorInfo } from "react"
+import * as SentryModule from "@sentry/nextjs"
 import BackendUnavailableRecovery, {
   type BackendUnavailableRecoveryDetails
 } from "@/components/Common/BackendUnavailableRecovery"
@@ -123,18 +124,25 @@ export default class ErrorBoundary extends Component<
       return
     }
 
-    const sentry = (window as unknown as {
-      Sentry?: {
-        captureException?: (
-          err: Error,
-          context?: { extra?: Record<string, unknown> }
-        ) => void
-      }
-    }).Sentry
-    if (sentry?.captureException) {
-      sentry.captureException(error, {
+    // Use direct @sentry/nextjs import when available, fall back to window.Sentry
+    if (SentryModule?.captureException) {
+      SentryModule.captureException(error, {
         extra: { componentStack: info.componentStack }
       })
+    } else {
+      const sentry = (window as unknown as {
+        Sentry?: {
+          captureException?: (
+            err: Error,
+            context?: { extra?: Record<string, unknown> }
+          ) => void
+        }
+      }).Sentry
+      if (sentry?.captureException) {
+        sentry.captureException(error, {
+          extra: { componentStack: info.componentStack }
+        })
+      }
     }
 
     const analytics = (window as unknown as {

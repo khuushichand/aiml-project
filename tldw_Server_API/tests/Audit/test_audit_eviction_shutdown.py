@@ -66,7 +66,7 @@ def _start_owner_loop_thread() -> tuple[asyncio.AbstractEventLoop, threading.Thr
 
     def _runner() -> None:
         asyncio.set_event_loop(owner_loop)
-        ready.set()
+        owner_loop.call_soon(ready.set)
         owner_loop.run_forever()
         owner_loop.close()
 
@@ -81,6 +81,7 @@ async def test_schedule_stop_tracks_owner_loop_future_until_drained(monkeypatch)
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setattr(audit_deps, "EVICTION_GRACE_SECONDS", 0.0)
     audit_deps._services_stopping.clear()
+    audit_deps._scheduled_stop_futures.clear()
 
     owner_loop, owner_thread = _start_owner_loop_thread()
     service = _LoopOwnedDummyService(owner_loop)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -38,8 +39,32 @@ router = APIRouter()
 _RUNTIME_ALERT_ID_PREFIX = "alert:"
 
 
+
+def _resolve_monitoring_alerts_db_path() -> str:
+    """Resolve the monitoring alerts DB path the same way the monitoring service does.
+
+    Anchors relative paths to the project root instead of relying on the
+    process working directory.
+    """
+    raw = os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+    db_p = Path(raw)
+    if db_p.is_absolute():
+        return str(db_p)
+    try:
+        from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
+        return str((Path(_gpr()).resolve() / db_p).resolve())
+    except Exception:
+        # Fallback: walk parents of this file looking for repo root markers
+        start = Path(__file__).resolve()
+        for candidate in (start.parent, *start.parent.parents):
+            if (candidate / "pyproject.toml").is_file() and (candidate / "tldw_Server_API").is_dir():
+                return str((candidate / db_p).resolve())
+            if (candidate / ".git").exists():
+                return str((candidate / db_p).resolve())
+        return raw
+
+
 _MONITORING_NONCRITICAL_EXCEPTIONS = (
-    asyncio.CancelledError,
     asyncio.TimeoutError,
     AssertionError,
     AttributeError,
@@ -151,13 +176,15 @@ def _warn_if_overlay_identity_has_no_runtime_row(
 async def _emit_overlay_identity_diagnostic(alert_identity: str) -> None:
     try:
         monitoring_db = TopicMonitoringDB(
-            os.getenv("MONITORING_ALERTS_DB", "Databases/monitoring_alerts.db")
+            _resolve_monitoring_alerts_db_path()
         )
         await asyncio.to_thread(
             _warn_if_overlay_identity_has_no_runtime_row,
             alert_identity,
             monitoring_db,
         )
+    except asyncio.CancelledError:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("monitoring overlay diagnostic skipped for {}: {}", alert_identity, exc)
 
@@ -180,6 +207,8 @@ async def list_alert_rules(
         items = [AdminAlertRuleResponse(**row) for row in await repo.list_rules()]
         return AdminAlertRuleListResponse(items=items)
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception("Failed to list admin alert rules")
@@ -222,6 +251,8 @@ async def create_alert_rule(
         return AdminAlertRuleCreateResponse(item=AdminAlertRuleResponse(**created))
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
             "Failed to create admin alert rule metric={} operator={} severity={}",
@@ -259,6 +290,8 @@ async def delete_alert_rule(
         )
         return AdminAlertRuleDeleteResponse(status="deleted", id=rule_id)
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception("Failed to delete admin alert rule rule_id={}", rule_id)
@@ -312,6 +345,8 @@ async def assign_alert(
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
             "Failed to assign monitoring alert alert_identity={} assigned_to_user_id={}",
@@ -356,6 +391,8 @@ async def snooze_alert(
         )
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
@@ -402,6 +439,8 @@ async def escalate_alert(
         return AdminAlertStateMutationResponse(item=AdminAlertStateResponse(**state))
     except HTTPException:
         raise
+    except asyncio.CancelledError:
+        raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
             "Failed to escalate monitoring alert alert_identity={} severity={}",
@@ -427,6 +466,8 @@ async def list_alert_history(
         ]
         return AdminAlertHistoryListResponse(items=items)
     except HTTPException:
+        raise
+    except asyncio.CancelledError:
         raise
     except _MONITORING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(

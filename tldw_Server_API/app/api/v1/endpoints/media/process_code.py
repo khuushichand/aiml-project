@@ -5,11 +5,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import propagate_billing_headers, require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
 from tldw_Server_API.app.api.v1.endpoints import media as media_mod
@@ -42,9 +44,14 @@ router = APIRouter()
     "/process-code",
     summary="Process code files (NO DB Persistence)",
     tags=["Media Processing (No DB)"],
-    dependencies=[Depends(guard_storage_quota)],
+    dependencies=[
+        Depends(guard_storage_quota),
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+    ],
 )
 async def process_code_endpoint(
+    injected_response: Response,
     db: Any = Depends(get_media_db_for_user),  # Parity with legacy signature; unused
     form_data: ProcessCodeForm = Depends(get_process_code_form),
     files: list[UploadFile] | None = File(
@@ -189,16 +196,20 @@ async def process_code_endpoint(
 
         if not items and not batch["results"]:
             # No valid inputs at all
-            return JSONResponse(
+            resp = JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={**batch, "processed_count": 0, "errors_count": 0},
             )
+            propagate_billing_headers(injected_response, resp)
+            return resp
         if not items and batch["results"]:
             # Only validation/download errors; treat as partial failure
-            return JSONResponse(
+            resp = JSONResponse(
                 status_code=status.HTTP_207_MULTI_STATUS,
                 content={**batch, "processed_count": 0, "errors_count": len(batch["results"])},
             )
+            propagate_billing_headers(injected_response, resp)
+            return resp
 
         async def _code_batch_processor(
             process_items: list[ProcessItem],
@@ -356,7 +367,9 @@ async def process_code_endpoint(
             status.HTTP_207_MULTI_STATUS if batch["results"] else status.HTTP_400_BAD_REQUEST
         )
     )
-    return JSONResponse(status_code=final_status, content=batch)
+    resp = JSONResponse(status_code=final_status, content=batch)
+    propagate_billing_headers(injected_response, resp)
+    return resp
 
 
 __all__ = ["router"]

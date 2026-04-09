@@ -113,10 +113,16 @@ class TopicMonitoringDB:
             )
             logger.error(msg)
             raise RuntimeError(msg)
+        extra_roots = (
+            [path_obj.expanduser().resolve(strict=False).parent]
+            if path_obj.is_absolute()
+            else None
+        )
         self.db_path = str(
             resolve_trusted_database_path(
                 db_path,
                 label="topic monitoring db",
+                extra_roots=extra_roots,
             )
         )
         self._lock = threading.RLock()

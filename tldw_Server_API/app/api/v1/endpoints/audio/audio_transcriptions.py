@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import math
 import mimetypes
 import os
 import re
@@ -22,6 +23,13 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_db_transaction,
     require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import get_billing_org_id, require_within_limit
+from tldw_Server_API.app.core.Resource_Governance import cost_units
+from tldw_Server_API.app.core.Billing.enforcement import (
+    LimitCategory,
+    enforcement_enabled,
+    get_billing_enforcer,
 )
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
@@ -427,11 +435,20 @@ def _dictation_error_detail(
 @router.post(
     "/transcriptions",
     summary="Transcribes audio into text (OpenAI Compatible)",
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {"description": "Billing limit exceeded. Upgrade plan to continue."},
+    },
     dependencies=[
         Depends(check_rate_limit),
         Depends(
             require_token_scope("any", require_if_present=True, endpoint_id="audio.transcriptions", count_as="call")
         ),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        # Pessimistic pre-check: verifies at least 1 minute of transcription
+        # quota remains.  Actual duration is unknown until after processing,
+        # so the real usage is recorded post-transcription via
+        # apply_usage_delta(TRANSCRIPTION_MINUTES_MONTH, ceil(minutes)).
+        Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
 async def create_transcription(
@@ -475,6 +492,7 @@ async def create_transcription(
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
+    billing_org_id: int | None = Depends(get_billing_org_id),
 ):
     """
     Transcribes audio into the input language.
@@ -848,6 +866,34 @@ async def create_transcription(
                     message="Transcription quota exceeded (daily minutes)",
                 ),
             )
+        # Secondary billing check with the real minute estimate (the dependency
+        # pre-check only gates on 1 unit to verify the org has *any* quota).
+        if enforcement_enabled() and billing_org_id is not None and minutes_est > 1:
+            _real_units = max(1, int(math.ceil(minutes_est)))
+            try:
+                _enforcer = get_billing_enforcer()
+                _recheck = await _enforcer.check_limit(
+                    billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    requested_units=_real_units,
+                )
+                if _recheck.should_block:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail={
+                            "error": "limit_exceeded",
+                            "category": "transcription_minutes_month",
+                            "current": _recheck.current,
+                            "limit": _recheck.limit,
+                            "message": _recheck.message or "Transcription minutes quota exceeded. Please upgrade your plan.",
+                            "upgrade_url": "/billing/plans",
+                        },
+                    )
+            except HTTPException:
+                raise
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as _billing_err:
+                logger.debug(f"Billing secondary minutes check failed (fail-open): {_billing_err}")
+
         detected_language: Optional[str] = None
         segments_for_timing: Optional[list[dict[str, Any]]] = None
         whisper_model_name = _map_openai_audio_model_to_whisper(model)
@@ -1053,6 +1099,27 @@ async def create_transcription(
                 e,
                 rid,
             )
+        # Billing: record actual transcription minutes to org-level enforcement
+        if enforcement_enabled() and billing_org_id is not None and minutes_est > 0:
+            _billed_minutes = max(1, int(math.ceil(minutes_est)))
+            try:
+                get_billing_enforcer().apply_usage_delta(
+                    billing_org_id,
+                    LimitCategory.TRANSCRIPTION_MINUTES_MONTH,
+                    _billed_minutes,
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # fail-open
+            # Durable cost-units ledger write so usage survives cache expiry/restart
+            try:
+                await cost_units.record_cost_units_for_entity(
+                    entity_scope="org",
+                    entity_value=str(billing_org_id),
+                    minutes=float(_billed_minutes),
+                )
+            except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # fail-open
+
         retention_decision = build_audio_retention_decision(effective_stt_policy)
         if not retention_decision.delete_after_success and canonical_path:
             try:
@@ -1284,9 +1351,18 @@ async def create_transcription(
 @router.post(
     "/translations",
     summary="Translates audio into English (OpenAI Compatible)",
+    responses={
+        status.HTTP_402_PAYMENT_REQUIRED: {"description": "Billing limit exceeded. Upgrade plan to continue."},
+    },
     dependencies=[
         Depends(check_rate_limit),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.translations", count_as="call")),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
+        # Pessimistic pre-check: verifies at least 1 minute of transcription
+        # quota remains.  Actual duration is unknown until after processing,
+        # so the real usage is recorded post-transcription via
+        # apply_usage_delta(TRANSCRIPTION_MINUTES_MONTH, ceil(minutes)).
+        Depends(require_within_limit(LimitCategory.TRANSCRIPTION_MINUTES_MONTH, 1)),
     ],
 )
 async def create_translation(
@@ -1308,6 +1384,7 @@ async def create_translation(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: Any = Depends(get_db_transaction),
     usage_log: UsageEventLogger = Depends(get_usage_event_logger),
+    billing_org_id: int | None = Depends(get_billing_org_id),
 ):
     """
     Translates audio into English.
@@ -1349,6 +1426,7 @@ async def create_translation(
         current_user=current_user,
         principal=principal,
         db=db,
+        billing_org_id=billing_org_id,
     )
 
 
