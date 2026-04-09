@@ -155,10 +155,15 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
 _cached_backend = None
 _cached_backend_signature: tuple | None = None
 try:
-    from threading import RLock
+    from threading import RLock, Thread
     _cache_lock = RLock()
 except Exception:  # pragma: no cover
     _cache_lock = None  # type: ignore
+
+# Grace period (seconds) before closing a superseded backend pool.  This gives
+# in-flight requests that already hold a reference to the old backend time to
+# finish before its connection pool is torn down.
+_EVICTION_GRACE_SECONDS: float = 5.0
 
 
 def _close_backend_pool(backend) -> None:
@@ -173,14 +178,48 @@ def _close_backend_pool(backend) -> None:
         logger.warning("Failed to close superseded content backend pool: {}", exc)
 
 
+def _schedule_deferred_close(backend) -> None:
+    """Close *backend* after a short grace period in a background thread.
+
+    Instead of closing the pool immediately (which races with in-flight
+    callers that already obtained a reference), we wait
+    ``_EVICTION_GRACE_SECONDS`` before tearing it down.  The thread is
+    daemonic so it won't block interpreter shutdown.
+    """
+    if backend is None:
+        return
+
+    import time
+
+    def _deferred() -> None:
+        time.sleep(_EVICTION_GRACE_SECONDS)
+        _close_backend_pool(backend)
+
+    t = Thread(target=_deferred, daemon=True)
+    t.start()
+
+
 def clear_cached_backend() -> None:
-    """Clear and close the currently cached shared content backend."""
+    """Clear and close the currently cached shared content backend.
+
+    Acquires ``_cache_lock`` to avoid racing with concurrent
+    ``get_content_backend()`` calls that also mutate the cache.  The actual
+    pool close is deferred so that in-flight users of the old backend are
+    not disrupted.
+    """
     global _cached_backend, _cached_backend_signature
 
-    old_backend = _cached_backend
-    _cached_backend = None
-    _cached_backend_signature = None
-    _close_backend_pool(old_backend)
+    if _cache_lock is not None:
+        with _cache_lock:
+            old_backend = _cached_backend
+            _cached_backend = None
+            _cached_backend_signature = None
+    else:
+        old_backend = _cached_backend
+        _cached_backend = None
+        _cached_backend_signature = None
+
+    _schedule_deferred_close(old_backend)
 
 
 def get_content_backend(config: ConfigParser):
@@ -219,9 +258,11 @@ def get_content_backend(config: ConfigParser):
             backend = DatabaseBackendFactory.create_backend(settings.database_config)
             _cached_backend = backend
             _cached_backend_signature = signature
-            if old_backend is not None and old_backend is not backend:
-                _close_backend_pool(old_backend)
-            return backend
+        # Deferred close *outside* the lock so the grace-period sleep does
+        # not block other cache operations.
+        if old_backend is not None and old_backend is not backend:
+            _schedule_deferred_close(old_backend)
+        return backend
 
     # Fallback without lock (environments without threading)
     if _cached_backend and _cached_backend_signature == signature:
@@ -231,5 +272,5 @@ def get_content_backend(config: ConfigParser):
     _cached_backend = backend
     _cached_backend_signature = signature
     if old_backend is not None and old_backend is not backend:
-        _close_backend_pool(old_backend)
+        _schedule_deferred_close(old_backend)
     return backend

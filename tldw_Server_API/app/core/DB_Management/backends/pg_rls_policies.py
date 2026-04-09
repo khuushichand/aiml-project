@@ -221,7 +221,7 @@ def _ensure_rls_policy_set(
     try:
         if not hasattr(backend, "backend_type") or backend.backend_type.name != "POSTGRESQL":
             return False
-    except Exception:
+    except (AttributeError, TypeError):
         return False
 
     with backend.transaction() as conn:

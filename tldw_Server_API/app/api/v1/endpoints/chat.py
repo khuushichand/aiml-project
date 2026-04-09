@@ -2951,11 +2951,15 @@ async def create_chat_completion(
             finally:
                 await _decrement_active_request(user_id)
 
-        input_moderation_chat_type = await resolve_input_moderation_chat_type(
-            chat_db=chat_db,
-            request_data=request_data,
-            loop=current_loop,
-        )
+        try:
+            input_moderation_chat_type = await resolve_input_moderation_chat_type(
+                chat_db=chat_db,
+                request_data=request_data,
+                loop=current_loop,
+            )
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("resolve_input_moderation_chat_type failed; defaulting to None: {}", exc)
+            input_moderation_chat_type = None
 
         # Guardian & self-monitoring integration
         _supervised_engine = None
@@ -2984,8 +2988,8 @@ async def create_chat_completion(
                 if self_monitoring_enabled and _guardian_runtime.guardian_db:
                     from tldw_Server_API.app.core.Monitoring.self_monitoring_service import get_self_monitoring_service
                     _self_mon_service = get_self_monitoring_service(_guardian_runtime.guardian_db)
-        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-            pass
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning("Guardian moderation bootstrap failed; continuing with base moderation only: {}", exc)
 
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
@@ -3237,10 +3241,14 @@ async def create_chat_completion(
                 if isinstance(continuation_runtime.get("assistant_context"), dict)
                 else None
             )
-            output_moderation_chat_type = resolve_moderation_chat_type(
-                request_data=request_data,
-                assistant_context=assistant_context,
-            )
+            try:
+                output_moderation_chat_type = resolve_moderation_chat_type(
+                    request_data=request_data,
+                    assistant_context=assistant_context,
+                )
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("resolve_moderation_chat_type failed; defaulting to None: {}", exc)
+                output_moderation_chat_type = None
 
             # --- Prompt Templating (system + content transforms) ---
             final_system_message, templated_llm_payload = apply_prompt_templating(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import configparser
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from typing import Optional
 
 from loguru import logger
@@ -30,6 +30,11 @@ MEDIA_DB_RUNTIME_EXCEPTIONS = (
     configparser.Error,
 )
 
+_POSTGRES_BACKEND_NOT_INITIALIZED_MSG = (
+    "PostgreSQL content backend is required but was not initialized. "
+    "Check TLDW_CONTENT_DB_BACKEND configuration."
+)
+
 single_user_config = load_comprehensive_config()
 content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
 postgres_content_mode = content_db_settings.backend_type == BackendType.POSTGRESQL
@@ -43,10 +48,11 @@ try:
 
     _runtime_state_lock = RLock()
 except Exception:  # pragma: no cover
+    logger.warning("threading.RLock unavailable; runtime state will not be thread-safe")
     _runtime_state_lock = None  # type: ignore
 
 
-def _runtime_state_context():
+def _runtime_state_context() -> AbstractContextManager[None]:
     if _runtime_state_lock is None:
         return nullcontext()
     return _runtime_state_lock
@@ -56,11 +62,9 @@ def _clear_content_backend_cache_unlocked() -> None:
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
-        if hasattr(cb, "_cache_lock") and cb._cache_lock:
-            with cb._cache_lock:  # type: ignore[attr-defined]
-                cb.clear_cached_backend()
-        else:
-            cb.clear_cached_backend()
+        # clear_cached_backend() acquires _cache_lock internally, so no
+        # external lock acquisition is needed here.
+        cb.clear_cached_backend()
     except ImportError as exc:
         logger.debug(f"reset_media_runtime_defaults: unable to import content_backend: {exc}")
     except MEDIA_DB_RUNTIME_EXCEPTIONS as exc:
@@ -94,10 +98,7 @@ def get_content_backend_instance() -> Optional[DatabaseBackend]:
     with _runtime_state_context():
         backend = ensure_content_backend_loaded()
         if postgres_content_mode and backend is None:
-            raise RuntimeError(
-                "PostgreSQL content backend is required but was not initialized. "
-                "Check TLDW_CONTENT_DB_BACKEND configuration."
-            )
+            raise RuntimeError(_POSTGRES_BACKEND_NOT_INITIALIZED_MSG)
         return backend
 
 

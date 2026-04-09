@@ -941,8 +941,6 @@ async def update_scene(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Scene not found"
             )
-        if "content_json" in update_data:
-            scene["content_json"] = update_data["content_json"]
         return ManuscriptSceneResponse(**scene)
     except _MANUSCRIPT_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "manuscript scene")

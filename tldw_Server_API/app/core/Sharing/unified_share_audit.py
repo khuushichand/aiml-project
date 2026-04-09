@@ -107,9 +107,11 @@ class UnifiedShareAuditWriter:
         if self._initialized:
             return
         await self._service.initialize(start_background_tasks=False)
+        # Mark initialized immediately so stop() can clean up the embedded
+        # service if the compatibility steps below fail.
+        self._initialized = True
         await self._ensure_compatibility_state()
         await self._sync_compatibility_floor()
-        self._initialized = True
 
     async def stop(self) -> None:
         if not self._initialized:

@@ -3439,10 +3439,7 @@ async def lifespan(app: FastAPI):
 
             _cfg = DatabaseConfig.from_env()
             _backend = DatabaseBackendFactory.create_backend(_cfg)
-            try:
-                _run_pg_rls_auto_ensure(_backend)
-            except DatabaseError as e:
-                logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
+            _run_pg_rls_auto_ensure(_backend)
         else:
             logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
@@ -4667,7 +4664,7 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_audit_adapter_loop()
             logger.info("App Shutdown: Embeddings audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
+        except (_STARTUP_GUARD_EXCEPTIONS + (ImportError, ModuleNotFoundError)) as _e:
             logger.debug(f"Embeddings audit adapter loop shutdown skipped: {_e}")
 
         try:
@@ -4677,7 +4674,7 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_evaluations_audit_loop()
             logger.info("App Shutdown: Evaluations audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
+        except (_STARTUP_GUARD_EXCEPTIONS + (ImportError, ModuleNotFoundError)) as _e:
             logger.debug(f"Evaluations audit adapter loop shutdown skipped: {_e}")
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")

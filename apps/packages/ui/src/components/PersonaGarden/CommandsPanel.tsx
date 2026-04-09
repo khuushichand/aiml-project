@@ -356,18 +356,18 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     "most_used" | "recent" | "name" | "priority"
   >("name")
 
-  const cmdFilterCounts = React.useMemo(() => {
-    let broken = 0
-    let neverUsed = 0
-    let needsConfirmation = 0
-    let mostUsedThreshold = 0
-
+  const mostUsedThreshold = React.useMemo(() => {
     const allInvocations = commands
       .map((cmd) => analyticsByCommandId.get(cmd.id)?.total_invocations ?? 0)
       .sort((a, b) => b - a)
     const topQuartileIndex = Math.max(1, Math.ceil(allInvocations.length * 0.25))
-    mostUsedThreshold = allInvocations[topQuartileIndex - 1] ?? 0
+    return allInvocations[topQuartileIndex - 1] ?? 0
+  }, [commands, analyticsByCommandId])
 
+  const cmdFilterCounts = React.useMemo(() => {
+    let broken = 0
+    let neverUsed = 0
+    let needsConfirmation = 0
     let mostUsed = 0
     for (const cmd of commands) {
       const a = analyticsByCommandId.get(cmd.id)
@@ -384,7 +384,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
       }
     }
     return { broken, neverUsed, needsConfirmation, mostUsed }
-  }, [commands, connections, analyticsByCommandId])
+  }, [commands, connections, analyticsByCommandId, mostUsedThreshold])
 
   const filteredCommands = React.useMemo(() => {
     let result = commands
@@ -422,14 +422,9 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     }
 
     if (cmdFilterMostUsed) {
-      const allInvocations = commands
-        .map((cmd) => analyticsByCommandId.get(cmd.id)?.total_invocations ?? 0)
-        .sort((a, b) => b - a)
-      const topQuartileIndex = Math.max(1, Math.ceil(allInvocations.length * 0.25))
-      const threshold = allInvocations[topQuartileIndex - 1] ?? 0
-      if (threshold > 0) {
+      if (mostUsedThreshold > 0) {
         result = result.filter(
-          (cmd) => (analyticsByCommandId.get(cmd.id)?.total_invocations ?? 0) >= threshold
+          (cmd) => (analyticsByCommandId.get(cmd.id)?.total_invocations ?? 0) >= mostUsedThreshold
         )
       } else {
         result = []
@@ -473,6 +468,7 @@ export const CommandsPanel: React.FC<CommandsPanelProps> = ({
     cmdFilterNeverUsed,
     cmdFilterNeedsConfirmation,
     cmdFilterMostUsed,
+    mostUsedThreshold,
     cmdSortBy
   ])
 

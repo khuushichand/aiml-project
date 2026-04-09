@@ -350,11 +350,14 @@ async def _resolve_default_character_id(
     if not callable(get_character_card_by_name):
         return None
 
-    default_character = await loop.run_in_executor(
-        None,
-        get_character_card_by_name,
-        DEFAULT_CHARACTER_NAME,
-    )
+    try:
+        default_character = await loop.run_in_executor(
+            None,
+            get_character_card_by_name,
+            DEFAULT_CHARACTER_NAME,
+        )
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return None
     if not isinstance(default_character, dict):
         return None
 
