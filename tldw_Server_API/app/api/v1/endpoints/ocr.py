@@ -115,6 +115,61 @@ def list_ocr_backends() -> dict[str, Any]:
         pass
 
     try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
+            LlamaCppOCRBackend,
+        )
+
+        llamacpp_desc = LlamaCppOCRBackend().describe()
+        out.setdefault("llamacpp", {}).update(
+            {
+                "mode": llamacpp_desc.get("mode"),
+                "configured_mode": llamacpp_desc.get("configured_mode"),
+                "model": llamacpp_desc.get("model"),
+                "configured": llamacpp_desc.get("configured"),
+                "supports_structured_output": llamacpp_desc.get("supports_structured_output"),
+                "supports_json": llamacpp_desc.get("supports_json"),
+                "configured_flags": llamacpp_desc.get("configured_flags"),
+                "auto_eligible": llamacpp_desc.get("auto_eligible"),
+                "auto_high_quality_eligible": llamacpp_desc.get("auto_high_quality_eligible"),
+                "url_configured": llamacpp_desc.get("url_configured"),
+                "managed_configured": llamacpp_desc.get("managed_configured"),
+                "managed_running": llamacpp_desc.get("managed_running"),
+                "allow_managed_start": llamacpp_desc.get("allow_managed_start"),
+                "cli_configured": llamacpp_desc.get("cli_configured"),
+                "backend_concurrency_cap": llamacpp_desc.get("backend_concurrency_cap"),
+            }
+        )
+    except _OCR_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr import (
+            ChatLLMOCRBackend,
+        )
+
+        chatllm_desc = ChatLLMOCRBackend().describe()
+        out.setdefault("chatllm", {}).update(
+            {
+                "mode": chatllm_desc.get("mode"),
+                "configured": chatllm_desc.get("configured"),
+                "supports_structured_output": chatllm_desc.get("supports_structured_output"),
+                "supports_json": chatllm_desc.get("supports_json"),
+                "auto_eligible": chatllm_desc.get("auto_eligible"),
+                "auto_high_quality_eligible": chatllm_desc.get("auto_high_quality_eligible"),
+                "managed_configured": chatllm_desc.get("managed_configured"),
+                "managed_running": chatllm_desc.get("managed_running"),
+                "allow_managed_start": chatllm_desc.get("allow_managed_start"),
+                "url_configured": chatllm_desc.get("url_configured"),
+                "healthcheck_url_configured": chatllm_desc.get("healthcheck_url_configured"),
+                "cli_configured": chatllm_desc.get("cli_configured"),
+                "backend_concurrency_cap": chatllm_desc.get("backend_concurrency_cap"),
+                "model": chatllm_desc.get("model"),
+            }
+        )
+    except _OCR_NONCRITICAL_EXCEPTIONS:
+        pass
+
+    try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.nemotron_parse import (
             NemotronParseBackend,
         )
