@@ -53,10 +53,6 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
 )
-from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
-    ensure_chacha_rls,
-    ensure_prompt_studio_rls,
-)
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     managed_media_database,
 )
@@ -143,6 +139,11 @@ def _claims_rebuild_db_session(
 
 def _run_pg_rls_auto_ensure(backend: Any) -> tuple[bool, bool]:
     """Apply both PostgreSQL RLS installers and log the combined result."""
+    from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
+        ensure_chacha_rls,
+        ensure_prompt_studio_rls,
+    )
+
     prompt_ok = ensure_prompt_studio_rls(backend)
     chacha_ok = ensure_chacha_rls(backend)
     logger.info(
@@ -4667,8 +4668,8 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_audit_adapter_loop()
             logger.info("App Shutdown: Embeddings audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
-            logger.debug(f"Embeddings audit adapter loop shutdown skipped: {_e}")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Embeddings audit adapter loop shutdown skipped: {}", _e)
 
         try:
             from tldw_Server_API.app.core.Evaluations.audit_adapter import (
@@ -4677,8 +4678,8 @@ async def lifespan(app: FastAPI):
 
             shutdown_local_evaluations_audit_loop()
             logger.info("App Shutdown: Evaluations audit adapter loop stopped")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
-            logger.debug(f"Evaluations audit adapter loop shutdown skipped: {_e}")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Evaluations audit adapter loop shutdown skipped: {}", _e)
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
 

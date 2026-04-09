@@ -66,7 +66,7 @@ def _start_owner_loop_thread() -> tuple[asyncio.AbstractEventLoop, threading.Thr
 
     def _runner() -> None:
         asyncio.set_event_loop(owner_loop)
-        ready.set()
+        owner_loop.call_soon(ready.set)
         owner_loop.run_forever()
         owner_loop.close()
 

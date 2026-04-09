@@ -21,7 +21,10 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection_async,
 )
 
-_SHARE_EVENT_FILTER_SQL = "(event_type LIKE 'share.%' OR event_type LIKE 'token.%')"
+_SHARE_EVENT_FILTER_SQL = (
+    "(event_type LIKE 'share.%'"
+    " OR event_type IN ('token.created','token.used','token.revoked','token.password_verified','token.password_failed'))"
+)
 _SHARE_AUDIT_STATE_TABLE = "share_audit_state"
 _SHARE_AUDIT_SEQUENCE_KEY = "compatibility_id_seq"
 _RESERVED_METADATA_KEYS = {
@@ -486,7 +489,7 @@ class UnifiedShareAuditWriter:
     ) -> list[dict[str, Any]]:
         await self.initialize()
         tenant_user_id = str(owner_user_id) if owner_user_id is not None else None
-        query = """
+        query = f"""
             SELECT
                 timestamp,
                 event_type,
@@ -498,7 +501,7 @@ class UnifiedShareAuditWriter:
                 resource_id,
                 metadata
             FROM audit_events
-            WHERE (event_type LIKE 'share.%' OR event_type LIKE 'token.%')
+            WHERE {_SHARE_EVENT_FILTER_SQL}
               AND (? IS NULL OR tenant_user_id = ?)
               AND (? IS NULL OR resource_type = ?)
               AND (? IS NULL OR resource_id = ?)
