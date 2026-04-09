@@ -44,6 +44,7 @@ This review excludes:
 - broad product or UX critique
 - speculative architecture rewrites that are not justified by concrete defects
 - remediation work during the review unless explicitly requested later
+- generated artifacts such as `__pycache__` bytecode files
 
 ## Approaches Considered
 
@@ -120,11 +121,29 @@ traceable. The review will use these slices:
   `external_servers/*`, `command_runtime/*`, and related runtime configuration
   or adapter boundaries
 - governance and operations:
-  `governance_packs/*`, `monitoring/*`, `config.py`, `README.md`, and package
-  boundary files where they shape runtime expectations
+  `governance_packs/*`, `monitoring/*`, `config.py`, `README.md`,
+  `docker/Dockerfile`, and package boundary files where they shape runtime
+  expectations
 
-Every source file in `tldw_Server_API/app/core/MCP_unified` must be inspected,
-even if a given file ends up contributing no reportable issue.
+Every tracked, non-generated implementation or runtime artifact in
+`tldw_Server_API/app/core/MCP_unified` must be inspected, even if a given file
+ends up contributing no reportable issue. Tests remain supporting evidence
+rather than primary source files for the file-by-file audit.
+
+## Coverage Ledger
+
+To keep the file-by-file promise auditable, the review should maintain a
+working coverage ledger during execution.
+
+The ledger should list:
+
+- every inspected implementation or runtime file in scope
+- the review slice that owned it
+- whether it produced a finding, a probable risk, or no reportable issue
+- any tests or docs consulted for that file when relevant
+
+The final user-facing report may stay compact, but the review process should
+not rely on memory or an informal checklist.
 
 ## Evidence Model
 
@@ -144,6 +163,11 @@ The review will rely on:
 
 The review is source-first, not test-first. Tests and docs are supporting
 evidence, not substitutes for direct code inspection.
+
+Targeted runtime verification may be used selectively when static inspection
+alone leaves an important claim unresolved, especially for concurrency,
+transport divergence, or safety-guard behavior. It should stay narrow and
+evidence-driven rather than turning the audit into broad execution work.
 
 ## Findings Model
 
@@ -165,6 +189,15 @@ finding instead of repeated per file.
 
 If a file or slice does not contribute any meaningful issue, it should not be
 given filler commentary. The review should stay high-signal.
+
+Observations should be labeled as one of:
+
+- `Confirmed finding`: supported directly by source, tests, or tightly bounded
+  verification
+- `Probable risk`: a likely issue where the impact or trigger cannot be fully
+  proven from available local evidence
+- `Improvement`: a concrete change that is not strong evidence of a current
+  defect but would reduce future risk or maintenance friction
 
 ## Review Focus Areas
 
@@ -215,5 +248,7 @@ The canonical output will be one findings report in code-review style with:
 - explicit test-gap notes tied to those findings
 - a compact appendix listing the reviewed slices and files so the review is
   visibly file-by-file rather than sampled
+- a note on any selective runtime verification used to confirm or narrow a
+  claim
 
 The final response should prioritize bugs, risks, and weak spots over summary.
