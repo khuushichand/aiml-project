@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react"
-import { BookOpen, ChevronDown, ChevronUp, Clock3, SlidersHorizontal } from "lucide-react"
+import { BookOpen, ChevronDown, ChevronUp, CircleHelp, Clock3, SlidersHorizontal } from "lucide-react"
 import { cn } from "@/libs/utils"
 
 type KnowledgeReadyStateProps = {
@@ -38,6 +38,17 @@ export function KnowledgeReadyState({
       <div className="mx-auto max-w-2xl">
         <BookOpen className="mx-auto mb-3 h-12 w-12 text-primary" />
         <h1 className="text-3xl font-bold">Ask Your Library</h1>
+        {!guideExpanded && (
+          <button
+            type="button"
+            onClick={() => setGuideExpanded(true)}
+            className="inline-flex items-center gap-1 text-xs text-text-muted hover:text-text transition-colors"
+            title="How it works"
+          >
+            <CircleHelp className="h-3.5 w-3.5" />
+            <span>How it works</span>
+          </button>
+        )}
         <p className="mt-1 text-base font-medium">Search your documents and get cited answers</p>
         <p className="mt-2 text-sm text-text-muted">
           Get grounded answers with citations from your selected sources.
