@@ -16,7 +16,8 @@ import {
   Plus,
   BookOpen,
   Users,
-  Briefcase
+  Briefcase,
+  WifiOff
 } from "lucide-react"
 import { Modal, Tag, Tooltip, Input, Slider, Switch, Button, message } from "antd"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
@@ -935,6 +936,7 @@ const SimpleChatInput: React.FC<{
   onStop: () => void
   isLoading: boolean
   isPreparingContext?: boolean
+  isServerDisconnected?: boolean
   placeholder?: string
   seededValue?: string | null
   onSeedConsumed?: () => void
@@ -944,6 +946,7 @@ const SimpleChatInput: React.FC<{
   onStop,
   isLoading,
   isPreparingContext = false,
+  isServerDisconnected = false,
   placeholder,
   seededValue,
   onSeedConsumed,
@@ -982,7 +985,7 @@ const SimpleChatInput: React.FC<{
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
     const trimmed = value.trim()
-    if (!trimmed || isLoading || isPreparingContext) return
+    if (!trimmed || isLoading || isPreparingContext || isServerDisconnected) return
     onSubmit(trimmed)
     setValue("")
     setShowSlashMenu(false)
@@ -1027,6 +1030,17 @@ const SimpleChatInput: React.FC<{
 
   return (
     <div className="rounded-lg border border-border/70 bg-surface/90 p-1.5 shadow-sm">
+      {isServerDisconnected && (
+        <div className="px-3 py-2 text-xs text-warning bg-warning/10 border-b border-warning/20 flex items-center gap-2 rounded-t-md">
+          <WifiOff className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            {t(
+              "playground:chat.disconnectedWarning",
+              "Can't reach the server. Check your connection or server status."
+            )}
+          </span>
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="flex items-end gap-1.5">
         <div className="relative flex-1">
           {/* Slash command autocomplete dropdown (UX-006) */}
@@ -1063,10 +1077,12 @@ const SimpleChatInput: React.FC<{
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              placeholder || t("playground:chat.inputPlaceholder", "Type / for commands or a message...")
+              isServerDisconnected
+                ? t("playground:chat.inputPlaceholderDisconnected", "Server disconnected...")
+                : placeholder || t("playground:chat.inputPlaceholder", "Type / for commands or a message...")
             }
             autoSize={{ minRows: 1, maxRows: 6 }}
-            disabled={isLoading || isPreparingContext}
+            disabled={isLoading || isPreparingContext || isServerDisconnected}
             className="pr-10 text-sm"
           />
         </div>
@@ -1083,10 +1099,12 @@ const SimpleChatInput: React.FC<{
         ) : (
           <button
             type="submit"
-            disabled={!value.trim() || isPreparingContext}
+            disabled={!value.trim() || isPreparingContext || isServerDisconnected}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-white transition hover:bg-primaryStrong disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={
-              isPreparingContext
+              isServerDisconnected
+                ? t("playground:chat.serverDisconnected", "Server disconnected")
+                : isPreparingContext
                 ? t(
                     "playground:chat.preparingSourceContext",
                     "Preparing source context"
@@ -3011,6 +3029,10 @@ export const ChatPane: React.FC<ChatPaneProps> = ({
             onStop={handleStopStreaming}
             isLoading={streaming}
             isPreparingContext={preparingSourceContext}
+            isServerDisconnected={
+              connectionState.phase === ConnectionPhase.ERROR &&
+              !connectionState.isChecking
+            }
             seededValue={seededPrompt}
             onSeedConsumed={() => setSeededPrompt(null)}
             slashCommands={slashCommands}
