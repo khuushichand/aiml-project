@@ -29,18 +29,29 @@ synthesis.
 - `tldw_Server_API/app/api/v1/endpoints/characters_endpoint.py`
 - `tldw_Server_API/app/api/v1/endpoints/character_chat_sessions.py`
 - `tldw_Server_API/app/api/v1/endpoints/character_messages.py`
+- `tldw_Server_API/app/api/v1/schemas/character_schemas.py`
+- `tldw_Server_API/app/api/v1/schemas/character_memory_schemas.py`
 - `tldw_Server_API/app/core/Character_Chat/Character_Chat_Lib_facade.py`
 - `tldw_Server_API/app/core/Character_Chat/character_limits.py`
 - `tldw_Server_API/app/core/Character_Chat/character_rate_limiter.py`
 - `tldw_Server_API/app/core/Character_Chat/modules/character_db.py`
 - `tldw_Server_API/app/core/Character_Chat/modules/character_io.py`
 - `tldw_Server_API/app/core/Character_Chat/modules/character_chat.py`
+- `tldw_Server_API/app/core/Character_Chat/modules/character_validation.py`
+- `tldw_Server_API/app/core/Character_Chat/modules/character_memory_extraction.py`
+- `tldw_Server_API/app/core/Character_Chat/modules/character_templates.py`
+- `tldw_Server_API/app/core/Character_Chat/modules/character_prompt_presets.py`
+- `tldw_Server_API/app/core/Character_Chat/modules/character_generation_presets.py`
+- `tldw_Server_API/app/core/Character_Chat/world_book_manager.py`
+- `tldw_Server_API/app/core/Chat/chat_characters.py`
 - related Character retrieval, exemplar, and world-book logic touched by the
   current Character API and chat flows
 - backend Character tests under `tldw_Server_API/tests/Characters/`,
   `tldw_Server_API/tests/Character_Chat*`, `tldw_Server_API/tests/ChaChaNotesDB/`,
   and nearby integration/property/e2e suites where Character behavior is
   exercised
+- any additional backend module directly imported by the in-scope Character
+  entry points when that dependency materially affects Character behavior
 
 ### Frontend in scope
 
@@ -52,11 +63,22 @@ synthesis.
 - `apps/packages/ui/src/components/Sidepanel/Chat/CharacterSelect.tsx`
 - `apps/packages/ui/src/hooks/useSelectedCharacter.ts`
 - `apps/packages/ui/src/hooks/chat/useCharacterChatMode.ts`
+- `apps/packages/ui/src/hooks/chat/useServerChatLoader.ts`
+- `apps/packages/ui/src/hooks/chat/useSelectServerChat.ts`
+- `apps/packages/ui/src/utils/selected-character-storage.ts`
+- `apps/packages/ui/src/utils/characters-route.ts`
+- `apps/packages/ui/src/utils/character-greetings.ts`
+- `apps/packages/ui/src/utils/character-mood.ts`
+- `apps/packages/ui/src/utils/default-character-preference.ts`
+- `apps/packages/ui/src/utils/character-export.ts`
 - nearby Character-related selection, storage, server-chat loader, greeting, and
   workspace hooks/utilities
 - `apps/packages/ui/src/services/tldw/domains/characters.ts`
 - Character-focused frontend tests, including unit, integration, and e2e
   coverage where current Character behavior is exercised
+- any additional frontend hook, utility, or adapter directly imported by the
+  in-scope Character entry points when that dependency materially affects
+  Character behavior
 
 ## Non-Goals
 
@@ -81,6 +103,9 @@ Primary baseline artifacts:
 - `Docs/superpowers/specs/2026-03-23-characters-backend-review-design.md`
 - `Docs/superpowers/plans/2026-03-23-characters-backend-sequential-review.md`
 - `Docs/superpowers/specs/2026-04-07-characters-backend-remediation-design.md`
+- `Docs/superpowers/specs/2026-03-27-chat-character-menu-and-system-prompt-editor-design.md`
+- `Docs/superpowers/plans/2026-03-27-chat-character-menu-and-system-prompt-editor-implementation-plan.md`
+- `Docs/Product/WebUI/PRD-Characters Playground UX Improvements.md`
 - related Character review and remediation docs created from that work
 
 Rule:
@@ -91,6 +116,14 @@ Rule:
   appears affected or has drifted back into the same failure mode
 - `historical only`: already known and apparently remediated; do not report as a
   current finding except as brief context
+
+Novelty rule:
+
+- each reported finding must note which historical artifacts were checked before
+  it was classified as net-new or a regression
+- if no comparable frontend baseline artifact exists for a frontend finding,
+  state that explicitly instead of implying stronger novelty confidence than the
+  evidence supports
 
 ## Approaches Considered
 
@@ -320,7 +353,10 @@ For each suspected issue:
 
 Permitted validation:
 
-- focused `pytest` invocations for the exact Character behavior under review
+- focused `pytest` invocations for backend Character behavior under review
+- focused frontend test commands for the exact Character behavior under review,
+  including package-scoped unit or integration tests and narrow Playwright or
+  e2e runs when that is the smallest reliable validation path
 - small read-oriented commands that clarify code paths, references, or coverage
 - minimal execution to confirm a suspected branch mismatch or regression
 
@@ -347,9 +383,14 @@ inspect, validation commands, and review artifacts to write.
 
 Write separate review artifacts for:
 
-- backend findings
-- frontend findings
-- final synthesis and cross-layer drift
+- `Docs/superpowers/reviews/characters-fullstack-delta/README.md`
+- `Docs/superpowers/reviews/characters-fullstack-delta/YYYY-MM-DD-backend-review.md`
+- `Docs/superpowers/reviews/characters-fullstack-delta/YYYY-MM-DD-frontend-review.md`
+- `Docs/superpowers/reviews/characters-fullstack-delta/YYYY-MM-DD-synthesis.md`
+
+If an existing directory or filename would create ambiguity with older Character
+reviews, prefer the dated `characters-fullstack-delta` path over reusing the
+older `characters-backend` location.
 
 ### 4. Final Findings Format
 
@@ -361,12 +402,15 @@ Findings first, ordered by severity. Each finding should include:
 - impact
 - concrete reasoning
 - file reference(s)
+- baseline artifact note
 - validation note when a command or targeted test was used
 
 Then include:
 
 - open questions or residual risks
 - coverage gaps
+- improvement opportunities that are worth addressing even when they are not
+  confirmed bugs
 - short cross-layer contract drift section
 
 ## Severity Model
@@ -401,3 +445,5 @@ This design is successful if the eventual audit:
   into unrelated chat or UI subsystems.
 - If a suspected issue cannot be validated confidently, it must be labeled as an
   open question or residual risk instead of a confirmed defect.
+- The execution plan must assume a dirty workspace is possible and should avoid
+  staging or committing unrelated files when writing review artifacts.
