@@ -493,18 +493,18 @@ describe("KnowledgeQA golden layout guardrails", () => {
 
     renderKnowledgeQa()
 
-    expect(screen.getByText("RAG Not Available")).toBeInTheDocument()
+    expect(screen.getByText("Document Search Not Set Up")).toBeInTheDocument()
     expect(
-      screen.getByText(/Configure embedding models and enable RAG/i)
+      screen.getByText(/Set up document search in your server configuration/i)
     ).toBeInTheDocument()
 
-    const docsLink = screen.getByRole("link", { name: "Open setup guide" })
+    const docsLink = screen.getByRole("link", { name: "Setup guide" })
     expect(docsLink).toHaveAttribute(
       "href",
       "https://github.com/rmusser01/tldw_server2#readme"
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry capability check" }))
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }))
     expect(capabilitiesState.refresh).toHaveBeenCalledTimes(1)
   })
 

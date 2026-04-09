@@ -390,13 +390,14 @@ function KnowledgeQAContent() {
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center max-w-md">
           <AlertCircle className="w-16 h-16 mx-auto mb-4 text-text-muted" />
-          <h2 className="text-xl font-semibold mb-2">RAG Not Available</h2>
+          <h2 className="text-xl font-semibold mb-2">Document Search Not Set Up</h2>
           <p className="text-text-muted mb-2">
-            Knowledge search requires the RAG module to be enabled on the server.
+            Your server needs an embedding model configured before you can search
+            your documents here.
           </p>
           <p className="text-text-muted mb-4">
-            Configure embedding models and enable RAG in your server setup, then
-            restart the server and retry capability detection.
+            Set up document search in your server configuration, then restart the
+            server and check again.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
@@ -404,7 +405,7 @@ function KnowledgeQAContent() {
               onClick={handleRetryCapabilities}
               className="px-3 py-1.5 rounded-md border border-border bg-surface text-text-subtle hover:bg-hover hover:text-text transition-colors"
             >
-              Retry capability check
+              Check again
             </button>
             <a
               href="https://github.com/rmusser01/tldw_server2#readme"
@@ -412,7 +413,7 @@ function KnowledgeQAContent() {
               rel="noreferrer"
               className="px-3 py-1.5 rounded-md border border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
             >
-              Open setup guide
+              Setup guide
             </a>
           </div>
         </div>
