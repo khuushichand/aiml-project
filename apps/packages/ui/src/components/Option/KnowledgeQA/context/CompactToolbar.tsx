@@ -22,11 +22,11 @@ type CompactToolbarProps = {
 const ALL_SOURCES_THRESHOLD = 5
 
 const SOURCE_LABELS: Record<RagSource, string> = {
-  media_db: "Docs & Media",
+  media_db: "Documents & Media",
   notes: "Notes",
-  characters: "Characters",
-  chats: "Chats",
-  kanban: "Kanban",
+  characters: "Story Characters",
+  chats: "Conversations",
+  kanban: "Task Boards",
 }
 
 function summarizeSources(sources: RagSource[]): string {

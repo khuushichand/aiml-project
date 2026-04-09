@@ -108,7 +108,7 @@ describe("KnowledgeContextBar", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: /Sources:/i }))
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Docs & Media" }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Documents & Media/ }))
 
     expect(onSourcesChange).toHaveBeenCalledWith(["media_db"])
   })
@@ -213,7 +213,7 @@ describe("KnowledgeContextBar", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: /Sources:/i }))
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Docs & Media" }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Documents & Media/ }))
 
     expect(onSourcesChange).toHaveBeenCalledWith([])
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([])

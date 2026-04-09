@@ -81,19 +81,27 @@ const PRESET_DETAILS: Record<PresetKey, PresetDetails> = {
 }
 
 const SOURCE_LABELS: Record<RagSource, string> = {
-  media_db: "Docs & Media",
+  media_db: "Documents & Media",
   notes: "Notes",
-  characters: "Characters",
-  chats: "Chats",
-  kanban: "Kanban",
+  characters: "Story Characters",
+  chats: "Conversations",
+  kanban: "Task Boards",
+}
+
+const SOURCE_DESCRIPTIONS: Record<RagSource, string> = {
+  media_db: "Uploaded files, transcripts, and web pages",
+  notes: "Your personal notes and clips",
+  characters: "Character cards and persona definitions",
+  chats: "Previous chat conversations",
+  kanban: "Kanban board items and tasks",
 }
 
 const SOURCE_OPTIONS = [
-  { key: "media_db", label: "Docs & Media" },
+  { key: "media_db", label: "Documents & Media" },
   { key: "notes", label: "Notes" },
-  { key: "characters", label: "Characters" },
-  { key: "chats", label: "Chats" },
-  { key: "kanban", label: "Kanban" },
+  { key: "characters", label: "Story Characters" },
+  { key: "chats", label: "Conversations" },
+  { key: "kanban", label: "Task Boards" },
 ] as const
 
 const MAX_VISIBLE_GRANULAR_RESULTS = 80
@@ -505,8 +513,13 @@ export function KnowledgeContextBar({
                             selected ? "bg-primary/10 text-primaryStrong" : "hover:bg-surface2 text-text"
                           )}
                         >
-                          <span>{option.label}</span>
-                          <span className="h-4 w-4">
+                          <span className="flex flex-col">
+                            <span>{option.label}</span>
+                            <span className="text-[10px] text-text-muted font-normal leading-tight">
+                              {SOURCE_DESCRIPTIONS[option.key]}
+                            </span>
+                          </span>
+                          <span className="h-4 w-4 shrink-0">
                             {selected ? <Check className="h-4 w-4" /> : null}
                           </span>
                         </button>
@@ -682,7 +695,7 @@ export function KnowledgeContextBar({
               onClick={onOpenSettings}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-text-muted hover:bg-surface2 hover:text-text transition-colors"
               aria-label="Explain source categories"
-              title="Docs & Media (files/transcripts), Notes, Characters, Chats, and Kanban items can all be included in retrieval scope."
+              title="Documents & Media (files, transcripts, web pages), Notes, Story Characters, Conversations, and Task Boards can all be included in search."
             >
               <CircleHelp className="h-3.5 w-3.5" />
             </button>
