@@ -122,9 +122,11 @@ class UnifiedShareAuditWriter:
         if self._initialized:
             return
         await self._service.initialize(start_background_tasks=False)
+        # Mark initialized immediately so stop() can clean up the embedded
+        # service if the compatibility steps below fail.
+        self._initialized = True
         await self._ensure_compatibility_state()
         await self._sync_compatibility_floor()
-        self._initialized = True
 
     async def stop(self) -> None:
         if not self._initialized:
@@ -457,40 +459,6 @@ class UnifiedShareAuditWriter:
             raise RuntimeError("Sharing audit write unexpectedly returned no compatibility id")
         return compatibility_id
 
-    async def import_legacy_event(
-        self,
-        *,
-        legacy_audit_id: int,
-        event_type: str,
-        resource_type: str,
-        resource_id: str,
-        owner_user_id: int,
-        actor_user_id: int | None = None,
-        share_id: int | None = None,
-        token_id: int | None = None,
-        metadata: dict[str, Any] | None = None,
-        ip_address: str | None = None,
-        user_agent: str | None = None,
-        created_at: Any = None,
-    ) -> bool:
-        compatibility_id = await self._write_event_transaction(
-            event_type=event_type,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            owner_user_id=owner_user_id,
-            actor_user_id=actor_user_id,
-            share_id=share_id,
-            token_id=token_id,
-            metadata=metadata,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            compatibility_id=int(legacy_audit_id),
-            legacy_share_audit_id=int(legacy_audit_id),
-            timestamp=created_at,
-            event_id=_legacy_event_id(int(legacy_audit_id)),
-        )
-        return compatibility_id is not None
-
     async def query_events(
         self,
         *,
@@ -501,7 +469,22 @@ class UnifiedShareAuditWriter:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         await self.initialize()
-        tenant_user_id = str(owner_user_id) if owner_user_id is not None else None
+        conditions = [_SHARE_EVENT_FILTER_SQL]
+        params: list[Any] = []
+        if owner_user_id is not None:
+            conditions.append(
+                "(tenant_user_id = ? OR json_extract(metadata, '$.owner_user_id') = ?)"
+            )
+            owner_str = str(owner_user_id)
+            params.extend([owner_str, owner_user_id])
+        if resource_type is not None:
+            conditions.append("resource_type = ?")
+            params.append(resource_type)
+        if resource_id is not None:
+            conditions.append("resource_id = ?")
+            params.append(resource_id)
+        params.extend([limit, offset])
+
         query = f"""
             SELECT
                 timestamp,
@@ -514,29 +497,14 @@ class UnifiedShareAuditWriter:
                 resource_id,
                 metadata
             FROM audit_events
-            WHERE {_SHARE_EVENT_FILTER_SQL}
-              AND (? IS NULL OR tenant_user_id = ?)
-              AND (? IS NULL OR resource_type = ?)
-              AND (? IS NULL OR resource_id = ?)
-            ORDER BY timestamp DESC, event_id DESC
+            WHERE {' AND '.join(conditions)}
+            ORDER BY timestamp DESC, rowid DESC
             LIMIT ? OFFSET ?
         """
 
         db = await self._open_db()
         try:
-            async with db.execute(
-                query,
-                (
-                    tenant_user_id,
-                    tenant_user_id,
-                    resource_type,
-                    resource_type,
-                    resource_id,
-                    resource_id,
-                    limit,
-                    offset,
-                ),
-            ) as cur:
+            async with db.execute(query, params) as cur:
                 rows = await cur.fetchall()
         finally:
             await db.close()

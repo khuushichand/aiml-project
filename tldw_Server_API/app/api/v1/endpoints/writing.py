@@ -515,7 +515,12 @@ def _restore_soft_deleted_writing_session(
     schema_version: int,
     version_parent_id: str | None,
 ) -> None:
-    """Restore a soft-deleted writing session while preserving its ID."""
+    """Restore a soft-deleted writing session while preserving its ID.
+
+    Delegates to ``db.restore_writing_session()`` so that all SQL stays
+    in the DB-management layer.  The *conn* parameter is accepted for
+    call-site compatibility but is no longer used directly.
+    """
     db.restore_writing_session(
         session_id,
         name=name,

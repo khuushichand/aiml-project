@@ -280,7 +280,12 @@ def validate_required_sqlite_api_key_schema(sqlite_fs_path: Optional[str]) -> No
                 + ", ".join(missing_api_key_cols)
             )
 
-        scope_default = api_key_table_info["scope"][4]
+        scope_info = api_key_table_info.get("scope")
+        if scope_info is None:
+            raise RuntimeError(
+                "SQLite api_keys schema missing 'scope' column"
+            )
+        scope_default = scope_info[4]
         if scope_default is not None:
             raise RuntimeError(
                 "SQLite api_keys.scope must not define a default; "

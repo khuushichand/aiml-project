@@ -599,6 +599,10 @@ def migration_085_remove_api_keys_scope_default(conn: sqlite3.Connection) -> Non
 
     column_defs = [desired_defs.get(name, _fallback_definition(name)) for name in current_columns]
 
+    # Use the foreign-key-off rebuild pattern to avoid FK cascade
+    # actions (e.g. ON DELETE CASCADE on api_key_audit_log, ON DELETE
+    # SET NULL on usage_log / llm_usage_log) that SQLite would otherwise
+    # trigger when the live api_keys table is dropped.
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
         conn.execute(
@@ -617,23 +621,23 @@ def migration_085_remove_api_keys_scope_default(conn: sqlite3.Connection) -> Non
         )
         conn.execute("DROP TABLE IF EXISTS api_keys")
         conn.execute("ALTER TABLE api_keys_new RENAME TO api_keys")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
+        if "key_id" in current_columns:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
+        if "status" in current_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
+        if "expires_at" in current_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
+        if "is_virtual" in current_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
+        if "org_id" in current_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
+        if "team_id" in current_columns:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
-
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
-    if "key_id" in current_columns:
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
-    if "status" in current_columns:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
-    if "expires_at" in current_columns:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
-    if "is_virtual" in current_columns:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_virtual ON api_keys(is_virtual)")
-    if "org_id" in current_columns:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_org ON api_keys(org_id)")
-    if "team_id" in current_columns:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_team ON api_keys(team_id)")
 
     conn.commit()
     logger.info("Migration 085: COMPLETE remove api_keys.scope default")

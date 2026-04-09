@@ -30,6 +30,11 @@ MEDIA_DB_RUNTIME_EXCEPTIONS = (
     configparser.Error,
 )
 
+_POSTGRES_BACKEND_NOT_INITIALIZED_MSG = (
+    "PostgreSQL content backend is required but was not initialized. "
+    "Check TLDW_CONTENT_DB_BACKEND configuration."
+)
+
 single_user_config = load_comprehensive_config()
 content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
 postgres_content_mode = content_db_settings.backend_type == BackendType.POSTGRESQL
@@ -42,7 +47,8 @@ try:
     from threading import RLock
 
     _runtime_state_lock = RLock()
-except ImportError:  # pragma: no cover — environments without threading
+except Exception:  # pragma: no cover — environments without threading
+    logger.warning("threading.RLock unavailable; runtime state will not be thread-safe")
     _runtime_state_lock = None  # type: ignore
 
 
@@ -65,6 +71,8 @@ def _clear_content_backend_cache_unlocked() -> None:
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
+        # clear_cached_backend() acquires _cache_lock internally, so no
+        # external lock acquisition is needed here.
         if hasattr(cb, "_cache_lock") and cb._cache_lock:
             with cb._cache_lock:  # type: ignore[attr-defined]
                 cb.clear_cached_backend()
@@ -103,10 +111,7 @@ def get_content_backend_instance() -> Optional[DatabaseBackend]:
     with _runtime_state_context():
         backend = ensure_content_backend_loaded()
         if postgres_content_mode and backend is None:
-            raise RuntimeError(
-                "PostgreSQL content backend is required but was not initialized. "
-                "Check TLDW_CONTENT_DB_BACKEND configuration."
-            )
+            raise RuntimeError(_POSTGRES_BACKEND_NOT_INITIALIZED_MSG)
         return backend
 
 
