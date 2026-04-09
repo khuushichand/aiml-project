@@ -588,7 +588,7 @@ export function KnowledgeContextBar({
                           : "text-text hover:bg-surface2"
                       )}
                     >
-                      Docs & Media ({mediaOptions.length})
+                      Documents & Media ({mediaOptions.length})
                     </button>
                     <button
                       type="button"

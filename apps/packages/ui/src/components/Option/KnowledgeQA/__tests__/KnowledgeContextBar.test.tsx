@@ -149,7 +149,7 @@ describe("KnowledgeContextBar", () => {
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
   })
 
-  it("adds Docs & Media to source scope when selecting a granular media filter", async () => {
+  it("adds Documents & Media to source scope when selecting a granular media filter", async () => {
     vi.mocked(tldwClient.listMedia).mockResolvedValueOnce({
       items: [{ id: 42, title: "Quarterly Planning Doc", type: "pdf" }],
     })
@@ -187,7 +187,7 @@ describe("KnowledgeContextBar", () => {
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
   })
 
-  it("clears granular media filters when Docs & Media is removed from source scope", () => {
+  it("clears granular media filters when Documents & Media is removed from source scope", () => {
     const onSourcesChange = vi.fn()
     const onIncludeMediaIdsChange = vi.fn()
 
