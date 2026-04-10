@@ -14,7 +14,8 @@ const {
   mockConfirmDanger,
   mockGetSetting,
   mockSetSetting,
-  mockClearSetting
+  mockClearSetting,
+  mockPromptModal
 } = vi.hoisted(() => ({
   mockBgRequest: vi.fn(),
   mockMessageSuccess: vi.fn(),
@@ -25,8 +26,14 @@ const {
   mockConfirmDanger: vi.fn(),
   mockGetSetting: vi.fn(),
   mockSetSetting: vi.fn(),
-  mockClearSetting: vi.fn()
+  mockClearSetting: vi.fn(),
+  mockPromptModal: vi.fn()
 }))
+
+vi.mock("@/components/Notes/notes-manager-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/Notes/notes-manager-utils")>()
+  return { ...actual, promptModal: mockPromptModal }
+})
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -315,10 +322,9 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
   })
 
   it("supports create, rename, and delete actions for moodboards", async () => {
-    const promptSpy = vi
-      .spyOn(window, "prompt")
-      .mockReturnValueOnce("Fresh Board")
-      .mockReturnValueOnce("Renamed Board")
+    mockPromptModal
+      .mockResolvedValueOnce("Fresh Board")
+      .mockResolvedValueOnce("Renamed Board")
 
     renderPage()
 
@@ -362,7 +368,6 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
       )
     })
 
-    promptSpy.mockRestore()
   })
 
   it("supports moodboard pagination controls and page navigation", async () => {
