@@ -308,21 +308,34 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
   const titleInputRef = useRef<InputRef | null>(null)
   const contentInputRef = useRef<TextAreaRef | null>(null)
 
-  // Clean up saved indicator timer on unmount
-  useEffect(() => {
-    return () => {
-      if (savedIndicatorTimerRef.current) clearTimeout(savedIndicatorTimerRef.current)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!currentNote.isDirty) return
+  const clearSavedIndicatorTimer = useCallback(() => {
     if (savedIndicatorTimerRef.current) {
       clearTimeout(savedIndicatorTimerRef.current)
       savedIndicatorTimerRef.current = null
     }
+  }, [])
+
+  const showSavedIndicatorTemporarily = useCallback(() => {
+    clearSavedIndicatorTimer()
+    setShowSavedIndicator(true)
+    savedIndicatorTimerRef.current = setTimeout(() => {
+      setShowSavedIndicator(false)
+      savedIndicatorTimerRef.current = null
+    }, 2000)
+  }, [clearSavedIndicatorTimer])
+
+  // Clean up saved indicator timer on unmount
+  useEffect(() => {
+    return () => {
+      clearSavedIndicatorTimer()
+    }
+  }, [clearSavedIndicatorTimer])
+
+  useEffect(() => {
+    if (!currentNote.isDirty) return
+    clearSavedIndicatorTimer()
     setShowSavedIndicator(false)
-  }, [currentNote.isDirty])
+  }, [clearSavedIndicatorTimer, currentNote.isDirty])
 
   // Parse keywords from input
   const parseKeywords = (input: string): string[] =>
@@ -678,9 +691,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         messageApi.success(
           t("playground:studio.noteUpdated", "Note updated")
         )
-        if (savedIndicatorTimerRef.current) clearTimeout(savedIndicatorTimerRef.current)
-        setShowSavedIndicator(true)
-        savedIndicatorTimerRef.current = setTimeout(() => setShowSavedIndicator(false), 2000)
+        showSavedIndicatorTemporarily()
       } else {
         // Create new note
         const created = await bgRequest<NoteListItem>({
@@ -700,9 +711,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         messageApi.success(
           t("playground:studio.noteSaved", "Note saved")
         )
-        if (savedIndicatorTimerRef.current) clearTimeout(savedIndicatorTimerRef.current)
-        setShowSavedIndicator(true)
-        savedIndicatorTimerRef.current = setTimeout(() => setShowSavedIndicator(false), 2000)
+        showSavedIndicatorTemporarily()
       }
     } catch (error: any) {
       // Handle version conflict
