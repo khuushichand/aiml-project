@@ -85,6 +85,8 @@ export interface CommandPaletteProps {
   openSignal?: number
   registerGlobalOpenShortcut?: boolean
   listenForOpenEvents?: boolean
+  /** Called when the search query changes — use to drive async search providers */
+  onQueryChange?: (query: string) => void
 }
 
 export function CommandPalette({
@@ -102,6 +104,7 @@ export function CommandPalette({
   openSignal,
   registerGlobalOpenShortcut = true,
   listenForOpenEvents = true,
+  onQueryChange,
 }: CommandPaletteProps) {
   const [open, setOpen] = useState(() => (openSignal ?? 0) > 0)
   const [query, setQuery] = useState("")
@@ -557,6 +560,7 @@ export function CommandPalette({
   useEffect(() => {
     if (open) {
       setQuery("")
+      onQueryChange?.("")
       setSelectedIndex(0)
       setTimeout(() => inputRef.current?.focus(), 0)
     }
@@ -677,7 +681,7 @@ export function CommandPalette({
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); onQueryChange?.(e.target.value) }}
             placeholder={t("common:commandPalette.placeholder", "Type a command or search...")}
             className={cn(
               "flex-1 rounded-md bg-transparent text-base text-text placeholder:text-text-subtle",

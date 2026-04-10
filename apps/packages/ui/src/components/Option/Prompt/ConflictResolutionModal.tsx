@@ -44,10 +44,41 @@ const getServerSystemPrompt = (info: ConflictInfo) =>
 const getServerUserPrompt = (info: ConflictInfo) =>
   info.serverPrompt.user_prompt || ""
 
+/**
+ * Simple word-level diff: splits both strings into words and highlights
+ * words present in `value` but not in `other` (additions from this side's
+ * perspective). Returns JSX spans with highlight classes.
+ */
+const highlightDiffWords = (
+  value: string,
+  other: string,
+  highlightClass: string
+): React.ReactNode => {
+  if (!value.trim()) return "—"
+  if (value === other) return value
+
+  const wordsA = value.split(/(\s+)/)
+  const wordsB = new Set(other.split(/(\s+)/))
+
+  return wordsA.map((word, i) => {
+    if (/^\s+$/.test(word)) return word
+    if (!wordsB.has(word)) {
+      return (
+        <span key={i} className={highlightClass}>
+          {word}
+        </span>
+      )
+    }
+    return word
+  })
+}
+
 const renderPromptField = (
   label: string,
   value: string,
-  isChanged: boolean
+  isChanged: boolean,
+  otherValue?: string,
+  side?: "local" | "server"
 ) => (
   <div className="space-y-1">
     <div className="flex items-center gap-2">
@@ -61,7 +92,17 @@ const renderPromptField = (
       ) : null}
     </div>
     <pre className="max-h-40 overflow-auto rounded border border-border bg-surface2 p-2 text-xs whitespace-pre-wrap break-words">
-      {value.trim().length > 0 ? value : "—"}
+      {isChanged && otherValue !== undefined
+        ? highlightDiffWords(
+            value,
+            otherValue,
+            side === "local"
+              ? "bg-primary/20 rounded px-0.5"
+              : "bg-warn/20 rounded px-0.5"
+          )
+        : value.trim().length > 0
+          ? value
+          : "—"}
     </pre>
   </div>
 )
@@ -115,14 +156,19 @@ export const ConflictResolutionModal: React.FC<ConflictResolutionModalProps> = (
           >
             {t("managePrompts.sync.keepServer", { defaultValue: "Keep server" })}
           </button>
-          <button
-            type="button"
-            onClick={() => onResolve("keep_both")}
-            className="inline-flex items-center justify-center rounded-md border border-primary/40 px-3 py-1.5 text-sm text-primary hover:bg-primary/10 disabled:opacity-50"
-            disabled={loading || !conflictInfo}
-          >
-            {t("managePrompts.sync.keepBoth", { defaultValue: "Keep both" })}
-          </button>
+          <div className="flex flex-col items-center">
+            <button
+              type="button"
+              onClick={() => onResolve("keep_both")}
+              className="inline-flex items-center justify-center rounded-md border border-primary/40 px-3 py-1.5 text-sm text-primary hover:bg-primary/10 disabled:opacity-50"
+              disabled={loading || !conflictInfo}
+            >
+              {t("managePrompts.sync.keepBoth", { defaultValue: "Keep both" })}
+            </button>
+            <span className="text-xs text-text-muted mt-1">
+              {t("managePrompts.sync.keepBothHint", { defaultValue: "Creates a copy with your changes" })}
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => onResolve("keep_local")}
@@ -187,21 +233,27 @@ export const ConflictResolutionModal: React.FC<ConflictResolutionModalProps> = (
               {renderPromptField(
                 t("managePrompts.columns.title", { defaultValue: "Title" }),
                 localName,
-                localName !== serverName
+                localName !== serverName,
+                serverName,
+                "local"
               )}
               {renderPromptField(
                 t("managePrompts.form.systemPrompt.shortLabel", {
-                  defaultValue: "System"
+                  defaultValue: "AI Instructions"
                 }),
                 localSystem,
-                localSystem !== serverSystem
+                localSystem !== serverSystem,
+                serverSystem,
+                "local"
               )}
               {renderPromptField(
                 t("managePrompts.form.userPrompt.shortLabel", {
-                  defaultValue: "User"
+                  defaultValue: "Message Template"
                 }),
                 localUser,
-                localUser !== serverUser
+                localUser !== serverUser,
+                serverUser,
+                "local"
               )}
             </section>
 
@@ -219,21 +271,27 @@ export const ConflictResolutionModal: React.FC<ConflictResolutionModalProps> = (
               {renderPromptField(
                 t("managePrompts.columns.title", { defaultValue: "Title" }),
                 serverName,
-                localName !== serverName
+                localName !== serverName,
+                localName,
+                "server"
               )}
               {renderPromptField(
                 t("managePrompts.form.systemPrompt.shortLabel", {
-                  defaultValue: "System"
+                  defaultValue: "AI Instructions"
                 }),
                 serverSystem,
-                localSystem !== serverSystem
+                localSystem !== serverSystem,
+                localSystem,
+                "server"
               )}
               {renderPromptField(
                 t("managePrompts.form.userPrompt.shortLabel", {
-                  defaultValue: "User"
+                  defaultValue: "Message Template"
                 }),
                 serverUser,
-                localUser !== serverUser
+                localUser !== serverUser,
+                localUser,
+                "server"
               )}
             </section>
           </div>

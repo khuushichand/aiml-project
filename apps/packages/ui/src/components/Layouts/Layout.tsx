@@ -220,7 +220,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     requestQuickIngestOpen()
   }
 
-  const promptPaletteCommands = usePromptPaletteCommands()
+  const [paletteQuery, setPaletteQuery] = useState("")
+  const promptPaletteCommands = usePromptPaletteCommands(paletteQuery)
 
   const commandPaletteProps = {
     onNewChat: clearChat,
@@ -230,6 +231,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     onSwitchModel: () => setOpenModelSettings(true),
     onToggleSidebar: toggleSidebar,
     additionalCommands: promptPaletteCommands,
+    onQueryChange: setPaletteQuery,
   }
 
   // Quick Chat Helper toggle

@@ -226,6 +226,17 @@ export const StudioTabContainer: React.FC = () => {
     }
   }, [activeSubTab, searchParams, setSearchParams])
 
+  // Auto-select default project when none is selected and defaults are loaded
+  useEffect(() => {
+    if (
+      !selectedProjectId &&
+      typeof settingsDefaults.defaultProjectId === "number" &&
+      settingsDefaults.defaultProjectId > 0
+    ) {
+      setSelectedProjectId(settingsDefaults.defaultProjectId)
+    }
+  }, [selectedProjectId, settingsDefaults.defaultProjectId, setSelectedProjectId])
+
   useEffect(() => {
     if (!selectedProjectId && activeSubTab !== "projects") {
       setActiveSubTab("projects")
@@ -287,6 +298,29 @@ export const StudioTabContainer: React.FC = () => {
       }
     }
   }, [isOnline, hasStudio, selectedProjectId, queryClient])
+
+  // Keyboard shortcuts: Cmd/Ctrl+1-5 for tab switching
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return
+      const tabMap: Record<string, StudioSubTab> = {
+        "1": "projects",
+        "2": "prompts",
+        "3": "testCases",
+        "4": "evaluations",
+        "5": "optimizations"
+      }
+      const tab = tabMap[e.key]
+      if (tab) {
+        e.preventDefault()
+        // Only switch to non-projects tabs if a project is selected
+        if (tab !== "projects" && !selectedProjectId) return
+        setActiveSubTab(tab)
+      }
+    }
+    document.addEventListener("keydown", handler)
+    return () => document.removeEventListener("keydown", handler)
+  }, [selectedProjectId, setActiveSubTab])
 
   const handleSubTabChange = (value: string | number) => {
     if (isValidSubTab(value as string)) {
@@ -364,6 +398,22 @@ export const StudioTabContainer: React.FC = () => {
   const selectProjectFirstLabel = t("managePrompts.studio.selectProjectFirstShort", {
     defaultValue: "Select a project first"
   })
+
+  // When a non-projects tab has no project selected, show a helpful gate with action
+  const renderProjectGate = () => (
+    <FeatureEmptyState
+      title={t("managePrompts.studio.noProject.title", {
+        defaultValue: "No project selected"
+      })}
+      description={t("managePrompts.studio.noProject.description", {
+        defaultValue: "Select or create a project in the Projects tab to get started with prompts, test cases, evaluations, and optimizations."
+      })}
+      primaryActionLabel={t("managePrompts.studio.noProject.goToProjects", {
+        defaultValue: "Go to Projects"
+      })}
+      onPrimaryAction={() => setActiveSubTab("projects")}
+    />
+  )
 
   const projectsLabel = t("managePrompts.studio.tabs.projects", {
     defaultValue: "Projects"
@@ -629,6 +679,24 @@ export const StudioTabContainer: React.FC = () => {
           </p>
         </div>
       )}
+
+      {/* Breadcrumb — shows selected project context on non-projects tabs */}
+      {selectedProjectId && activeSubTab !== "projects" && (() => {
+        const projectName = settingsProjects.find((p) => p.id === selectedProjectId)?.name
+        const tabLabel = activeSubTab === "prompts" ? promptsLabel
+          : activeSubTab === "testCases" ? testCasesLabel
+          : activeSubTab === "evaluations" ? evaluationsLabel
+          : optimizationsLabel
+        return (
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-text-muted" data-testid="studio-breadcrumb">
+            <button type="button" onClick={() => setActiveSubTab("projects")} className="hover:text-primary hover:underline">
+              {projectName || `Project #${selectedProjectId}`}
+            </button>
+            <span aria-hidden="true">/</span>
+            <span className="font-medium text-text">{tabLabel}</span>
+          </nav>
+        )
+      })()}
 
       {/* Content area */}
       <div className="min-h-[400px]">{renderStudioSubTab()}</div>
