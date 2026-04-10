@@ -6,6 +6,7 @@ Pydantic, and caches them in memory for fast access by API endpoints.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from threading import RLock
 
@@ -66,7 +67,14 @@ def load_archetypes_from_directory(
                     "Skipping {}: missing top-level 'archetype' key", yaml_file.name
                 )
                 continue
-            template = ArchetypeTemplate(**data["archetype"])
+            archetype_data = data["archetype"]
+            if not isinstance(archetype_data, Mapping):
+                logger.warning(
+                    "Skipping {}: top-level 'archetype' value must be a mapping",
+                    yaml_file.name,
+                )
+                continue
+            template = ArchetypeTemplate(**archetype_data)
             new_cache[template.key] = template
             logger.debug("Loaded archetype '{}' from {}", template.key, yaml_file.name)
         except (OSError, ValidationError, yaml.YAMLError):
