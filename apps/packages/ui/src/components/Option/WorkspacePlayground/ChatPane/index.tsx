@@ -635,7 +635,7 @@ const RetrievalDiagnosticsPanel: React.FC<{
     diagnostics.confidenceLevel === "high"
       ? "text-success"
       : diagnostics.confidenceLevel === "medium"
-        ? "text-warning"
+        ? "text-warn"
         : diagnostics.confidenceLevel === "low"
           ? "text-error"
           : "text-text-muted"
@@ -1103,7 +1103,7 @@ const SimpleChatInput: React.FC<{
                 : placeholder || t("playground:chat.inputPlaceholder", "Type / for commands or a message...")
             }
             autoSize={{ minRows: 1, maxRows: 6 }}
-            disabled={isLoading || isPreparingContext || isChatUnavailable}
+            disabled={isLoading || isPreparingContext}
             className="pr-10 text-sm"
           />
         </div>

@@ -1794,7 +1794,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         return
       }
 
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && globalSearchOpen) {
         event.preventDefault()
         closeGlobalSearch()
         return
@@ -1835,6 +1835,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
     focusNewNoteTitle,
     focusWorkspaceNote,
     focusWorkspacePane,
+    globalSearchOpen,
     startNewNoteWithUndo,
     t
   ])
@@ -2198,6 +2199,35 @@ const WorkspacePlaygroundBody: React.FC = () => {
     return <WorkspacePlaygroundSkeleton isMobile={isMobile} />
   }
 
+  const tutorialPromptBanner = showTutorialPrompt ? (
+    <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
+      <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            startTutorial("workspace-playground-basics")
+            dismissOnboardingOverlay()
+            setShowTutorialPrompt(false)
+          }}
+          className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
+        >
+          Start tour
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            dismissOnboardingOverlay()
+            setShowTutorialPrompt(false)
+          }}
+          className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  ) : null
+
   return (
     <SharedWorkspaceProvider
       shareId={sharedShareId}
@@ -2347,40 +2377,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </div>
       )}
-
-
-      {/* Tutorial prompt banner (shared between mobile and desktop layouts) */}
-      {(() => {
-        const tutorialPromptBanner = showTutorialPrompt ? (
-          <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
-            <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  startTutorial("workspace-playground-basics")
-                  dismissOnboardingOverlay()
-                  setShowTutorialPrompt(false)
-                }}
-                className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
-              >
-                Start tour
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  dismissOnboardingOverlay()
-                  setShowTutorialPrompt(false)
-                }}
-                className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        ) : null
-
-        return isMobile ? (
+      {/* Mobile vs desktop layout */}
+      {isMobile ? (
         <>
           <WorkspaceHeader
             leftPaneOpen={false}
@@ -2550,8 +2548,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
             statusGuardrailsEnabled={statusGuardrailsEnabled}
           />
         </>
-      )
-      })()}
+      )}
 
       <Modal
         title={

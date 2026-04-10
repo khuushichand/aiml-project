@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { Tooltip, Modal, Button } from "antd"
 import { Loader2, Trash2 } from "lucide-react"
 import { useConnectionStore } from "@/store/connection"
-import { deriveConnectionUxState } from "@/types/connection"
+import { deriveConnectionUxState, type ConnectionUxState } from "@/types/connection"
 import { WORKSPACE_STORAGE_KEY } from "@/store/workspace-events"
 
 type ConnectionTone = {
@@ -69,8 +69,8 @@ export const WorkspaceStatusBar: React.FC<WorkspaceStatusBarProps> = ({
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const connectionState = useConnectionStore((s) => s.state)
-  const connectionUxState = deriveConnectionUxState(connectionState)
   const connection = deriveConnectionTone(connectionState)
+  const connectionUxState: ConnectionUxState = deriveConnectionUxState(connectionState)
   const [storageModalOpen, setStorageModalOpen] = React.useState(false)
   const canRetryConnection =
     connectionUxState === "error_unreachable" ||
@@ -153,7 +153,7 @@ export const WorkspaceStatusBar: React.FC<WorkspaceStatusBarProps> = ({
             data-testid="workspace-statusbar-retry"
             className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-error hover:bg-error/10 hover:text-error"
             onClick={() => {
-              useConnectionStore.getState().checkOnce()
+              void useConnectionStore.getState().checkOnce()
             }}
           >
             {t("playground:statusBar.retry", "Retry")}

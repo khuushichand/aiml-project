@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Tooltip } from "antd"
 import { CloudOff, Globe, Search, Sparkles, Square, X } from "lucide-react"
 import { useKnowledgeQA } from "./KnowledgeQAProvider"
 import { cn } from "@/libs/utils"
@@ -395,23 +396,41 @@ export function SearchBar({
         )}
 
         {/* Submit button */}
-        <button
-          type="submit"
-          disabled={!query.trim() || isSearching || noSourcesBlocked}
-          title={noSourcesBlocked ? "Select source categories or enable web fallback to search" : undefined}
-          className={cn(
-            "absolute right-2 top-1/2 -translate-y-1/2",
-            "px-4 py-2 rounded-lg",
-            "bg-primary text-white",
-            "font-medium text-sm",
-            "transition-all duration-200",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
-            "hover:bg-primaryStrong"
-          )}
+        <Tooltip
+          title={
+            noSourcesBlocked
+              ? "Select source categories or enable web fallback to search"
+              : null
+          }
         >
-          {isSearching ? "Searching..." : "Ask"}
-        </button>
+          <span className="absolute right-2 top-1/2 inline-flex -translate-y-1/2">
+            <button
+              type="submit"
+              disabled={!query.trim() || isSearching || noSourcesBlocked}
+              aria-describedby={noSourcesBlocked ? "search-block-reason" : undefined}
+              className={cn(
+                "px-4 py-2 rounded-lg",
+                "bg-primary text-white",
+                "font-medium text-sm",
+                "transition-all duration-200",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+                "hover:bg-primaryStrong"
+              )}
+            >
+              {isSearching ? "Searching..." : "Ask"}
+            </button>
+          </span>
+        </Tooltip>
       </div>
+
+      {noSourcesBlocked ? (
+        <div
+          id="search-block-reason"
+          className="mt-2 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn"
+        >
+          Select source categories or enable web fallback to search
+        </div>
+      ) : null}
 
       {isSearching && (
         <div
@@ -464,16 +483,17 @@ export function SearchBar({
             </button>
           )}
           {isSearching && (
-            <button
-              type="button"
-              onClick={cancelSearch}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-warn/40 bg-warn/10 text-warn hover:bg-warn/20 transition-colors whitespace-nowrap"
-              aria-label="Cancel search"
-              title="Stop search. Partial results will be kept if available."
-            >
-              <Square className="w-3 h-3" />
-              Stop
-            </button>
+            <Tooltip title="Stop search. Partial results will be kept if available.">
+              <button
+                type="button"
+                onClick={cancelSearch}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-warn/40 bg-warn/10 text-warn hover:bg-warn/20 transition-colors whitespace-nowrap"
+                aria-label="Cancel search"
+              >
+                <Square className="w-3 h-3" />
+                Stop
+              </button>
+            </Tooltip>
           )}
           {showWebToggle ? (
             <button

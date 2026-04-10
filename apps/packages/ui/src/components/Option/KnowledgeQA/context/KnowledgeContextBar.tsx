@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useStorage } from "@plasmohq/storage/hook"
 import type { RagPresetName, RagSource } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { cn } from "@/libs/utils"
@@ -31,12 +32,6 @@ import { AnswerModelMenu } from "./AnswerModelMenu"
 
 const PROFILES_STORAGE_KEY = "tldw:knowledge-qa:saved-profiles"
 const MAX_SAVED_PROFILES = 5
-const VALID_PRESET_VALUES = new Set<RagPresetName>([
-  "fast",
-  "balanced",
-  "thorough",
-  "custom",
-])
 
 type SearchProfile = {
   name: string
@@ -45,37 +40,46 @@ type SearchProfile = {
   enableWebFallback: boolean
 }
 
-function loadSavedProfiles(): SearchProfile[] {
-  try {
-    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((item: unknown): item is SearchProfile => {
-        if (typeof item !== "object" || item === null) return false
-        const profile = item as SearchProfile
-        return (
-          typeof profile.name === "string" &&
-          Array.isArray(profile.sources) &&
-          typeof profile.preset === "string" &&
-          typeof profile.enableWebFallback === "boolean" &&
-          VALID_PRESET_VALUES.has(profile.preset) &&
-          profile.sources.every((source) => isRagSource(source))
-        )
-      })
-      .slice(0, MAX_SAVED_PROFILES)
-  } catch {
-    return []
-  }
+const VALID_PRESET_KEYS: ReadonlySet<RagPresetName> = new Set([
+  "fast",
+  "balanced",
+  "thorough",
+  "custom",
+])
+
+function isSearchProfile(value: unknown): value is SearchProfile {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as SearchProfile).name === "string" &&
+    (value as SearchProfile).name.trim().length > 0 &&
+    Array.isArray((value as SearchProfile).sources) &&
+    (value as SearchProfile).sources.every(
+      (source): source is RagSource => isRagSource(source)
+    ) &&
+    typeof (value as SearchProfile).preset === "string" &&
+    VALID_PRESET_KEYS.has((value as SearchProfile).preset) &&
+    typeof (value as SearchProfile).enableWebFallback === "boolean"
+  )
 }
 
-function persistProfiles(profiles: SearchProfile[]): void {
-  try {
-    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles.slice(0, MAX_SAVED_PROFILES)))
-  } catch {
-    // localStorage full or unavailable -- silently ignore
-  }
+function sanitizeSavedProfiles(value: unknown): SearchProfile[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isSearchProfile).slice(0, MAX_SAVED_PROFILES)
+}
+
+function areProfilesEqual(left: SearchProfile[], right: SearchProfile[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((profile, index) => {
+    const other = right[index]
+    return (
+      other?.name === profile.name &&
+      other?.preset === profile.preset &&
+      other?.enableWebFallback === profile.enableWebFallback &&
+      profile.sources.length === other.sources.length &&
+      profile.sources.every((source, sourceIndex) => other.sources[sourceIndex] === source)
+    )
+  })
 }
 
 type KnowledgeContextBarProps = {
@@ -307,7 +311,8 @@ export function KnowledgeContextBar({
   const [noteOptions, setNoteOptions] = useState<GranularSourceOption<string>[]>([])
 
   // Saved search profiles state
-  const [savedProfiles, setSavedProfiles] = useState<SearchProfile[]>(loadSavedProfiles)
+  const [storedProfiles, setStoredProfiles] = useStorage<unknown>(PROFILES_STORAGE_KEY, [])
+  const [savedProfiles, setSavedProfiles] = useState<SearchProfile[]>([])
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [profileSaveMode, setProfileSaveMode] = useState(false)
   const [profileNameInput, setProfileNameInput] = useState("")
@@ -365,6 +370,12 @@ export function KnowledgeContextBar({
     preset === "custom"
       ? "Custom: Using your manually configured retrieval and generation settings."
       : presetDetail.summary
+  const countableScopeTotal =
+    (normalizedSources.includes("media_db") ? mediaOptions.length : 0) +
+    (normalizedSources.includes("notes") ? noteOptions.length : 0)
+  const hasOnlyCountableSources = normalizedSources.every(
+    (source) => source === "media_db" || source === "notes"
+  )
 
   const filteredMediaOptions = useMemo(() => {
     const query = granularQuery.trim().toLowerCase()
@@ -447,6 +458,33 @@ export function KnowledgeContextBar({
     void loadGranularOptions()
   }, [granularMenuOpen, granularLoaded, granularLoading, loadGranularOptions])
 
+  useEffect(() => {
+    const sanitizedProfiles = sanitizeSavedProfiles(storedProfiles)
+    setSavedProfiles((current) =>
+      areProfilesEqual(current, sanitizedProfiles) ? current : sanitizedProfiles
+    )
+
+    let shouldNormalizeStorage = true
+    try {
+      shouldNormalizeStorage = JSON.stringify(storedProfiles) !== JSON.stringify(sanitizedProfiles)
+    } catch {
+      shouldNormalizeStorage = true
+    }
+
+    if (shouldNormalizeStorage) {
+      void setStoredProfiles(sanitizedProfiles)
+    }
+  }, [setStoredProfiles, storedProfiles])
+
+  const updateSavedProfiles = useCallback(
+    (profiles: SearchProfile[]) => {
+      const sanitizedProfiles = sanitizeSavedProfiles(profiles)
+      setSavedProfiles(sanitizedProfiles)
+      void setStoredProfiles(sanitizedProfiles)
+    },
+    [setStoredProfiles]
+  )
+
   const toggleSource = (sourceKey: RagSource) => {
     const exists = normalizedSources.includes(sourceKey)
     const nextSources = exists
@@ -520,21 +558,18 @@ export function KnowledgeContextBar({
       0,
       MAX_SAVED_PROFILES
     )
-    setSavedProfiles(updated)
-    persistProfiles(updated)
+    updateSavedProfiles(updated)
     setProfileSaveMode(false)
     setProfileNameInput("")
-  }, [profileNameInput, normalizedSources, preset, webEnabled, savedProfiles])
+  }, [profileNameInput, normalizedSources, preset, savedProfiles, updateSavedProfiles, webEnabled])
 
   const loadProfile = useCallback(
     (profile: SearchProfile) => {
       onSourcesChange(profile.sources)
       onPresetChange(profile.preset)
-      // Capture the current web-fallback state at call time to avoid stale
-      // closure issues. Only a toggle is available (no direct setter), so we
-      // compare against the live value before firing.
-      const currentWeb = webEnabled
-      if (profile.enableWebFallback !== currentWeb) {
+      // Only toggle web fallback if the profile value differs from current state.
+      // Note: only a toggle callback is available (no direct setter).
+      if (profile.enableWebFallback !== webEnabled) {
         onToggleWeb()
       }
       setProfileMenuOpen(false)
@@ -545,10 +580,9 @@ export function KnowledgeContextBar({
   const deleteProfile = useCallback(
     (name: string) => {
       const updated = savedProfiles.filter((p) => p.name !== name)
-      setSavedProfiles(updated)
-      persistProfiles(updated)
+      updateSavedProfiles(updated)
     },
-    [savedProfiles]
+    [savedProfiles, updateSavedProfiles]
   )
 
   const activeGranularOptions = granularTab === "media" ? filteredMediaOptions : filteredNoteOptions
@@ -821,8 +855,8 @@ export function KnowledgeContextBar({
                   ? `Searching ${normalizedMediaIds.length + normalizedNoteIds.length} item${
                       normalizedMediaIds.length + normalizedNoteIds.length === 1 ? "" : "s"
                     }`
-                  : granularLoaded
-                    ? `${mediaOptions.length + noteOptions.length} items in scope`
+                  : granularLoaded && hasOnlyCountableSources
+                    ? `${countableScopeTotal} items in scope`
                     : `${normalizedSources.length} of ${SOURCE_OPTIONS.length} categories selected`}
               </>
             )}

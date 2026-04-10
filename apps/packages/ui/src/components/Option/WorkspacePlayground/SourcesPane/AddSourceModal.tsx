@@ -153,22 +153,6 @@ const persistAddSourceTabUsage = (usage: AddSourceTabUsage) => {
 const isAddSourceTab = (value: string): value is AddSourceTab =>
   DEFAULT_ADD_SOURCE_TAB_ORDER.includes(value as AddSourceTab)
 
-const orderAddSourceTabs = (usage: AddSourceTabUsage): AddSourceTab[] => {
-  const secondaryTabs = DEFAULT_ADD_SOURCE_TAB_ORDER.filter(
-    (tab) => tab !== "upload"
-  )
-
-  secondaryTabs.sort((left, right) => {
-    const usageDelta = usage[right] - usage[left]
-    if (usageDelta !== 0) return usageDelta
-    return (
-      DEFAULT_ADD_SOURCE_TAB_ORDER.indexOf(left) -
-      DEFAULT_ADD_SOURCE_TAB_ORDER.indexOf(right)
-    )
-  })
-
-  return ["upload", ...secondaryTabs]
-}
 
 const toMediaId = (value: unknown): number | null => {
   const parsed = Number(value)

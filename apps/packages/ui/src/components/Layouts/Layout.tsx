@@ -20,6 +20,7 @@ import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
 import { NotesDockHost } from "@/components/Common/NotesDock"
+import { StorageQuotaBanner } from "@/components/Common/StorageQuotaBanner"
 import { Sidebar } from "../Option/Sidebar"
 import { Header } from "./Header"
 import { QuickIngestModalHost } from "@/components/Layouts/QuickIngestButton"
@@ -220,7 +221,8 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     requestQuickIngestOpen()
   }
 
-  const promptPaletteCommands = usePromptPaletteCommands()
+  const [paletteQuery, setPaletteQuery] = useState("")
+  const promptPaletteCommands = usePromptPaletteCommands(paletteQuery)
 
   const commandPaletteProps = {
     onNewChat: clearChat,
@@ -230,6 +232,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     onSwitchModel: () => setOpenModelSettings(true),
     onToggleSidebar: toggleSidebar,
     additionalCommands: promptPaletteCommands,
+    onQueryChange: setPaletteQuery,
   }
 
   // Quick Chat Helper toggle
@@ -338,6 +341,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
     </div>
   )
 
+  const storageQuotaBanner = !hideHeader && !demoEnabled ? (
+    <div className="relative z-10 px-4 pt-4 sm:px-6 lg:px-8">
+      <StorageQuotaBanner />
+    </div>
+  ) : null
+
   return (
     <>
       <OptionLayoutEffects />
@@ -377,6 +386,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                 onOpenNotifications={onOpenNotifications}
               />
             </div>
+            {storageQuotaBanner}
             <div className="relative flex min-h-0 flex-1 flex-col">
               {children}
               {shortcutLoading && renderShortcutOverlay()}
@@ -392,6 +402,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
                 onOpenNotifications={onOpenNotifications}
               />
             </div>
+            {storageQuotaBanner}
             <div className="relative flex min-h-0 flex-1 flex-col">
               {children}
               {shortcutLoading && renderShortcutOverlay()}

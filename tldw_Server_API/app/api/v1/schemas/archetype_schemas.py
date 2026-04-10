@@ -1,106 +1,37 @@
-"""
-Pydantic schemas for Archetype Templates.
-
-Archetypes are pre-built assistant profiles that users can select during
-first-run onboarding to bootstrap persona, MCP, policy, buddy, and
-voice configuration.
-"""
+"""Pydantic schemas for persona archetype YAML templates."""
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import BaseModel, Field, model_validator
-
-from tldw_Server_API.app.api.v1.schemas.persona import PersonaConfirmationMode
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ArchetypePersonaDefaults(BaseModel):
-    """Default persona settings seeded by an archetype."""
+class ArchetypePersona(BaseModel):
+    """Minimal persona payload embedded in an archetype template."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     name: str
-    system_prompt: str | None = None
+    system_prompt: str
     personality_traits: list[str] = Field(default_factory=list)
 
 
-class ArchetypeMCPConfig(BaseModel):
-    """Which MCP modules an archetype enables or disables by default."""
+class ArchetypeTemplate(BaseModel):
+    """Full archetype definition loaded from YAML."""
 
-    enabled: list[str] = Field(default_factory=list)
-    disabled: list[str] = Field(default_factory=list)
-
-
-class ArchetypeToolOverride(BaseModel):
-    """Per-tool policy override within an archetype."""
-
-    tool: str
-    requires_confirmation: bool = False
-
-
-class ArchetypePolicyDefaults(BaseModel):
-    """Safety / confirmation policy defaults for an archetype."""
-
-    confirmation_mode: PersonaConfirmationMode = "destructive_only"
-    tool_overrides: list[ArchetypeToolOverride] = Field(default_factory=list)
-
-
-class ArchetypeBuddyDefaults(BaseModel):
-    """Visual buddy seed values for an archetype."""
-
-    species: str | None = None
-    palette: str | None = None
-    silhouette: str | None = None
-
-
-class ArchetypeStarterCommand(BaseModel):
-    """A starter command: either a reference to a built-in template or a custom definition.
-
-    Exactly one of ``template_key`` or ``custom`` must be provided.
-    """
-
-    template_key: str | None = None
-    custom: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one_source(self) -> ArchetypeStarterCommand:
-        has_template = self.template_key is not None
-        has_custom = self.custom is not None
-        if has_template == has_custom:
-            raise ValueError("Exactly one of 'template_key' or 'custom' must be provided")
-        return self
-
-
-class ArchetypeSummary(BaseModel):
-    """Compact representation shown in the archetype picker."""
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     key: str
     label: str
     tagline: str
     icon: str
+    persona: ArchetypePersona | None = None
 
 
-class ArchetypeTemplate(ArchetypeSummary):
-    """Full archetype definition with all default configuration sections."""
+class ArchetypeSummary(BaseModel):
+    """Compact summary used by archetype listings."""
 
-    persona: ArchetypePersonaDefaults = Field(
-        default_factory=lambda: ArchetypePersonaDefaults(name="")
-    )
-    mcp_modules: ArchetypeMCPConfig = Field(default_factory=ArchetypeMCPConfig)
-    suggested_external_servers: list[str] = Field(default_factory=list)
-    policy: ArchetypePolicyDefaults = Field(default_factory=ArchetypePolicyDefaults)
-    voice_defaults: dict[str, Any] = Field(default_factory=dict)
-    scope_rules: list[dict[str, Any]] = Field(default_factory=list)
-    buddy: ArchetypeBuddyDefaults = Field(default_factory=ArchetypeBuddyDefaults)
-    starter_commands: list[ArchetypeStarterCommand] = Field(default_factory=list)
-
-
-class MCPCatalogEntry(BaseModel):
-    """One entry in the external MCP server catalog shown during setup."""
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     key: str
-    name: str
-    description: str
-    url_template: str
-    auth_type: str
-    category: str
-    logo_key: str | None = None
-    suggested_for: list[str] = Field(default_factory=list)
+    label: str
+    tagline: str
+    icon: str

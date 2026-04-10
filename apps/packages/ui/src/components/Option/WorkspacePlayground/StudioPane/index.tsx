@@ -62,6 +62,16 @@ import {
   encodeSlidesVisualStyleValue,
 } from "./hooks/useArtifactGeneration"
 import {
+  STUDIO_DEFAULT_RAG_TOP_K,
+  STUDIO_DEFAULT_RAG_MIN_SCORE,
+  STUDIO_DEFAULT_ENABLE_RERANKING,
+  STUDIO_DEFAULT_MAX_TOKENS,
+  STUDIO_DEFAULT_SUMMARY_INSTRUCTION,
+  OUTPUT_VIRTUALIZATION_THRESHOLD,
+  OUTPUT_VIRTUAL_ROW_HEIGHT,
+  OUTPUT_VIRTUAL_OVERSCAN
+} from "./hooks/useStudioDerivedState"
+import {
   TTS_PROVIDERS,
   AUDIO_FORMATS,
 } from "./hooks/useAudioTtsSettings"
@@ -203,8 +213,11 @@ const OUTPUT_GROUPS: Array<{
   }
 ]
 
-// Primary output types shown by default; remaining are collapsed behind an expander
-const PRIMARY_OUTPUT_TYPES = new Set<ArtifactType>(["summary", "flashcards", "quiz", "report"])
+// Keep current outputs directly accessible; the expander only appears if future
+// output types fall outside this visible set.
+const PRIMARY_OUTPUT_TYPES = new Set<ArtifactType>(
+  OUTPUT_BUTTONS.map(({ type }) => type)
+)
 
 // Status icons for artifacts
 const STATUS_ICONS: Record<
@@ -216,17 +229,6 @@ const STATUS_ICONS: Record<
   completed: { icon: CheckCircle, className: "text-success" },
   failed: { icon: XCircle, className: "text-error" }
 }
-
-import {
-  STUDIO_DEFAULT_RAG_TOP_K,
-  STUDIO_DEFAULT_RAG_MIN_SCORE,
-  STUDIO_DEFAULT_ENABLE_RERANKING,
-  STUDIO_DEFAULT_MAX_TOKENS,
-  STUDIO_DEFAULT_SUMMARY_INSTRUCTION,
-  OUTPUT_VIRTUALIZATION_THRESHOLD,
-  OUTPUT_VIRTUAL_ROW_HEIGHT,
-  OUTPUT_VIRTUAL_OVERSCAN
-} from "./hooks/useStudioDerivedState"
 
 const MindMapArtifactViewer = React.lazy(() =>
   import("./ArtifactModalContent").then((module) => ({
@@ -1351,6 +1353,7 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               >
                 <button
                   type="button"
+                  aria-label={label}
                   disabled={isDisabled}
                   onFocus={() => setActiveOutputType(type)}
                   onMouseEnter={() => setActiveOutputType(type)}
@@ -1391,9 +1394,23 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
 
           return (
             <div className="space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                {primaryButtons.map((btn) => renderOutputButton(btn.type))}
-              </div>
+              {OUTPUT_GROUPS.map((group) => {
+                const visibleButtons = group.types.filter((type) =>
+                  primaryButtons.some((button) => button.type === type)
+                )
+                if (visibleButtons.length === 0) return null
+
+                return (
+                  <div key={group.id} className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+                      {group.label}
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {visibleButtons.map((type) => renderOutputButton(type))}
+                    </div>
+                  </div>
+                )
+              })}
 
               {secondaryButtons.length > 0 && (
                 <>
@@ -1782,15 +1799,18 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                               <Tooltip title={failedRetryLabel}>
                                 <button
                                   type="button"
+                                  disabled={!hasSelectedSources || isGeneratingOutput}
                                   onClick={(event) => {
                                     event.stopPropagation()
-                                    handleGenerateOutput(artifact.type, {
+                                    if (!hasSelectedSources || isGeneratingOutput) return
+                                    void handleGenerateOutput(artifact.type, {
                                       mode: "replace",
                                       targetArtifactId: artifact.id
                                     })
                                   }}
                                   onKeyDown={handleIconButtonKeyDown}
-                                  className="rounded p-0.5 hover:bg-primary/10"
+                                  aria-disabled={!hasSelectedSources || isGeneratingOutput}
+                                  className="rounded p-0.5 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                                   aria-label={failedRetryLabel}
                                   data-testid={`studio-artifact-retry-${artifact.id}`}
                                 >

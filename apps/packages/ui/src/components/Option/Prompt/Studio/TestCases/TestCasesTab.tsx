@@ -249,7 +249,7 @@ export const TestCasesTab: React.FC = () => {
             }),
             t("managePrompts.studio.testCases.emptyExample2", {
               defaultValue:
-                "Mark important test cases as 'golden' for regression testing."
+                "Mark important test cases as reference answers. These 'golden' cases are used as benchmarks when evaluating prompt changes."
             })
           ]}
           primaryActionLabel={t("managePrompts.studio.testCases.createBtn", {
@@ -405,7 +405,7 @@ export const TestCasesTab: React.FC = () => {
               record.is_golden ? (
                 <Tooltip
                   title={t("managePrompts.studio.testCases.goldenTooltip", {
-                    defaultValue: "Golden test case"
+                    defaultValue: "Reference answer -- used as a benchmark in evaluations"
                   })}
                 >
                   <Star className="size-5 fill-warn text-warn" />

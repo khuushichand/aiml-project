@@ -123,6 +123,21 @@ describe("SearchBar behavior", () => {
     ).toBeInTheDocument()
   })
 
+  it("renders a visible blocked-search explanation with aria-describedby when no sources are available", () => {
+    state.query = "find something"
+    state.settings.sources = []
+    state.settings.enable_web_fallback = false
+
+    render(<SearchBar autoFocus={false} />)
+
+    const submitButton = screen.getByRole("button", { name: "Ask" })
+    expect(submitButton).toBeDisabled()
+    expect(submitButton).toHaveAttribute("aria-describedby", "search-block-reason")
+    expect(
+      screen.getByText("Select source categories or enable web fallback to search")
+    ).toHaveAttribute("id", "search-block-reason")
+  })
+
   it("uses descriptive web fallback tooltip text", () => {
     render(<SearchBar autoFocus={false} />)
 
@@ -318,7 +333,7 @@ describe("SearchBar behavior", () => {
     })
   })
 
-  it("disables submit when no sources selected and web fallback is off", () => {
+  it("disables submit when no sources selected and web fallback is off", async () => {
     state.query = "test query"
     state.settings.sources = []
     state.settings.enable_web_fallback = false
@@ -327,10 +342,12 @@ describe("SearchBar behavior", () => {
 
     const submit = screen.getByRole("button", { name: "Ask" })
     expect(submit).toBeDisabled()
-    expect(submit).toHaveAttribute(
-      "title",
-      "Select source categories or enable web fallback to search"
-    )
+    expect(submit).not.toHaveAttribute("title")
+
+    fireEvent.mouseEnter(submit.parentElement!)
+    expect(
+      await screen.findByText("Select source categories or enable web fallback to search")
+    ).toBeInTheDocument()
   })
 
   it("allows submit when no sources selected but web fallback is on", () => {

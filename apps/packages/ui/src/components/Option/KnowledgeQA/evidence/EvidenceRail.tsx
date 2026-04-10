@@ -150,7 +150,7 @@ export function EvidenceRail({
         id="knowledge-evidence-panel"
         className={cn(
           "hidden w-[400px] shrink-0 border-l border-border bg-surface/40 lg:block xl:w-[420px]",
-          "transition-all duration-300 animate-in slide-in-from-right",
+          "motion-safe:transition-all motion-safe:duration-300 motion-safe:animate-in motion-safe:slide-in-from-right motion-reduce:animate-none motion-reduce:transition-none",
           className
         )}
         aria-label="Evidence panel"
@@ -189,7 +189,7 @@ export function EvidenceRail({
             onClick={() => onOpenChange(false)}
             aria-label="Close evidence panel"
           />
-          <aside className="absolute right-0 top-0 h-full w-[88vw] max-w-md border-l border-border bg-surface shadow-xl transition-all duration-300 animate-in slide-in-from-right">
+          <aside className="absolute right-0 top-0 h-full w-[88vw] max-w-md border-l border-border bg-surface shadow-xl motion-safe:transition-all motion-safe:duration-300 motion-safe:animate-in motion-safe:slide-in-from-right motion-reduce:animate-none motion-reduce:transition-none">
             <EvidenceRailContent
               tab={tab}
               onOpenChange={onOpenChange}
