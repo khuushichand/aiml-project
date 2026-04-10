@@ -59,15 +59,16 @@ function loadSavedProfiles(): SearchProfile[] {
           typeof item === "object" &&
           item !== null &&
           typeof (item as SearchProfile).name === "string" &&
+          (item as SearchProfile).name.trim().length > 0 &&
           Array.isArray((item as SearchProfile).sources) &&
+          (item as SearchProfile).sources.every(
+            (source): source is RagSource =>
+              typeof source === "string" && VALID_SOURCE_KEYS.has(source)
+          ) &&
           typeof (item as SearchProfile).preset === "string" &&
           VALID_PRESET_KEYS.has((item as SearchProfile).preset) &&
           typeof (item as SearchProfile).enableWebFallback === "boolean"
       )
-      .map((profile) => ({
-        ...profile,
-        sources: profile.sources.filter((s) => VALID_SOURCE_KEYS.has(s)),
-      }))
       .slice(0, MAX_SAVED_PROFILES)
   } catch {
     return []
@@ -387,6 +388,12 @@ export function KnowledgeContextBar({
     preset === "custom"
       ? "Custom: Using your manually configured retrieval and generation settings."
       : presetDetail.summary
+  const countableScopeTotal =
+    (normalizedSources.includes("media_db") ? mediaOptions.length : 0) +
+    (normalizedSources.includes("notes") ? noteOptions.length : 0)
+  const hasOnlyCountableSources = normalizedSources.every(
+    (source) => source === "media_db" || source === "notes"
+  )
 
   const filteredMediaOptions = useMemo(() => {
     const query = granularQuery.trim().toLowerCase()
@@ -841,8 +848,8 @@ export function KnowledgeContextBar({
                   ? `Searching ${normalizedMediaIds.length + normalizedNoteIds.length} item${
                       normalizedMediaIds.length + normalizedNoteIds.length === 1 ? "" : "s"
                     }`
-                  : granularLoaded
-                    ? `${(normalizedSources.includes("media_db") ? mediaOptions.length : 0) + (normalizedSources.includes("notes") ? noteOptions.length : 0)} items in scope`
+                  : granularLoaded && hasOnlyCountableSources
+                    ? `${countableScopeTotal} items in scope`
                     : `${normalizedSources.length} of ${SOURCE_OPTIONS.length} categories selected`}
               </>
             )}
@@ -991,7 +998,7 @@ export function KnowledgeContextBar({
                   <button
                     type="button"
                     onClick={() => deleteProfile(profile.name)}
-                    className="invisible group-hover:visible focus:visible focus-visible:visible shrink-0 rounded p-0.5 text-text-muted hover:bg-danger/10 hover:text-danger transition-colors"
+                    className="invisible group-hover:visible group-focus-within:visible focus:visible focus-visible:visible shrink-0 rounded p-0.5 text-text-muted hover:bg-danger/10 hover:text-danger transition-colors"
                     aria-label={`Delete profile ${profile.name}`}
                     title="Delete profile"
                   >

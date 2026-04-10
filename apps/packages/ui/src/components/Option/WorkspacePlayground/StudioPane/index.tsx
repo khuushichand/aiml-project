@@ -1779,13 +1779,13 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
                                   onClick={(event) => {
                                     event.stopPropagation()
                                     if (!hasSelectedSources || isGeneratingOutput) return
-                                    handleGenerateOutput(artifact.type, {
+                                    void handleGenerateOutput(artifact.type, {
                                       mode: "replace",
                                       targetArtifactId: artifact.id
                                     })
                                   }}
                                   onKeyDown={handleIconButtonKeyDown}
-                                  className="rounded p-0.5 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="rounded p-0.5 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                                   aria-label={failedRetryLabel}
                                   data-testid={`studio-artifact-retry-${artifact.id}`}
                                 >
