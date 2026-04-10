@@ -17,7 +17,6 @@ import {
   Sparkles,
   Zap,
   GitBranch,
-  Shuffle,
   TrendingUp,
   Target,
   Scale
@@ -67,66 +66,115 @@ const strategyIcons: Record<string, React.ReactNode> = {
   mipro: <Target className="size-5" />,
   bootstrap: <TrendingUp className="size-5" />,
   genetic: <GitBranch className="size-5" />,
-  beam_search: <Shuffle className="size-5" />,
-  random_search: <Shuffle className="size-5" />
+  hyperparameter: <Scale className="size-5" />,
+  mcts: <Sparkles className="size-5" />
 }
 
-const defaultStrategies: StrategyInfo[] = [
-  {
-    name: "iterative",
+const STRATEGY_METADATA: Partial<Record<OptimizationStrategy, Omit<StrategyInfo, "name">>> = {
+  iterative: {
     display_name: "Iterative",
-    description: "Iteratively refine the prompt based on feedback",
+    description: "Refines the prompt over repeated evaluation and feedback cycles.",
     supported_params: ["max_iterations", "learning_rate"],
     default_params: { max_iterations: 10 },
     requires_test_cases: true,
     supports_early_stopping: true
   },
-  {
-    name: "mipro",
-    display_name: "MIPRO (Advanced Optimizer)",
-    description: "Systematically rewrites instructions across multiple rounds to find the best-performing version. Good for complex prompts.",
+  mipro: {
+    display_name: "MIPRO",
+    description: "Optimizes instruction wording across multiple evaluation rounds.",
     supported_params: ["max_iterations"],
     default_params: { max_iterations: 5 },
     requires_test_cases: true,
     supports_early_stopping: true
   },
-  {
-    name: "bootstrap",
-    display_name: "Bootstrap (Auto-generate examples)",
-    description: "Automatically generates example input/output pairs from your test cases to improve the prompt. Fast and simple.",
-    supported_params: ["max_iterations"],
-    default_params: { max_iterations: 3 },
+  bootstrap: {
+    display_name: "Bootstrap Few-Shot",
+    description: "Automatically selects the best examples from test runs for few-shot prompting.",
+    supported_params: ["num_examples", "selection_strategy"],
+    default_params: { num_examples: 5, selection_strategy: "best" },
     requires_test_cases: true,
     supports_early_stopping: false
   },
-  {
-    name: "genetic",
+  hyperparameter: {
+    display_name: "Hyperparameter Tuning",
+    description: "Optimizes model settings such as temperature and max_tokens.",
+    supported_params: ["params_to_optimize", "search_method"],
+    default_params: {},
+    requires_test_cases: true,
+    supports_early_stopping: false
+  },
+  genetic: {
     display_name: "Genetic Algorithm",
-    description: "Combines parts of different prompt variations and evolves them over generations. Explores widely but takes longer.",
-    supported_params: ["population_size", "max_iterations"],
-    default_params: { population_size: 10, max_iterations: 20 },
+    description: "Evolves prompt variants with mutation and crossover across generations.",
+    supported_params: ["population_size", "mutation_rate"],
+    default_params: { population_size: 10, mutation_rate: 0.1, max_iterations: 20 },
     requires_test_cases: true,
     supports_early_stopping: true
   },
-  {
-    name: "beam_search",
-    display_name: "Beam Search",
-    description: "Tests multiple prompt variations side-by-side and keeps the best performers. Balanced speed and quality.",
-    supported_params: ["beam_width", "max_iterations"],
-    default_params: { beam_width: 3, max_iterations: 10 },
-    requires_test_cases: true,
-    supports_early_stopping: true
-  },
-  {
-    name: "random_search",
-    display_name: "Random Search",
-    description: "Tries many random prompt rewrites and picks the best one. Simple but can miss subtle improvements.",
-    supported_params: ["max_iterations"],
+  mcts: {
+    display_name: "MCTS (Canary)",
+    description: "Searches prompt variants with Monte Carlo Tree Search over prompt sequences.",
+    supported_params: [
+      "mcts_simulations",
+      "mcts_max_depth",
+      "mcts_exploration_c",
+      "prompt_candidates_per_node",
+      "token_budget",
+      "ws_throttle_every"
+    ],
     default_params: { max_iterations: 20 },
     requires_test_cases: true,
     supports_early_stopping: false
   }
+}
+
+const defaultStrategyNames: OptimizationStrategy[] = [
+  "iterative",
+  "mipro",
+  "bootstrap",
+  "hyperparameter",
+  "genetic",
+  "mcts"
 ]
+
+const defaultStrategies: StrategyInfo[] = defaultStrategyNames.map((name) => ({
+  name,
+  ...STRATEGY_METADATA[name]
+})) as StrategyInfo[]
+
+const normalizeStrategyInfo = (strategy: any): StrategyInfo => {
+  const name = strategy?.name as OptimizationStrategy
+  const metadata = STRATEGY_METADATA[name]
+
+  return {
+    name,
+    display_name:
+      typeof strategy?.display_name === "string"
+        ? strategy.display_name
+        : metadata?.display_name ?? String(name ?? "strategy"),
+    description:
+      typeof strategy?.description === "string"
+        ? strategy.description
+        : metadata?.description ?? "",
+    supported_params: Array.isArray(strategy?.supported_params)
+      ? strategy.supported_params
+      : strategy?.parameters && typeof strategy.parameters === "object"
+        ? Object.keys(strategy.parameters)
+        : metadata?.supported_params ?? [],
+    default_params:
+      strategy?.default_params && typeof strategy.default_params === "object"
+        ? strategy.default_params
+        : metadata?.default_params ?? {},
+    requires_test_cases:
+      typeof strategy?.requires_test_cases === "boolean"
+        ? strategy.requires_test_cases
+        : metadata?.requires_test_cases ?? true,
+    supports_early_stopping:
+      typeof strategy?.supports_early_stopping === "boolean"
+        ? strategy.supports_early_stopping
+        : metadata?.supports_early_stopping ?? false
+  }
+}
 
 export const CreateOptimizationWizard: React.FC<
   CreateOptimizationWizardProps
@@ -168,8 +216,11 @@ export const CreateOptimizationWizard: React.FC<
     queryFn: () => getOptimizationStrategies(),
     enabled: open
   })
+  const strategyResponseItems = (strategiesResponse as any)?.data?.data
   const strategies: StrategyInfo[] =
-    (strategiesResponse as any)?.data?.data ?? defaultStrategies
+    Array.isArray(strategyResponseItems) && strategyResponseItems.length > 0
+      ? strategyResponseItems.map((strategy) => normalizeStrategyInfo(strategy))
+      : defaultStrategies
 
   // Create mutation
   const createMutation = useMutation({

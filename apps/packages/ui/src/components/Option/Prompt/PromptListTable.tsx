@@ -2,6 +2,7 @@ import React from "react"
 import { Table } from "antd"
 import type { TablePaginationConfig, TableProps } from "antd"
 import type { SorterResult } from "antd/es/table/interface"
+import { useTranslation } from "react-i18next"
 import {
   buildPromptTableColumns,
   type PromptTableColumnLabels
@@ -71,6 +72,8 @@ const parseSortFromSorter = (
 }
 
 export const PromptListTable: React.FC<PromptListTableProps> = (props) => {
+  const { t } = useTranslation(["settings", "common"])
+
   if (props.mode === "legacy") {
     const {
       isCompactViewport,
@@ -193,7 +196,10 @@ export const PromptListTable: React.FC<PromptListTableProps> = (props) => {
       {/* Screen reader announcement for selection changes */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {selectedIds.length > 0
-          ? `${selectedIds.length} prompt${selectedIds.length === 1 ? "" : "s"} selected`
+          ? t("managePrompts.table.selectionAnnouncement", {
+              defaultValue: "{{count}} prompt(s) selected",
+              count: selectedIds.length
+            })
           : ""}
       </div>
       <div className="overflow-x-auto pb-1" data-testid={scrollContainerTestId}>

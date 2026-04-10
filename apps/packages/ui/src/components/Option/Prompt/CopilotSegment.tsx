@@ -1,11 +1,22 @@
 import React from "react"
-import { Input, Select, Skeleton, Table, Tag, Tooltip } from "antd"
+import { Alert, Input, Select, Skeleton, Table, Tag, Tooltip } from "antd"
 import { Clipboard, Copy, Pen } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { tagColors } from "@/utils/color"
 import { usePromptWorkspace } from "./PromptWorkspaceProvider"
+
+const COPILOT_HELP_DISMISSED_KEY = "tldw-prompts-copilot-help-dismissed-v1"
+
+const readCopilotHelpVisibility = (): boolean => {
+  if (typeof window === "undefined") return true
+  try {
+    return window.localStorage.getItem(COPILOT_HELP_DISMISSED_KEY) !== "true"
+  } catch {
+    return true
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -47,6 +58,18 @@ export function CopilotSegment({
 }: CopilotSegmentProps) {
   const { isOnline, t } = usePromptWorkspace()
   const navigate = useNavigate()
+  const [showCopilotHelp, setShowCopilotHelp] = React.useState(
+    readCopilotHelpVisibility
+  )
+
+  const dismissCopilotHelp = React.useCallback(() => {
+    setShowCopilotHelp(false)
+    try {
+      window.localStorage.setItem(COPILOT_HELP_DISMISSED_KEY, "true")
+    } catch {
+      // Ignore storage failures in restricted browser modes.
+    }
+  }, [])
 
   if (!isOnline) {
     return (
@@ -74,6 +97,31 @@ export function CopilotSegment({
 
   return (
     <div>
+      {showCopilotHelp && (
+        <Alert
+          type="info"
+          showIcon
+          className="mb-3"
+          title={t("managePrompts.copilot.help.title", {
+            defaultValue: "Copilot prompts come from your connected server"
+          })}
+          description={t("managePrompts.copilot.help.description", {
+            defaultValue:
+              "These prompts are predefined templates from your tldw server. Unlike Custom prompts, they are managed centrally, but you can inspect, tweak, copy, or reuse them locally."
+          })}
+          action={
+            <button
+              type="button"
+              onClick={dismissCopilotHelp}
+              data-testid="copilot-help-dismiss"
+              className="text-xs text-primary hover:underline"
+            >
+              {t("common:dismiss", { defaultValue: "Dismiss" })}
+            </button>
+          }
+        />
+      )}
+
       {copilotStatus === "pending" && <Skeleton paragraph={{ rows: 8 }} />}
 
       {copilotStatus === "success" && Array.isArray(copilotData) && copilotData.length === 0 && (
@@ -149,7 +197,13 @@ export function CopilotSegment({
                   key: "key",
                   render: (content) => (
                     <span className="line-clamp-1">
-                      <Tag color={tagColors[content || "default"]}>
+                      <Tag
+                        color={
+                          tagColors[content || "default"] ??
+                          tagColors.default ??
+                          "blue"
+                        }
+                      >
                         {t(`common:copilot.${content}`)}
                       </Tag>
                     </span>

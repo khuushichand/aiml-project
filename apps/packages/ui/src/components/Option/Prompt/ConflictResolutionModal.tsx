@@ -58,17 +58,23 @@ const highlightDiffWords = (
   if (value === other) return value
 
   const wordsA = value.split(/(\s+)/)
-  const wordsB = new Set(other.split(/(\s+)/))
+  const wordCounts = new Map<string, number>()
+  for (const token of other.split(/(\s+)/)) {
+    if (/^\s+$/.test(token)) continue
+    wordCounts.set(token, (wordCounts.get(token) ?? 0) + 1)
+  }
 
   return wordsA.map((word, i) => {
     if (/^\s+$/.test(word)) return word
-    if (!wordsB.has(word)) {
+    const remainingMatches = wordCounts.get(word) ?? 0
+    if (remainingMatches === 0) {
       return (
         <span key={i} className={highlightClass}>
           {word}
         </span>
       )
     }
+    wordCounts.set(word, remainingMatches - 1)
     return word
   })
 }

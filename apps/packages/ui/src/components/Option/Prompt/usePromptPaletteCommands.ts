@@ -48,7 +48,7 @@ export function usePromptPaletteCommands(query = ""): CommandItem[] {
         includeDeleted: false
       }),
     enabled: isSearching && isOnline,
-    staleTime: 300
+    staleTime: 10_000
   })
 
   return useMemo(() => {
@@ -83,7 +83,7 @@ export function usePromptPaletteCommands(query = ""): CommandItem[] {
         description: (p.system_prompt || p.content || "").slice(0, 80),
         icon: createElement(NotebookPen, { className: "size-4" }),
         action: () => {
-          navigate(`/prompts?edit=${p.id}`)
+          navigate(`/prompts?prompt=${p.id}`)
         },
         category: "prompt" as const,
         keywords: [

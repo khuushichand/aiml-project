@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from "react"
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { useServerOnline } from "@/hooks/useServerOnline"
+import type { Prompt } from "@/db/dexie/types"
 import {
   getAllPrompts,
   getDeletedPrompts
@@ -31,9 +32,9 @@ export interface PromptWorkspaceContextValue {
   isCompactViewport: boolean
   selectedSegment: SegmentType
   setSelectedSegment: React.Dispatch<React.SetStateAction<SegmentType>>
-  data: any[] | undefined
+  data: Prompt[] | undefined
   dataStatus: "pending" | "error" | "success"
-  trashData: any[] | undefined
+  trashData: Prompt[] | undefined
   trashStatus: "pending" | "error" | "success"
   utils: ReturnType<typeof usePromptUtilities>
 }
@@ -116,6 +117,7 @@ export function PromptWorkspaceProvider({
       t,
       isCompactViewport,
       selectedSegment,
+      setSelectedSegment,
       data,
       dataStatus,
       trashData,

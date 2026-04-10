@@ -2,14 +2,15 @@ import React, { useMemo, useState } from "react"
 import { Input, Skeleton, Table, Tooltip } from "antd"
 import { AlertTriangle, Trash2, Undo2 } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+import type { Prompt } from "@/db/dexie/types"
 import {
   filterTrashPromptsByName,
   getTrashDaysRemaining,
   getTrashRemainingSeverity
 } from "./trash-prompts-utils"
 import { usePromptWorkspace } from "./PromptWorkspaceProvider"
-import { usePromptEditor } from "./hooks/usePromptEditor"
 import { usePromptBulkActions } from "./hooks/usePromptBulkActions"
+import { usePromptEditor } from "./hooks/usePromptEditor"
 import { usePromptSync } from "./hooks/usePromptSync"
 import type { PromptTableDensity } from "./PromptListTable"
 
@@ -19,65 +20,31 @@ import type { PromptTableDensity } from "./PromptListTable"
 
 export interface TrashSegmentProps {
   tableDensity: PromptTableDensity
+  sync: ReturnType<typeof usePromptSync>
+  editor: ReturnType<typeof usePromptEditor>
+  bulk: ReturnType<typeof usePromptBulkActions>
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TrashSegment({ tableDensity }: TrashSegmentProps) {
+export function TrashSegment({
+  tableDensity,
+  editor,
+  bulk
+}: TrashSegmentProps) {
   const {
     trashData,
     trashStatus,
-    queryClient,
-    isOnline,
     t,
     utils,
-    data
   } = usePromptWorkspace()
 
   const {
     confirmDanger,
-    guardPrivateMode,
     getPromptTexts,
-    getPromptKeywords,
-    getPromptRecordById,
-    isFireFoxPrivateMode
   } = utils
-
-  // ---- Segment-local hooks ----
-  // Initialization order matters: sync -> editor -> bulk (DAG dependency chain).
-  // editor.onEmptyTrashSuccess forward-references bulk via closure — safe because
-  // the callback is only invoked post-mount, after bulk is assigned.
-
-  const sync = usePromptSync({ queryClient, isOnline, t })
-
-  const editor = usePromptEditor({
-    queryClient,
-    isOnline,
-    t,
-    guardPrivateMode,
-    getPromptTexts,
-    getPromptKeywords,
-    getPromptRecordById,
-    confirmDanger,
-    syncPromptAfterLocalSave: sync.syncPromptAfterLocalSave,
-    onEmptyTrashSuccess: () => {
-      bulk.setTrashSelectedRowKeys([])
-    }
-  })
-
-  const bulk = usePromptBulkActions({
-    queryClient,
-    data,
-    isOnline,
-    isFireFoxPrivateMode,
-    t,
-    guardPrivateMode,
-    getPromptKeywords,
-    buildPromptUpdatePayload: editor.buildPromptUpdatePayload,
-    confirmDanger
-  })
 
   // ---- Local state ----
 
@@ -132,7 +99,12 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                       count: trashCount
                     }),
                     okText: t("managePrompts.trash.emptyTrash", { defaultValue: "Empty Trash" }),
-                    cancelText: t("common:cancel", { defaultValue: "Cancel" })
+                    cancelText: t("common:cancel", { defaultValue: "Cancel" }),
+                    requireExactText: "DELETE",
+                    requireExactTextLabel: t("managePrompts.trash.typeDeleteConfirm", {
+                      defaultValue: "Type DELETE to confirm:"
+                    }),
+                    requireExactTextPlaceholder: "DELETE"
                   })
                   if (!ok) return
                   editor.emptyTrashMutation()
@@ -219,7 +191,7 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                   title: t("managePrompts.columns.title"),
                   dataIndex: "title",
                   key: "title",
-                  render: (_: any, record: any) => (
+                  render: (_: unknown, record: Prompt) => (
                     <div className="flex max-w-64 flex-col">
                       <span className="line-clamp-1 font-medium text-text-muted">
                         {record?.name || record?.title}
@@ -237,7 +209,7 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                     defaultValue: "Prompt"
                   }),
                   key: "contentPreview",
-                  render: (_: any, record: any) => {
+                  render: (_: unknown, record: Prompt) => {
                     const { systemText, userText } = getPromptTexts(record)
                     const preview = (
                       userText ||
@@ -268,7 +240,7 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                   title: t("managePrompts.trash.deletedAt", { defaultValue: "Deleted" }),
                   key: "deletedAt",
                   width: 140,
-                  render: (_: any, record: any) => (
+                  render: (_: unknown, record: Prompt) => (
                     <span className="text-sm text-text-muted">
                       {formatDeletedAt(record.deletedAt)}
                     </span>
@@ -280,7 +252,7 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                   }),
                   key: "remaining",
                   width: 140,
-                  render: (_: any, record: any) => {
+                  render: (_: unknown, record: Prompt) => {
                     const remainingDays = getTrashDaysRemaining(record.deletedAt)
                     const severity = getTrashRemainingSeverity(remainingDays)
                     const className =
@@ -313,7 +285,7 @@ export function TrashSegment({ tableDensity }: TrashSegmentProps) {
                 {
                   title: t("managePrompts.columns.actions"),
                   width: 160,
-                  render: (_: any, record: any) => (
+                  render: (_: unknown, record: Prompt) => (
                     <div className="flex items-center gap-2">
                       <Tooltip title={t("managePrompts.trash.restore", { defaultValue: "Restore" })}>
                         <button

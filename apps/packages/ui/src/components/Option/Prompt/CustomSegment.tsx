@@ -87,19 +87,45 @@ const readSort = (): PromptSortState => {
     const orders: PromptSortOrder[] = ["ascend", "descend", null]
     if (!keys.includes(p?.key) || !orders.includes(p?.order)) return { key: null, order: null }
     return p
-  } catch { return { key: null, order: null } }
+  } catch {
+    return { key: null, order: null }
+  }
 }
+
 const readTableDensity = (): PromptTableDensity => {
   if (typeof window === "undefined") return "comfortable"
-  try { const r = window.localStorage.getItem(TABLE_DENSITY_KEY); return r === "compact" || r === "dense" || r === "comfortable" ? r : "comfortable" } catch { return "comfortable" }
+  try {
+    const storedValue = window.localStorage.getItem(TABLE_DENSITY_KEY)
+    return storedValue === "compact" || storedValue === "dense" || storedValue === "comfortable"
+      ? storedValue
+      : "comfortable"
+  } catch {
+    return "comfortable"
+  }
 }
+
 const readViewMode = (): PromptViewMode => {
   if (typeof window === "undefined") return "table"
-  try { const r = window.localStorage.getItem(VIEW_MODE_KEY); return r === "table" || r === "gallery" ? r : "table" } catch { return "table" }
+  try {
+    const storedValue = window.localStorage.getItem(VIEW_MODE_KEY)
+    return storedValue === "table" || storedValue === "gallery"
+      ? storedValue
+      : "table"
+  } catch {
+    return "table"
+  }
 }
+
 const readGalleryDensity = (): PromptGalleryDensity => {
   if (typeof window === "undefined") return "rich"
-  try { const r = window.localStorage.getItem(GALLERY_DENSITY_KEY); return r === "rich" || r === "compact" ? r : "rich" } catch { return "rich" }
+  try {
+    const storedValue = window.localStorage.getItem(GALLERY_DENSITY_KEY)
+    return storedValue === "rich" || storedValue === "compact"
+      ? storedValue
+      : "rich"
+  } catch {
+    return "rich"
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +148,11 @@ export interface CustomSegmentProps {
   bulkSelectionSyncRef?: React.RefObject<((ids: React.Key[]) => void) | null>
   /** Search input ref for keyboard shortcut "/" */
   searchInputRef: React.RefObject<InputRef | null>
+  onCopyPromptShareLink: (record: { serverId?: number | null }) => Promise<void>
+  sync: ReturnType<typeof usePromptSync>
+  editor: ReturnType<typeof usePromptEditor>
+  bulk: ReturnType<typeof usePromptBulkActions>
+  collections: ReturnType<typeof usePromptCollections>
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +170,11 @@ export function CustomSegment({
   onOpenBulkKeywordModal,
   bulkSelectionSyncRef,
   searchInputRef,
+  onCopyPromptShareLink,
+  sync,
+  editor,
+  bulk,
+  collections,
 }: CustomSegmentProps) {
   const {
     queryClient,
@@ -188,45 +224,22 @@ export function CustomSegment({
   const normalizedSearchText = debouncedSearchText.trim()
   const shouldUseServerSearch = isOnline && normalizedSearchText.length > 0
 
-  // ---- Segment-local hooks (DAG: sync -> editor -> bulk -> importExport -> collections) ----
-  const sync = usePromptSync({ queryClient, isOnline, t })
-
-  const editor = usePromptEditor({
-    queryClient,
-    isOnline,
-    t,
-    guardPrivateMode,
-    getPromptTexts,
-    getPromptKeywords,
-    getPromptRecordById,
-    confirmDanger,
-    syncPromptAfterLocalSave: sync.syncPromptAfterLocalSave,
-    onEmptyTrashSuccess: () => { bulk.setTrashSelectedRowKeys([]) }
-  })
-
-  const bulk = usePromptBulkActions({
-    queryClient,
-    data,
-    isOnline,
-    isFireFoxPrivateMode,
-    t,
-    guardPrivateMode,
-    getPromptKeywords,
-    buildPromptUpdatePayload: editor.buildPromptUpdatePayload,
-    confirmDanger
-  })
+  // ---- Segment-local hooks ----
+  // Shared editor/sync/bulk/collection state is owned by the orchestrator so the
+  // workspace only has one source of truth for mutations and selection state.
+  const setSelectedRowKeys = bulk.setSelectedRowKeys
 
   // Expose bulk selection setter so orchestrator can sync selection after shared bulk operations
   useEffect(() => {
     if (bulkSelectionSyncRef) {
-      (bulkSelectionSyncRef as React.MutableRefObject<((ids: React.Key[]) => void) | null>).current = bulk.setSelectedRowKeys
+      (bulkSelectionSyncRef as React.MutableRefObject<((ids: React.Key[]) => void) | null>).current = setSelectedRowKeys
     }
     return () => {
       if (bulkSelectionSyncRef) {
         (bulkSelectionSyncRef as React.MutableRefObject<((ids: React.Key[]) => void) | null>).current = null
       }
     }
-  }, [bulkSelectionSyncRef, bulk.setSelectedRowKeys])
+  }, [bulkSelectionSyncRef, setSelectedRowKeys])
 
   const importExport = usePromptImportExport({
     queryClient,
@@ -236,14 +249,6 @@ export function CustomSegment({
     guardPrivateMode,
     confirmDanger
   })
-
-  const collections = usePromptCollections({
-    queryClient,
-    isOnline,
-    t,
-    setSelectedRowKeys: bulk.setSelectedRowKeys
-  })
-
   // ---- Filtered data ----
   const filteredDataHook = usePromptFilteredData({
     data,
@@ -301,7 +306,7 @@ export function CustomSegment({
   // Clear selection for items no longer visible
   useEffect(() => {
     const visibleIds = new Set(sortedFilteredData.map((p: any) => p.id))
-    bulk.setSelectedRowKeys((prev) => {
+    setSelectedRowKeys((prev) => {
       const stillVisible = prev.filter((key) => visibleIds.has(key as string))
       if (stillVisible.length !== prev.length) {
         if (stillVisible.length < prev.length && prev.length > 0) {
@@ -311,7 +316,7 @@ export function CustomSegment({
       }
       return prev
     })
-  }, [sortedFilteredData, t, bulk])
+  }, [setSelectedRowKeys, sortedFilteredData, t])
 
   // ---- Callbacks ----
   const handleLoadFilterPreset = useCallback((preset: FilterPreset) => {
@@ -395,7 +400,7 @@ export function CustomSegment({
           onDelete={() => { if (promptRecord) void editor.handleDeletePrompt(promptRecord) }}
           onShareLink={
             row.serverId && promptRecord
-              ? () => { /* TODO: wire copyPromptShareLink */ }
+              ? () => { void onCopyPromptShareLink(promptRecord) }
               : undefined
           }
           onPushToServer={
@@ -421,7 +426,7 @@ export function CustomSegment({
         />
       )
     },
-    [getPromptRecordById, editor, onUsePromptInChat, onQuickTest, isFireFoxPrivateMode, isOnline, sync]
+    [editor, getPromptRecordById, isFireFoxPrivateMode, isOnline, onCopyPromptShareLink, onQuickTest, onUsePromptInChat, sync]
   )
 
   const customPromptsLoading = status === "pending" || (shouldUseServerSearch && serverSearchStatus === "pending")
