@@ -41,6 +41,13 @@ This review covers the current full Writing module in the workspace, centered on
 
 The review includes route parity, API shape compatibility, capability handshake behavior, stateful session/template/theme flows, manuscript CRUD and reorder behavior, analysis and wordcloud behavior, editor integration, import/export paths, and the test coverage that defends those behaviors.
 
+Because the full Writing surface is large, execution should prioritize the highest-risk paths first rather than attempting a file-by-file sweep of every Writing utility. The highest-priority surfaces are:
+
+- shared Writing entrypoints, shell, store, and service layers
+- backend stateful Writing and manuscript routes plus their direct persistence boundaries
+- cross-surface parity guards and contract-heavy tests
+- auxiliary utility modules only when they participate in a concrete workflow, a failing guard, or a candidate finding
+
 ## Non-Goals
 
 This review does not cover:
@@ -117,6 +124,7 @@ Inspect:
 - shared UI component boundaries and state ownership
 - Writing store and service layers
 - backend endpoint and schema contracts
+- auth, dependency, and rate-limit boundaries on the Writing backend routes
 - parity guards and route-level tests
 
 Primary questions:
@@ -124,6 +132,7 @@ Primary questions:
 - do the web and extension surfaces rely on the shared Writing module consistently?
 - do service and store assumptions match backend request and response shapes?
 - are capability, mode, and route assumptions consistent across surfaces?
+- are auth, dependency, and rate-limit protections consistent with the exposed Writing behavior?
 
 ### Pass 2: Stateful workflow pass
 
@@ -164,7 +173,8 @@ Inspect and run only the highest-value tests needed to answer concrete questions
 - backend pytest slices under `tldw_Server_API/tests/Writing/`
 - Writing-specific shared UI tests under `apps/packages/ui/src/components/Option/WritingPlayground/__tests__/`
 - route/store/service tests in the shared UI package
-- Writing parity and the smallest meaningful Writing e2e tests
+- Writing parity guards and route-level tests before any heavier end-to-end execution
+- the smallest meaningful Writing e2e tests only when a candidate finding cannot be settled by local code reading plus narrower tests, and only when the relevant harness is already runnable
 - Bandit on the Writing backend scope if code changes are later made as follow-up remediation
 
 Primary questions:
@@ -172,6 +182,7 @@ Primary questions:
 - which risky paths are already covered versus weakly defended?
 - do executed tests confirm the suspected behavior or reveal blind spots?
 - which remaining unknowns need to stay labeled as open questions?
+- if a heavier verification path is unavailable or too expensive for this review, is that blind spot stated explicitly instead of silently skipped?
 
 ## Review Criteria
 
@@ -208,6 +219,7 @@ The final review output should be organized as:
 Each finding should include:
 
 - severity (`High`, `Medium`, or `Low`)
+- confidence (`Confirmed` or `Probable`)
 - type (`correctness`, `security`, `performance`, `maintainability`, `parity`, or `test gap`)
 - impact
 - concrete reasoning
@@ -226,6 +238,7 @@ Each finding should include:
 - Large Writing files and duplicated logic are not findings by themselves unless they create drift, defects, or material maintenance risk.
 - Tests and code both matter, but passing tests do not override contradictory code evidence.
 - Targeted verification is required, but broad blanket suites are out of scope.
+- The review should not devolve into a blanket sweep of every Writing helper or test file. Lower-level utilities and heavier e2e suites are only pulled in when they support a concrete workflow, guard contract, or candidate finding.
 
 ## Success Criteria
 
