@@ -404,8 +404,8 @@ export function usePromptSync(deps: UsePromptSyncDeps) {
               task,
               error:
                 result.error ||
-                t("managePrompts.notification.someError", {
-                  defaultValue: "Something went wrong."
+                t("managePrompts.notification.syncError", {
+                  defaultValue: "Sync failed. Check your server connection and try again."
                 })
             })
           }
@@ -414,8 +414,8 @@ export function usePromptSync(deps: UsePromptSyncDeps) {
             task,
             error:
               error?.message ||
-              t("managePrompts.notification.someError", {
-                defaultValue: "Something went wrong."
+              t("managePrompts.notification.syncError", {
+                defaultValue: "Sync failed. Check your server connection and try again."
               })
           })
         }

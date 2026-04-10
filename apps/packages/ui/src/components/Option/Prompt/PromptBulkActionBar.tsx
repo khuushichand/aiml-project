@@ -27,6 +27,8 @@ export const PromptBulkActionBar: React.FC<PromptBulkActionBarProps> = (props) =
   if (props.mode === "legacy") {
     return (
       <div
+        role="toolbar"
+        aria-label="Bulk actions"
         data-testid={props.testId || "prompts-bulk-action-bar-legacy"}
         className={
           props.className ||
@@ -54,6 +56,8 @@ export const PromptBulkActionBar: React.FC<PromptBulkActionBarProps> = (props) =
 
   return (
     <div
+      role="toolbar"
+      aria-label="Bulk actions"
       data-testid="prompts-bulk-action-bar-scaffold"
       className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/10 p-2"
     >
