@@ -447,6 +447,20 @@ class FlashcardsModule(BaseModule):
             raise ValueError("ChaChaNotes DB path not available in context")
         return CharactersRAGDB(db_path=chacha_path, client_id=f"mcp_flashcards_{self.config.name}")
 
+    def _workspace_id_from_context(self, context: Any | None) -> str | None:
+        metadata = getattr(context, "metadata", None) or {}
+        workspace_id = metadata.get("workspace_id")
+        if workspace_id is None:
+            return None
+        text = str(workspace_id).strip()
+        return text or None
+
+    def _assert_card_workspace(self, card: dict[str, Any] | None, workspace_id: str | None) -> None:
+        if workspace_id is None or card is None:
+            return
+        if str(card.get("workspace_id") or "").strip() != workspace_id:
+            raise PermissionError("Flashcard access denied for workspace")
+
     # Decks
 
     async def _list_decks(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -516,8 +530,10 @@ class FlashcardsModule(BaseModule):
     def _list_cards_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             cards = db.list_flashcards(
                 deck_id=args.get("deck_id"),
+                workspace_id=workspace_id,
                 include_workspace_items=True,
                 tag=args.get("tag"),
                 due_status=args.get("due_status", "all"),
@@ -529,6 +545,7 @@ class FlashcardsModule(BaseModule):
             )
             count = db.count_flashcards(
                 deck_id=args.get("deck_id"),
+                workspace_id=workspace_id,
                 include_workspace_items=True,
                 tag=args.get("tag"),
                 due_status=args.get("due_status", "all"),
@@ -557,7 +574,9 @@ class FlashcardsModule(BaseModule):
     def _get_card_sync(self, context: Any, card_uuid: str) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
             if not card:
                 raise ValueError(f"Card not found: {card_uuid}")
             return {"card": card}
@@ -647,6 +666,15 @@ class FlashcardsModule(BaseModule):
             updates = args.get("updates", {})
             expected_version = args.get("expected_version")
             tags = args.get("tags")
+            workspace_id = self._workspace_id_from_context(context)
+
+            card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
+
+            if "deck_id" in updates and workspace_id is not None:
+                destination_deck = db.get_deck(updates["deck_id"])
+                if destination_deck is None or str(destination_deck.get("workspace_id") or "").strip() != workspace_id:
+                    raise PermissionError("Flashcard access denied for workspace")
 
             # Handle model_type changes
             if "model_type" in updates:
@@ -679,6 +707,10 @@ class FlashcardsModule(BaseModule):
         try:
             card_uuid = args.get("card_uuid")
             expected_version = args.get("expected_version")
+            workspace_id = self._workspace_id_from_context(context)
+
+            card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
             success = db.soft_delete_flashcard(card_uuid, expected_version)
             if not success:
                 raise ValueError(f"Card not found or version conflict: {card_uuid}")
@@ -702,6 +734,10 @@ class FlashcardsModule(BaseModule):
             card_uuid = args.get("card_uuid")
             rating = args.get("rating")
             answer_time_ms = args.get("answer_time_ms")
+            workspace_id = self._workspace_id_from_context(context)
+
+            card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
             result = db.review_flashcard(
                 card_uuid=card_uuid,
                 rating=rating,
@@ -724,6 +760,10 @@ class FlashcardsModule(BaseModule):
         try:
             card_uuid = args.get("card_uuid")
             tags = args.get("tags", [])
+            workspace_id = self._workspace_id_from_context(context)
+
+            card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
             # Normalize tags
             norm_tags = [t.strip().lower() for t in tags if t.strip()][:50]
             success = db.set_flashcard_tags(card_uuid, norm_tags)
@@ -743,6 +783,9 @@ class FlashcardsModule(BaseModule):
         db = self._open_db(context)
         try:
             card_uuid = args.get("card_uuid")
+            workspace_id = self._workspace_id_from_context(context)
+            card = db.get_flashcard(card_uuid)
+            self._assert_card_workspace(card, workspace_id)
             keywords = db.get_keywords_for_flashcard(card_uuid)
             tags = [str(kw.get("keyword", "")).lower() for kw in keywords if kw.get("keyword")]
             return {"card_uuid": card_uuid, "tags": tags}
@@ -760,6 +803,7 @@ class FlashcardsModule(BaseModule):
     def _export_cards_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             deck_id = args.get("deck_id")
             tag = args.get("tag")
             q = args.get("q")
@@ -772,6 +816,7 @@ class FlashcardsModule(BaseModule):
                 from ....Flashcards.apkg_exporter import export_apkg_from_rows
                 items = db.list_flashcards(
                     deck_id=deck_id,
+                    workspace_id=workspace_id,
                     include_workspace_items=True,
                     tag=tag,
                     q=q,
@@ -794,6 +839,7 @@ class FlashcardsModule(BaseModule):
             delimiter = "\t" if fmt == "tsv" else ","
             csv_bytes = db.export_flashcards_csv(
                 deck_id=deck_id,
+                workspace_id=workspace_id,
                 include_workspace_items=True,
                 tag=tag,
                 q=q,

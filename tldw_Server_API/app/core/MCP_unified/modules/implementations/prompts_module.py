@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from ....DB_Management.Prompts_DB import PromptsDatabase
+from ...persona_scope import assert_identifier_in_scope
 from ..base import BaseModule, create_tool_definition
 from ..disk_space import get_free_disk_space_gb
 
@@ -201,6 +202,7 @@ class PromptsModule(BaseModule):
                 row = db.get_prompt_by_name(ident)
             if not row:
                 raise ValueError(f"Prompt not found: {ident}")
+            assert_identifier_in_scope(context, "prompt_id", row.get("id"), label="Prompt")
             desc = row.get("details") or ""
             meta = {
                 "id": row.get("id"),

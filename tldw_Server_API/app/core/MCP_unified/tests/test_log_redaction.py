@@ -1,8 +1,15 @@
+from types import SimpleNamespace
+
 import pytest
 from loguru import logger
 
 from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, MCPRequest, RequestContext
 from tldw_Server_API.app.core.MCP_unified.server import MCPServer
+
+
+def _ensure(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
 
 
 @pytest.mark.asyncio
@@ -14,7 +21,7 @@ async def test_protocol_error_log_redacts_tokens():
     proto.handlers["ping"] = boom
 
     captured = []
-    sink_id = logger.add(lambda m: captured.append(m.record.get("message", "")), level="DEBUG")
+    sink_id = logger.add(lambda m: captured.append(str(m)), level="DEBUG")
     try:
         req = MCPRequest(method="ping", id="redact1")
         ctx = RequestContext(request_id="r", user_id="u", client_id="c")
@@ -27,10 +34,92 @@ async def test_protocol_error_log_redacts_tokens():
 
     # Ensure masked in logs
     text = "\n".join(str(x) for x in captured)
-    assert "Bearer ****" in text
-    assert "token=****" in text
-    assert "refresh_token=****" in text
-    assert "mysecret" not in text and "secret.token" not in text and "abc" not in text
+    _ensure("Bearer ****" in text, f"Bearer token was not redacted in logs: {text!r}")
+    _ensure("token=****" in text, f"Token parameter was not redacted in logs: {text!r}")
+    _ensure("refresh_token=****" in text, f"Refresh token was not redacted in logs: {text!r}")
+    _ensure(
+        "mysecret" not in text and "secret.token" not in text and "abc" not in text,
+        f"Secret values leaked into logs: {text!r}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_protocol_generic_handler_exception_returns_masked_internal_error():
+    proto = MCPProtocol()
+
+    async def boom(params, context):
+        raise Exception("Authorization: Bearer secret.token token=mysecret")
+
+    proto.handlers["ping"] = boom
+    response = await proto.process_request(
+        MCPRequest(method="ping", id="redact2"),
+        RequestContext(request_id="r2", user_id="u", client_id="c"),
+    )
+
+    _ensure(response.error is not None, f"Expected error response, got: {response!r}")
+    _ensure(response.error.message == "Internal error", f"Unexpected error payload: {response!r}")
+
+
+@pytest.mark.asyncio
+async def test_protocol_secret_bearing_noncritical_exception_returns_internal_error_in_debug_mode(monkeypatch):
+    proto = MCPProtocol()
+
+    async def boom(params, context):
+        raise RuntimeError("Authorization: Bearer secret.token token=mysecret")
+
+    proto.handlers["ping"] = boom
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.protocol.get_config",
+        lambda: SimpleNamespace(debug_mode=True),
+    )
+    captured = []
+    sink_id = logger.add(lambda m: captured.append(str(m)), level="DEBUG")
+
+    try:
+        response = await proto.process_request(
+            MCPRequest(method="ping", id="redact3"),
+            RequestContext(request_id="r3", user_id="u", client_id="c"),
+        )
+    finally:
+        logger.remove(sink_id)
+
+    _ensure(response.error is not None, f"Expected error response, got: {response!r}")
+    _ensure(response.error.message == "Internal error", f"Unexpected error payload: {response!r}")
+    text = "\n".join(captured)
+    _ensure("secret.token" not in text and "mysecret" not in text, f"Secret values leaked into runtime error logs: {text!r}")
+
+
+@pytest.mark.asyncio
+async def test_protocol_secret_bearing_prespan_exception_returns_internal_error_in_debug_mode(monkeypatch):
+    proto = MCPProtocol()
+
+    async def ping(params, context):
+        return {"ok": True}
+
+    async def boom_auth(request, context):
+        raise RuntimeError("Authorization: Bearer secret.token token=mysecret")
+
+    proto.handlers["ping"] = ping
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.MCP_unified.protocol.get_config",
+        lambda: SimpleNamespace(debug_mode=True),
+    )
+    monkeypatch.setattr(proto, "_check_authorization", boom_auth)
+    captured = []
+    sink_id = logger.add(lambda m: captured.append(str(m)), level="DEBUG")
+
+    try:
+        response = await proto.process_request(
+            MCPRequest(method="ping", id="redact4"),
+            RequestContext(request_id="r4", user_id="u", client_id="c"),
+        )
+    finally:
+        logger.remove(sink_id)
+
+    _ensure(response.error is not None, f"Expected error response, got: {response!r}")
+    _ensure(response.error.message == "Internal error", f"Unexpected error payload: {response!r}")
+    text = "\n".join(captured)
+    _ensure("secret.token" not in text and "mysecret" not in text, f"Secret values leaked into prespan logs: {text!r}")
 
 
 class FakeWebSocket:
@@ -85,7 +174,13 @@ async def test_server_ws_auth_debug_log_redacts_tokens(monkeypatch):
 
     text = "\n".join(str(x) for x in captured)
     # Expect debug log line with masked tokens
-    assert "MCP JWT auth failed" in text
-    assert "Bearer ****" in text
-    assert "token=****" in text and "refresh_token=****" in text
-    assert "supersecrettoken" not in text and "mytok" not in text and "abc" not in text
+    _ensure("MCP JWT auth failed" in text, f"Missing websocket auth failure log: {text!r}")
+    _ensure("Bearer ****" in text, f"Bearer token was not redacted in websocket logs: {text!r}")
+    _ensure(
+        "token=****" in text and "refresh_token=****" in text,
+        f"Token parameters were not redacted in websocket logs: {text!r}",
+    )
+    _ensure(
+        "supersecrettoken" not in text and "mytok" not in text and "abc" not in text,
+        f"Secret websocket auth values leaked into logs: {text!r}",
+    )

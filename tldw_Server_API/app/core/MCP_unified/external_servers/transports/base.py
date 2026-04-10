@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+import inspect
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -75,6 +76,15 @@ class ExternalMCPTransportAdapter(ABC):
         runtime_auth: BrokeredExternalCredential | None = None,
     ) -> ExternalToolCallResult:
         """Execute a tool on the external server and normalize the result."""
+
+
+def adapter_supports_runtime_auth(adapter: ExternalMCPTransportAdapter) -> bool:
+    """Return whether an adapter's call contract accepts runtime auth injection."""
+    try:
+        params = inspect.signature(adapter.call_tool).parameters
+    except (TypeError, ValueError):
+        return True
+    return "runtime_auth" in params
 
 
 def clone_external_server_config(
