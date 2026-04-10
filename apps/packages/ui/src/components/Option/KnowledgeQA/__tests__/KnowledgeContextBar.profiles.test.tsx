@@ -282,6 +282,25 @@ describe("KnowledgeContextBar saved search profiles", () => {
       // The invalid entries should not appear
       expect(screen.queryByText("123")).not.toBeInTheDocument()
     })
+
+    it("drops profiles with unknown preset or source values", () => {
+      localStorage.setItem(
+        PROFILES_STORAGE_KEY,
+        JSON.stringify([
+          { name: "Valid", sources: ["media_db", "notes"], preset: "fast", enableWebFallback: true },
+          { name: "Bad preset", sources: ["media_db"], preset: "turbo", enableWebFallback: true },
+          { name: "Bad source", sources: ["media_db", "archive"], preset: "balanced", enableWebFallback: false },
+        ])
+      )
+
+      renderContextBar()
+
+      openProfileMenu()
+
+      expect(screen.getByRole("menuitem", { name: /Valid/i })).toBeInTheDocument()
+      expect(screen.queryByRole("menuitem", { name: /Bad preset/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole("menuitem", { name: /Bad source/i })).not.toBeInTheDocument()
+    })
   })
 
   // -----------------------------------------------------------------------

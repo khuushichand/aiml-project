@@ -154,7 +154,10 @@ export const DictionaryPreviewPanel: React.FC<DictionaryPreviewPanelProps> = ({
           <div className="text-xs font-medium text-text">
             <LabelWithHelp
               label={t("option:dictionariesTools.tokenBudgetLabel", "Processing limit")}
-              help="Maximum amount of text processed. Leave empty for no limit."
+              help={t(
+                "option:dictionariesTools.tokenBudgetHelp",
+                "Maximum amount of text processed. Leave empty for no limit."
+              )}
             />
           </div>
           <InputNumber
@@ -170,7 +173,10 @@ export const DictionaryPreviewPanel: React.FC<DictionaryPreviewPanelProps> = ({
           <div className="text-xs font-medium text-text">
             <LabelWithHelp
               label={t("option:dictionariesTools.maxIterationsLabel", "Max passes")}
-              help="Number of passes over the text. Usually 1 is enough. Increase if rules can trigger other rules."
+              help={t(
+                "option:dictionariesTools.maxIterationsHelp",
+                "Number of passes over the text. Usually 1 is enough. Increase if rules can trigger other rules."
+              )}
             />
           </div>
           <InputNumber

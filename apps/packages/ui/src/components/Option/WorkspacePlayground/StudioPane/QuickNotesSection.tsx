@@ -315,6 +315,15 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
     }
   }, [])
 
+  useEffect(() => {
+    if (!currentNote.isDirty) return
+    if (savedIndicatorTimerRef.current) {
+      clearTimeout(savedIndicatorTimerRef.current)
+      savedIndicatorTimerRef.current = null
+    }
+    setShowSavedIndicator(false)
+  }, [currentNote.isDirty])
+
   // Parse keywords from input
   const parseKeywords = (input: string): string[] =>
     normalizeKeywords(input.split(","))

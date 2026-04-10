@@ -377,6 +377,12 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     expect(
       await screen.findByText("Quick assign: Accessible Dictionary")
     ).toBeInTheDocument()
+
+    await closeTopMostModal(user)
+
+    await waitFor(() => {
+      expect(overflowButton).toHaveFocus()
+    })
   }, 60000)
 
   it("opens statistics modal via compact dropdown", async () => {
@@ -396,6 +402,12 @@ describe("DictionariesManager accessibility stage-2 focus management", () => {
     expect(
       await screen.findByText("Dictionary Statistics", {}, { timeout: 15000 })
     ).toBeInTheDocument()
+
+    await closeTopMostModal(user)
+
+    await waitFor(() => {
+      expect(overflowButton).toHaveFocus()
+    })
   }, 90000)
 
   it("returns focus to entry edit trigger after closing nested Edit Entry modal", async () => {

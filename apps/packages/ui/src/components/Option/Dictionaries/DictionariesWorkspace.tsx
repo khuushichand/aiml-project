@@ -94,7 +94,11 @@ export const DictionariesWorkspace: React.FC = () => {
             rel="noopener noreferrer"
             className="text-xs text-text-muted hover:text-text underline"
           >
-            Learn more about dictionaries
+            {translateMessage(
+              t,
+              "option:dictionariesEmpty.learnMore",
+              "Learn more about dictionaries"
+            )}
           </a>
         </div>
         <DictionariesManager />

@@ -11,7 +11,6 @@ type DictionaryFormModalProps = {
   onFinish: (values: any) => void
   submitLabel: string
   submitLoading: boolean
-  tokenBudgetHelp: string
   includeActiveField?: boolean
 }
 
@@ -23,7 +22,6 @@ export const DictionaryFormModal: React.FC<DictionaryFormModalProps> = ({
   onFinish,
   submitLabel,
   submitLoading,
-  tokenBudgetHelp,
   includeActiveField = false
 }) => {
   return (

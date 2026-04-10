@@ -514,6 +514,7 @@ describe("DictionariesManager accessibility stage-3", () => {
       name: "Advanced options"
     })
     expect(advancedToggle).toHaveAttribute("aria-expanded", "false")
+    expect(advancedToggle).toHaveAttribute("aria-controls")
 
     await user.click(advancedToggle)
 
@@ -523,6 +524,11 @@ describe("DictionariesManager accessibility stage-3", () => {
         "true"
       )
     })
+
+    const expandedToggle = screen.getByRole("button", { name: "Simple mode" })
+    const advancedPanelId = expandedToggle.getAttribute("aria-controls")
+    expect(advancedPanelId).toBeTruthy()
+    expect(document.getElementById(advancedPanelId || "")).not.toBeNull()
   }, 60000)
 
   it("keeps status icon color tokens at WCAG AA non-text contrast on light/dark surfaces", () => {

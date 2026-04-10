@@ -58,7 +58,6 @@ const DictionaryFormModalHarness: React.FC<DictionaryFormModalHarnessProps> = ({
       onFinish={onFinish}
       submitLabel={submitLabel}
       submitLoading={false}
-      tokenBudgetHelp="Budget help"
       includeActiveField={includeActiveField}
     />
   )

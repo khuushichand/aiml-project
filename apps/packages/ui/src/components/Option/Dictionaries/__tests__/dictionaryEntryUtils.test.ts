@@ -106,6 +106,11 @@ describe("humanizeRegexError", () => {
     expect(humanizeRegexError("Something weird happened"))
       .toBe("Something weird happened")
   })
+
+  it("does not over-match unrelated words that contain 'lone'", () => {
+    expect(humanizeRegexError("alone"))
+      .toBe("alone")
+  })
 })
 
 describe("humanizeValidationCode", () => {

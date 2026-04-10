@@ -93,7 +93,9 @@ export const DictionaryValidationPanel: React.FC<DictionaryValidationPanelProps>
                             {err?.message || String(err)}
                             {err?.field ? ` (${err.field})` : ""}
                             {humanized.fix && (
-                              <span className="block text-text-muted mt-0.5">Tip: {humanized.fix}</span>
+                              <span className="block text-text-muted mt-0.5">
+                                {t("option:dictionariesTools.tipLabel", "Tip")}: {humanized.fix}
+                              </span>
                             )}
                           </>
                         )
@@ -134,7 +136,9 @@ export const DictionaryValidationPanel: React.FC<DictionaryValidationPanelProps>
                             {warn?.message || String(warn)}
                             {warn?.field ? ` (${warn.field})` : ""}
                             {humanized.fix && (
-                              <span className="block text-text-muted mt-0.5">Tip: {humanized.fix}</span>
+                              <span className="block text-text-muted mt-0.5">
+                                {t("option:dictionariesTools.tipLabel", "Tip")}: {humanized.fix}
+                              </span>
                             )}
                           </>
                         )

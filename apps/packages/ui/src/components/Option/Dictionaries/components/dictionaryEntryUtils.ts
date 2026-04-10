@@ -44,7 +44,7 @@ const REGEX_ERROR_PATTERNS: Array<{ pattern: RegExp; message: string; fix: strin
     fix: "Use a valid escape like \\d (digit), \\w (word), or \\s (space).",
   },
   {
-    pattern: /unmatched|lone/i,
+    pattern: /(?:^|[\s:])(unmatched|lone)(?=$|[\s:)\]}])/i,
     message: "A bracket or parenthesis is not properly paired.",
     fix: "Check that every opening ( [ { has a matching closing ) ] }.",
   },

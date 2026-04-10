@@ -258,11 +258,14 @@ const QuickNotesSection = React.lazy(() =>
   }))
 )
 
-const renderArtifactModalContent = (node: React.ReactNode) => (
+const renderArtifactModalContent = (
+  node: React.ReactNode,
+  loadingLabel: string
+) => (
   <Suspense
     fallback={
       <div className="flex min-h-[200px] items-center justify-center text-sm text-text-muted">
-        Loading output viewer...
+        {loadingLabel}
       </div>
     }
   >
@@ -822,7 +825,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       Modal.info({
         title: artifact.title,
         content: renderArtifactModalContent(
-          <MindMapArtifactViewer title={artifact.title} content={artifact.content} />
+          <MindMapArtifactViewer title={artifact.title} content={artifact.content} />,
+          t("playground:studio.loadingOutputViewer", "Loading output viewer...")
         ),
         ...responsiveModalProps(960),
         footer: null,
@@ -835,7 +839,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
       Modal.info({
         title: artifact.title,
         content: renderArtifactModalContent(
-          <DataTableArtifactViewer title={artifact.title} content={artifact.content} />
+          <DataTableArtifactViewer title={artifact.title} content={artifact.content} />,
+          t("playground:studio.loadingOutputViewer", "Loading output viewer...")
         ),
         ...responsiveModalProps(980),
         footer: null,
@@ -868,7 +873,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               )
               modal.destroy()
             }}
-          />
+          />,
+          t("playground:studio.loadingOutputViewer", "Loading output viewer...")
         ),
         ...responsiveModalProps(820),
         footer: null,
@@ -901,7 +907,8 @@ export const StudioPane: React.FC<StudioPaneProps> = ({ onHide }) => {
               )
               modal.destroy()
             }}
-          />
+          />,
+          t("playground:studio.loadingOutputViewer", "Loading output viewer...")
         ),
         ...responsiveModalProps(860),
         footer: null,

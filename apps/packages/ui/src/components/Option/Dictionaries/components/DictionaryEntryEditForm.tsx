@@ -29,17 +29,21 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
   normalizeProbabilityValue,
   formatProbabilityFrequencyHint,
 }) => {
-  // Evaluates on mount only — safe because the edit panel uses destroyOnClose,
-  // so the form component is recreated each time a different entry is opened.
+  const advancedOptionsPanelId = React.useId()
+  const watchedProbability = Form.useWatch("probability", form)
+  const watchedGroup = Form.useWatch("group", form)
+  const watchedMaxReplacements = Form.useWatch("max_replacements", form)
+  const watchedTimedEffects = Form.useWatch("timed_effects", form)
+  const watchedCaseSensitive = Form.useWatch("case_sensitive", form)
+
   const hasNonDefaultAdvancedValues = React.useMemo(() => {
-    const values = form.getFieldsValue(true)
-    const prob = values?.probability
-    const group = values?.group
-    const maxReplacements = values?.max_replacements
-    const sticky = values?.timed_effects?.sticky
-    const cooldown = values?.timed_effects?.cooldown
-    const delay = values?.timed_effects?.delay
-    const caseSensitive = values?.case_sensitive
+    const prob = watchedProbability
+    const group = watchedGroup
+    const maxReplacements = watchedMaxReplacements
+    const sticky = watchedTimedEffects?.sticky
+    const cooldown = watchedTimedEffects?.cooldown
+    const delay = watchedTimedEffects?.delay
+    const caseSensitive = watchedCaseSensitive
     return (
       (typeof prob === "number" && prob !== 1) ||
       (typeof group === "string" && group.trim() !== "") ||
@@ -49,7 +53,13 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
       (typeof delay === "number" && delay > 0) ||
       caseSensitive === true
     )
-  }, [form])
+  }, [
+    watchedCaseSensitive,
+    watchedGroup,
+    watchedMaxReplacements,
+    watchedProbability,
+    watchedTimedEffects,
+  ])
 
   const [advancedMode, setAdvancedMode] = React.useState(hasNonDefaultAdvancedValues)
 
@@ -121,12 +131,13 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
         className="flex items-center gap-1 text-xs text-text-muted hover:text-text mb-2"
         onClick={() => setAdvancedMode((prev) => !prev)}
         aria-expanded={advancedMode}
+        aria-controls={advancedOptionsPanelId}
       >
         {advancedMode ? "Simple mode" : "Advanced options"}
         {advancedMode ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       </button>
       {advancedMode && (
-        <>
+        <div id={advancedOptionsPanelId}>
           <Form.Item
             name="probability"
             label={
@@ -250,7 +261,7 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
             valuePropName="checked">
             <Switch checkedChildren="On" unCheckedChildren="Off" />
           </Form.Item>
-        </>
+        </div>
       )}
       <Button type="primary" htmlType="submit" loading={updatingEntry} className="w-full">
         Save Changes
