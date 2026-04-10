@@ -229,6 +229,8 @@ There must be one shutdown authority for factory-managed SQLite pools:
 - the named cache stores references to canonical shared backends but does not independently own them
 - centralized shutdown must close each canonical shared SQLite backend once, then clear both the registry and any named references that point at those backends
 
+The factory should also snapshot the effective SQLite config when creating a managed shared backend, rather than keeping a caller-owned mutable `DatabaseConfig` object by reference. The planner should treat the normalized SQLite target and effective SQLite policy as immutable backend identity once the shared backend is created.
+
 ### Wrapper and helper classes
 
 Responsible for:
@@ -252,6 +254,8 @@ For the first wave, the intended behavior is:
 - `MediaDbFactory.close()` stops closing a shared SQLite pool directly and instead delegates to factory-managed release or centralized reset
 - `CollectionsDatabase.close()` stops calling `pool.close_all()` for factory-managed SQLite backends
 - `CharactersRAGDB` retains its connection-local rollback, checkpoint, and thread-local cleanup while avoiding direct shutdown of a factory-managed shared SQLite pool
+
+Cross-wrapper compatibility must also account for same-thread connection sharing. For callers that use `backend.get_pool().get_connection()`, a shared SQLite backend may imply one underlying SQLite connection per backend per thread. The planner must treat this as an explicit compatibility constraint, not an incidental detail, and validate it before broadening reuse across helper classes that currently assume wrapper-local connection isolation.
 
 ### Reset and shutdown paths
 
@@ -342,6 +346,7 @@ The reset contract must also be explicit about cache ordering:
 ### Cross-wrapper regression tests
 
 - one direct helper path and one media path can both resolve the same underlying SQLite backend safely when pointed at the same normalized target
+- two wrappers on the same thread that share a canonical SQLite backend do not corrupt each other's transaction or connection state, or the implementation explicitly limits reuse for wrappers that require connection isolation
 
 ## Rollout Plan
 
@@ -356,6 +361,8 @@ The reset contract must also be explicit about cache ordering:
 - A too-narrow signature could reduce reuse and preserve some churn.
 - Missing one direct close path could allow one wrapper to shut down a shared pool unexpectedly.
 - Over-simplifying wrapper teardown into a no-op could remove required local cleanup even when shared-pool ownership is correct.
+- Same-thread wrappers that share one backend may also share one pooled SQLite connection, which can couple transaction state if compatibility is not validated explicitly.
+- Holding a caller-owned mutable `DatabaseConfig` object inside a canonical shared backend could allow later config mutation to alter shared backend behavior unexpectedly.
 - Resetting shared SQLite backends without a graceful eviction path could break in-flight requests during runtime reconfiguration.
 - Test helpers that assume per-instance teardown may need small updates to use centralized reset.
 
