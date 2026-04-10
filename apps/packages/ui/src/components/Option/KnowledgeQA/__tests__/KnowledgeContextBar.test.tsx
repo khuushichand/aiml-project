@@ -52,7 +52,7 @@ describe("KnowledgeContextBar", () => {
 
     expect(
       screen.getByText(
-        "Quick lookup with minimal retrieval and rerank depth. Speed: Fastest. Coverage: Lower. Best for: Fact checks and quick lookups."
+        "Quick lookup with minimal retrieval and rerank depth. Response time: Fastest. Sources checked: Fewer. Best for: Fact checks and quick lookups."
       )
     ).toBeInTheDocument()
 
@@ -79,7 +79,7 @@ describe("KnowledgeContextBar", () => {
 
     expect(
       screen.getByText(
-        "Exhaustive retrieval plus extra verification steps. Speed: Slowest. Coverage: Highest. Best for: High-confidence synthesis."
+        "Exhaustive retrieval plus extra verification steps. Response time: Slower. Sources checked: Most thorough. Best for: High-confidence synthesis."
       )
     ).toBeInTheDocument()
   })
@@ -108,7 +108,7 @@ describe("KnowledgeContextBar", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: /Sources:/i }))
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Docs & Media" }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Documents & Media/ }))
 
     expect(onSourcesChange).toHaveBeenCalledWith(["media_db"])
   })
@@ -149,7 +149,7 @@ describe("KnowledgeContextBar", () => {
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
   })
 
-  it("adds Docs & Media to source scope when selecting a granular media filter", async () => {
+  it("adds Documents & Media to source scope when selecting a granular media filter", async () => {
     vi.mocked(tldwClient.listMedia).mockResolvedValueOnce({
       items: [{ id: 42, title: "Quarterly Planning Doc", type: "pdf" }],
     })
@@ -187,7 +187,7 @@ describe("KnowledgeContextBar", () => {
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([42])
   })
 
-  it("clears granular media filters when Docs & Media is removed from source scope", () => {
+  it("clears granular media filters when Documents & Media is removed from source scope", () => {
     const onSourcesChange = vi.fn()
     const onIncludeMediaIdsChange = vi.fn()
 
@@ -213,7 +213,7 @@ describe("KnowledgeContextBar", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: /Sources:/i }))
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Docs & Media" }))
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Documents & Media/ }))
 
     expect(onSourcesChange).toHaveBeenCalledWith([])
     expect(onIncludeMediaIdsChange).toHaveBeenCalledWith([])
