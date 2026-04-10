@@ -16,7 +16,6 @@ import asyncio
 import atexit
 import base64
 import hashlib
-import hmac
 import json
 import os
 import threading
@@ -1219,7 +1218,16 @@ def get_cache_key(
     if backend_identity:
         key_parts.append(backend_identity)
     key_string = "|".join(key_parts)
-    return hmac.new(_embedding_cache_key_secret(), key_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        key_string.encode("utf-8"),
+        _embedding_cache_key_secret(),
+        _EMBEDDING_CACHE_KEY_PBKDF2_ITERATIONS,
+        dklen=32,
+    ).hex()
+
+
+_EMBEDDING_CACHE_KEY_PBKDF2_ITERATIONS = 2048
 
 
 @lru_cache(maxsize=1)

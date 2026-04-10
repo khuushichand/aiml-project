@@ -144,6 +144,13 @@ def _sanitize_webhook_error_detail(result: dict[str, Any]) -> tuple[int, dict[st
     return status_code, {"status": status_value, "error": error_code}
 
 
+def _sanitize_webhook_success_result(result: dict[str, Any]) -> dict[str, str]:
+    return {
+        "status": "accepted",
+        "task_id": str(result.get("task_id") or ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Inbound webhook endpoint (NO AUTH -- uses HMAC)
 # ---------------------------------------------------------------------------
@@ -168,7 +175,7 @@ async def receive_webhook(trigger_id: str, request: Request) -> dict[str, Any]:
         status_code, safe_detail = _sanitize_webhook_error_detail(result)
         raise HTTPException(status_code=status_code, detail=safe_detail)
 
-    return result
+    return _sanitize_webhook_success_result(result)
 
 
 # ---------------------------------------------------------------------------
