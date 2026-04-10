@@ -3,7 +3,7 @@
 Date: 2026-04-09
 Status: Approved for planning
 Owner: Codex brainstorming session
-Supersedes: `docs/superpowers/specs/2026-04-06-sqlite-backend-log-noise-design.md`
+Supersedes: `Docs/superpowers/specs/2026-04-06-sqlite-backend-log-noise-design.md`
 
 ## Summary
 
@@ -132,6 +132,13 @@ The SQLite signature should include:
 - normalized SQLite target
 - effective SQLite settings that materially affect connection behavior
 
+For the current implementation, the planning assumption is:
+
+- include `sqlite_wal_mode`
+- include `sqlite_foreign_keys`
+- do not include non-functional correlation fields such as `client_id`
+- do not include settings the current SQLite backend does not use to shape connection behavior, such as `pool_size` or `echo`
+
 The signature should use normalized file paths or canonical SQLite URIs so logically identical configurations converge on one key.
 
 ### 2. Normalize SQLite identity before lookup
@@ -145,6 +152,14 @@ Normalization should distinguish:
 - SQLite file URIs
 
 It should preserve meaningful differences but collapse trivial textual ones such as equivalent absolute paths.
+
+In-memory policy must be explicit:
+
+- raw `:memory:` remains per-construction and is excluded from shared reuse
+- anonymous in-memory targets that only preserve process-local isolation semantics are also excluded from shared reuse
+- explicit named shared-cache memory URIs may participate in reuse, but only when their normalized URI identity matches exactly
+
+This keeps the new registry from breaking the current use of `:memory:` as a test and helper isolation boundary.
 
 ### 3. Change ownership from local to centralized
 
@@ -187,6 +202,8 @@ Responsible for:
 - managed backend release bookkeeping
 - centralized bulk shutdown of managed backends
 
+The new SQLite registry should coexist with the existing named backend cache in [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py), not create a second competing ownership model. `get_backend(name, ...)` may still cache named handles, but when it resolves a SQLite backend it should land on the same canonical shared backend instance used by direct `create_backend(...)` callers.
+
 ### Wrapper and helper classes
 
 Responsible for:
@@ -195,6 +212,14 @@ Responsible for:
 - treating returned SQLite backends as shared unless explicitly injected otherwise
 - releasing or ignoring shared backend cleanup locally
 - keeping their existing schema/setup behavior
+
+The first wave of ownership updates should be limited to the paths already confirmed to own or close SQLite resources directly:
+
+- `MediaDbSession.release_context_connection()` and `MediaDbFactory.close()` in [session.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/media_db/runtime/session.py)
+- `CollectionsDatabase.close()` in [Collections_DB.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/Collections_DB.py)
+- the `CharactersRAGDB` close and pool-shutdown path in [ChaChaNotes_DB.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py)
+
+Other direct factory callers such as `Watchlists_DB`, `UserDatabase_v2`, and scheduler-adjacent wrappers remain in scope for compatibility review, but they do not need to be part of the first ownership-migration slice unless they are confirmed to close managed shared pools directly.
 
 ### Reset and shutdown paths
 
@@ -275,9 +300,9 @@ should close each managed backend once and clear the registry. Existing wrapper 
 ## Rollout Plan
 
 1. Add the shared SQLite registry and canonical signature logic in [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py) with focused unit tests.
-2. Update the most visible wrapper ownership paths to stop directly closing managed shared SQLite pools.
+2. Update the first-wave ownership paths to stop directly closing managed shared SQLite pools: media runtime session/factory cleanup, `CollectionsDatabase.close()`, and the `CharactersRAGDB` close path.
 3. Verify the media DB request path still behaves correctly under cache hits, cache resets, and test isolation.
-4. Sweep remaining direct SQLite factory callers in `DB_Management` for ownership compatibility.
+4. Sweep remaining direct SQLite factory callers in `DB_Management` for ownership compatibility. The exit criterion is not “every caller changed,” but “every caller reviewed, and only callers that directly close or invalidate a factory-managed SQLite pool changed.”
 
 ## Risks
 
