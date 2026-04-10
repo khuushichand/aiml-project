@@ -564,7 +564,7 @@ export function CommandPalette({
       setSelectedIndex(0)
       setTimeout(() => inputRef.current?.focus(), 0)
     }
-  }, [open])
+  }, [open, onQueryChange])
 
   // Scroll selected item into view
   useEffect(() => {

@@ -7,9 +7,11 @@ Pydantic, and caches them in memory for fast access by API endpoints.
 from __future__ import annotations
 
 from pathlib import Path
+from threading import RLock
 
 import yaml
 from loguru import logger
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
     ArchetypeSummary,
@@ -18,6 +20,7 @@ from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
 
 # Module-level cache
 _CACHE: dict[str, ArchetypeTemplate] = {}
+_CACHE_LOCK = RLock()
 
 
 def load_archetypes_from_directory(
@@ -42,12 +45,16 @@ def load_archetypes_from_directory(
     dict[str, ArchetypeTemplate]
         Mapping of archetype *key* to its validated template.
     """
-    _CACHE.clear()
+    global _CACHE
 
     dir_path = Path(directory)
+    new_cache: dict[str, ArchetypeTemplate] = {}
+
     if not dir_path.is_dir():
+        with _CACHE_LOCK:
+            _CACHE = new_cache
         logger.warning("Archetype directory does not exist: {}", dir_path)
-        return _CACHE
+        return new_cache.copy()
 
     yaml_files = sorted(dir_path.glob("*.yaml"))
     for yaml_file in yaml_files:
@@ -60,19 +67,26 @@ def load_archetypes_from_directory(
                 )
                 continue
             template = ArchetypeTemplate(**data["archetype"])
-            _CACHE[template.key] = template
+            new_cache[template.key] = template
             logger.debug("Loaded archetype '{}' from {}", template.key, yaml_file.name)
-        except Exception:
+        except (OSError, ValidationError, yaml.YAMLError):
             logger.opt(exception=True).warning(
                 "Skipping malformed archetype file: {}", yaml_file.name
             )
 
-    logger.info("Loaded {} archetype(s) from {}", len(_CACHE), dir_path)
-    return _CACHE
+    with _CACHE_LOCK:
+        _CACHE = new_cache
+        snapshot = dict(_CACHE)
+
+    logger.info("Loaded {} archetype(s) from {}", len(snapshot), dir_path)
+    return snapshot
 
 
 def list_archetypes() -> list[ArchetypeSummary]:
     """Return a summary (key, label, tagline, icon) of all cached archetypes."""
+    with _CACHE_LOCK:
+        values = list(_CACHE.values())
+
     return [
         ArchetypeSummary(
             key=t.key,
@@ -80,10 +94,11 @@ def list_archetypes() -> list[ArchetypeSummary]:
             tagline=t.tagline,
             icon=t.icon,
         )
-        for t in _CACHE.values()
+        for t in values
     ]
 
 
 def get_archetype(key: str) -> ArchetypeTemplate | None:
     """Return the cached archetype identified by *key*, or ``None``."""
-    return _CACHE.get(key)
+    with _CACHE_LOCK:
+        return _CACHE.get(key)

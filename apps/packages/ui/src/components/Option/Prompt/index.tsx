@@ -79,15 +79,19 @@ function PromptBodyInner() {
   const urlState = usePromptUrlState()
   const searchInputRef = useRef<InputRef | null>(null)
   const deepLinkProcessedRef = useRef(false)
+  const activeSegmentRef = useRef(selectedSegment)
   // Holds the selected IDs from CustomSegment when bulk keyword modal opens
   const bulkKeywordTargetIdsRef = useRef<string[]>([])
   // Ref to CustomSegment's bulk selection setter for syncing after shared bulk ops
   const customSegmentSelectionSyncRef = useRef<((ids: React.Key[]) => void) | null>(null)
 
-  // ---- Hooks for orchestrator-level concerns ----
-  // (Sync and editor are needed here for deep-link handling and modal wiring.
-  //  CustomSegment also instantiates its own sync/editor — this is intentional;
-  //  the orchestrator's instances are for deep-link + shared modal callbacks only.)
+  useEffect(() => {
+    activeSegmentRef.current = selectedSegment
+  }, [selectedSegment])
+
+  // ---- Shared workspace state ----
+  // Keep mutation, modal, and selection state centralized here so the
+  // orchestrator and segment components operate on the same hook instances.
 
   const sync = usePromptSync({ queryClient, isOnline, t })
   const editor = usePromptEditor({
@@ -95,7 +99,7 @@ function PromptBodyInner() {
     guardPrivateMode, getPromptTexts, getPromptKeywords, getPromptRecordById,
     confirmDanger,
     syncPromptAfterLocalSave: sync.syncPromptAfterLocalSave,
-    onEmptyTrashSuccess: () => {}
+    onEmptyTrashSuccess: () => { bulk.setTrashSelectedRowKeys([]) }
   })
   const bulk = usePromptBulkActions({
     queryClient, data, isOnline, isFireFoxPrivateMode, t,
@@ -167,6 +171,7 @@ function PromptBodyInner() {
     if (status !== "success" || !Array.isArray(data)) return
 
     deepLinkProcessedRef.current = true
+    const triggerSegment = selectedSegment
     const openPromptDrawer = (promptRecord: any) => {
       urlState.clearPromptParam()
       editor.setEditId(promptRecord.id)
@@ -232,6 +237,17 @@ function PromptBodyInner() {
             (item: any) => item?.id === syncResult.localId || item?.serverId === parsedServerPromptId
           )
           if (imported) {
+            if (activeSegmentRef.current !== triggerSegment) {
+              notification.info({
+                message: t("managePrompts.notification.sharedPromptImportSkipped", {
+                  defaultValue: "Shared prompt imported"
+                }),
+                description: t("managePrompts.notification.sharedPromptImportSkippedDesc", {
+                  defaultValue: "The prompt was imported, but the drawer stayed closed because you switched tabs."
+                })
+              })
+              return
+            }
             notification.success({ message: t("managePrompts.notification.sharedPromptImported", { defaultValue: "Shared prompt imported" }) })
             openPromptDrawer(imported)
           }
@@ -248,7 +264,7 @@ function PromptBodyInner() {
     }
     notification.warning({ message: t("managePrompts.notification.promptNotFound", { defaultValue: "Prompt not found" }),
       description: t("managePrompts.notification.promptNotFoundDesc", { defaultValue: "The requested prompt could not be found. It may have been deleted." }) })
-  }, [urlState.prompt, data, status, isOnline, queryClient, t, editor, urlState])
+  }, [urlState.prompt, data, status, isOnline, queryClient, t, editor, urlState, selectedSegment])
 
   // ---- Deep-link: ?edit= / ?new= ----
   useEffect(() => {
@@ -458,6 +474,11 @@ function PromptBodyInner() {
                 }}
                 bulkSelectionSyncRef={customSegmentSelectionSyncRef}
                 searchInputRef={searchInputRef}
+                onCopyPromptShareLink={copyPromptShareLink}
+                sync={sync}
+                editor={editor}
+                bulk={bulk}
+                collections={collections}
               />
             )}
             {selectedSegment === "copilot" && (
@@ -486,7 +507,12 @@ function PromptBodyInner() {
               </Suspense>
             )}
             {selectedSegment === "trash" && (
-              <TrashSegment tableDensity="comfortable" />
+              <TrashSegment
+                tableDensity="comfortable"
+                sync={sync}
+                editor={editor}
+                bulk={bulk}
+              />
             )}
           </div>
         </div>
