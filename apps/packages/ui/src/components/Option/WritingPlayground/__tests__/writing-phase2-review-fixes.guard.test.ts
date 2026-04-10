@@ -31,9 +31,21 @@ describe("Writing Phase 2 review fixes", () => {
     expect(source).toContain("disabled={!newCharName.trim() || !isOnline}")
     expect(source).toContain("disabled={!newWorldName.trim() || !isOnline}")
     expect(source).toContain("disabled={!newPlotTitle.trim() || !isOnline}")
-    expect(source).toContain("onPressEnter={() => isOnline && newCharName.trim() && addCharMutation.mutate(newCharName.trim())}")
-    expect(source).toContain("onPressEnter={() => isOnline && newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}")
-    expect(source).toContain("onPressEnter={() => isOnline && newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}")
+    expect(source).toContain("onPressEnter={() => isOnline && newCharName.trim() && !addCharMutation.isPending && addCharMutation.mutate(newCharName.trim())}")
+    expect(source).toContain("onPressEnter={() => isOnline && newWorldName.trim() && !addWorldMutation.isPending && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}")
+    expect(source).toContain("onPressEnter={() => isOnline && newPlotTitle.trim() && !addPlotMutation.isPending && addPlotMutation.mutate(newPlotTitle.trim())}")
+  })
+
+  it("gives icon-only manuscript controls accessible names", () => {
+    const source = readCharacterWorldSource()
+
+    expect(source).toContain('aria-label="New character name"')
+    expect(source).toContain('aria-label="Add character"')
+    expect(source).toContain('aria-label="World info kind"')
+    expect(source).toContain('aria-label="New world info entry name"')
+    expect(source).toContain('aria-label="Add world info entry"')
+    expect(source).toContain('aria-label="New plot line title"')
+    expect(source).toContain('aria-label="Add plot line"')
   })
 
   it("styles citation marks with theme variables instead of hardcoded blues", () => {

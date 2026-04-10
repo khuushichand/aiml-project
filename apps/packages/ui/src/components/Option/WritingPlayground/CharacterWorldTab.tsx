@@ -143,6 +143,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
             <Input
               size="small"
               placeholder="Character name..."
+              aria-label="New character name"
               value={newCharName}
               onChange={(e) => setNewCharName(e.target.value)}
               onPressEnter={() => isOnline && newCharName.trim() && !addCharMutation.isPending && addCharMutation.mutate(newCharName.trim())}
@@ -151,6 +152,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               size="small"
               type="primary"
               icon={<Plus className="h-3 w-3" />}
+              aria-label="Add character"
               disabled={!newCharName.trim() || !isOnline}
               loading={addCharMutation.isPending}
               onClick={() => isOnline && addCharMutation.mutate(newCharName.trim())}
@@ -186,11 +188,13 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               value={newWorldKind}
               onChange={setNewWorldKind}
               options={Object.entries(KIND_LABELS).map(([k, v]) => ({ value: k, label: v }))}
+              aria-label="World info kind"
               className="!w-24"
             />
             <Input
               size="small"
               placeholder="Entry name..."
+              aria-label="New world info entry name"
               value={newWorldName}
               onChange={(e) => setNewWorldName(e.target.value)}
               onPressEnter={() => isOnline && newWorldName.trim() && !addWorldMutation.isPending && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
@@ -200,6 +204,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               size="small"
               type="primary"
               icon={<Plus className="h-3 w-3" />}
+              aria-label="Add world info entry"
               disabled={!newWorldName.trim() || !isOnline}
               loading={addWorldMutation.isPending}
               onClick={() => isOnline && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}
@@ -233,6 +238,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
               <Input
                 size="small"
                 placeholder="Plot line title..."
+                aria-label="New plot line title"
                 value={newPlotTitle}
                 onChange={(e) => setNewPlotTitle(e.target.value)}
                 onPressEnter={() => isOnline && newPlotTitle.trim() && !addPlotMutation.isPending && addPlotMutation.mutate(newPlotTitle.trim())}
@@ -241,6 +247,7 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
                 size="small"
                 type="primary"
                 icon={<Plus className="h-3 w-3" />}
+                aria-label="Add plot line"
                 disabled={!newPlotTitle.trim() || !isOnline}
                 loading={addPlotMutation.isPending}
                 onClick={() => isOnline && addPlotMutation.mutate(newPlotTitle.trim())}
