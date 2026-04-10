@@ -30,7 +30,6 @@ _SHARE_AUDIT_STATE_TABLE = "share_audit_state"
 _SHARE_AUDIT_SEQUENCE_KEY = "compatibility_id_seq"
 _RESERVED_METADATA_KEYS = {
     "compatibility_id",
-    "legacy_share_audit_id",
     "owner_user_id",
     "actor_user_id",
     "share_id",
@@ -355,6 +354,53 @@ class UnifiedShareAuditWriter:
             metadata=payload,
         )
 
+    async def import_legacy_event(
+        self,
+        *,
+        legacy_share_audit_id: int | None = None,
+        legacy_audit_id: int | None = None,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+        owner_user_id: int,
+        actor_user_id: int | None = None,
+        share_id: int | None = None,
+        token_id: int | None = None,
+        metadata: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        result: str = "success",
+        created_at: Any = None,
+    ) -> int | None:
+        legacy_id = legacy_share_audit_id
+        if legacy_id is None:
+            legacy_id = legacy_audit_id
+        elif legacy_audit_id is not None and legacy_audit_id != legacy_id:
+            raise ValueError(
+                "legacy_share_audit_id and legacy_audit_id must match when both are provided"
+            )
+        if legacy_id is None:
+            raise TypeError("legacy_share_audit_id is required")
+
+        compatibility_id = await self._write_event_transaction(
+            event_type=event_type,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            share_id=share_id,
+            token_id=token_id,
+            metadata=metadata,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            result=result,
+            compatibility_id=legacy_id,
+            legacy_share_audit_id=legacy_id,
+            timestamp=created_at,
+            event_id=_legacy_event_id(legacy_id),
+        )
+        return compatibility_id
+
     async def _write_event_transaction(
         self,
         *,
@@ -487,6 +533,7 @@ class UnifiedShareAuditWriter:
 
         query = f"""
             SELECT
+                event_id,
                 timestamp,
                 event_type,
                 tenant_user_id,
@@ -549,6 +596,7 @@ class UnifiedShareAuditWriter:
 
         return {
             "id": compatibility_id,
+            "event_id": row.get("event_id"),
             "event_type": str(row.get("event_type") or ""),
             "actor_user_id": actor_user_id,
             "resource_type": row.get("resource_type"),

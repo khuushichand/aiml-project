@@ -59,8 +59,49 @@ async def test_share_audit_backfill_is_idempotent(repo, sharing_db, tmp_path):
     assert report1.max_legacy_id == legacy_id
     assert report2.inserted == 0
     assert compatibility_ids == [legacy_id]
+    assert rows[0]["event_id"] == f"share-audit-legacy-{legacy_id}"
     assert rows[0]["created_at"] == legacy_created_at
+    assert rows[0]["metadata"]["legacy_share_audit_id"] == legacy_id
     assert sorted(row["id"] for row in after_rows) == [legacy_id, legacy_id + 1]
+
+
+@pytest.mark.asyncio
+async def test_share_audit_legacy_import_replay_is_skipped(repo, tmp_path):
+    from tldw_Server_API.app.core.Sharing.unified_share_audit import UnifiedShareAuditWriter
+
+    shared_audit_path = tmp_path / "audit_shared.db"
+    writer = UnifiedShareAuditWriter(db_path=str(shared_audit_path))
+    await writer.initialize()
+    try:
+        inserted_id = await writer.import_legacy_event(
+            legacy_share_audit_id=7,
+            event_type="share.created",
+            resource_type="workspace",
+            resource_id="ws-1",
+            owner_user_id=1,
+            actor_user_id=2,
+            share_id=5,
+            metadata={"scope_type": "team"},
+            created_at="2026-04-09T19:00:00+00:00",
+        )
+        replay_id = await writer.import_legacy_event(
+            legacy_share_audit_id=7,
+            event_type="share.created",
+            resource_type="workspace",
+            resource_id="ws-1",
+            owner_user_id=1,
+            actor_user_id=2,
+            share_id=5,
+            metadata={"scope_type": "team"},
+            created_at="2026-04-09T19:00:00+00:00",
+        )
+        rows = await writer.query_events(owner_user_id=1)
+    finally:
+        await writer.stop()
+
+    assert inserted_id == 7
+    assert replay_id is None
+    assert len(rows) == 1
 
 
 @pytest.mark.asyncio

@@ -30,7 +30,10 @@ from loguru import logger
 from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventType,
+    MandatoryAuditWriteError,
+)
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
@@ -2423,6 +2426,41 @@ def _build_assistant_message_payload(
     return message_payload
 
 
+async def write_mandatory_moderation_audit(
+    *,
+    audit_service: Any | None,
+    audit_context: Any | None,
+    audit_event_type: Any | None,
+    action: str,
+    result: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Write a moderation audit event and fail closed if persistence is unavailable."""
+    if audit_service is None or audit_context is None:
+        raise MandatoryAuditWriteError("Mandatory audit persistence unavailable")
+
+    try:
+        await audit_service.log_event(
+            event_type=audit_event_type or AuditEventType.SECURITY_VIOLATION,
+            context=audit_context,
+            action=action,
+            result=result,
+            metadata=metadata,
+        )
+        await audit_service.flush(raise_on_failure=True)
+    except MandatoryAuditWriteError:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Mandatory moderation audit write failed for {} ({}): {}",
+            action,
+            result,
+            exc,
+            exc_info=True,
+        )
+        raise MandatoryAuditWriteError("Mandatory audit persistence unavailable") from exc
+
+
 async def moderate_input_messages(
     request_data: Any,
     request: Any,
@@ -2604,20 +2642,14 @@ async def moderate_input_messages(
 
         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
-        try:
-            if audit_service and audit_context:
-                _schedule_background_task(
-                    audit_service.log_event(
-                        event_type=audit_event_type,
-                        context=audit_context,
-                        action="moderation.input",
-                        result=("failure" if resolved_action == "block" else "success"),
-                        metadata={"phase": "input", "action": resolved_action, "pattern": sample},
-                    ),
-                    task_name="chat.moderation.input.audit",
-                )
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
+        await write_mandatory_moderation_audit(
+            audit_service=audit_service,
+            audit_context=audit_context,
+            audit_event_type=audit_event_type,
+            action="moderation.input",
+            result=("failure" if resolved_action == "block" else "success"),
+            metadata={"phase": "input", "action": resolved_action, "pattern": sample},
+        )
 
         if resolved_action == "block":
             block_detail = "Input violates moderation policy"
@@ -2648,6 +2680,8 @@ async def moderate_input_messages(
                             if isinstance(current, str):
                                 part.text = await _moderate_text_in_place(current)
     except HTTPException:
+        raise
+    except MandatoryAuditWriteError:
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation input processing error: {e}")
@@ -4210,7 +4244,7 @@ async def execute_streaming_call(
 
             from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
 
-            pending_audit_tasks: list[asyncio.Task[Any]] = []
+            mandatory_moderation_audit_tasks: list[asyncio.Task[Any]] = []
             stream_id = _uuid.uuid4().hex
             chunk_seq = 0
 
@@ -4243,6 +4277,28 @@ async def execute_streaming_call(
                 out = stream_holdback
                 stream_holdback = ""
                 return out
+
+            async def _await_mandatory_moderation_audits() -> None:
+                if not mandatory_moderation_audit_tasks:
+                    return
+                results = await asyncio.gather(
+                    *mandatory_moderation_audit_tasks,
+                    return_exceptions=True,
+                )
+                failures = [result for result in results if isinstance(result, BaseException)]
+                if not failures:
+                    return
+                for failure in failures:
+                    logger.error(
+                        "Mandatory moderation audit task failed for {}: {}",
+                        final_conversation_id,
+                        failure,
+                        exc_info=True,
+                    )
+                raise StopStreamWithError(
+                    message="Mandatory audit persistence unavailable",
+                    error_type="audit_persistence_failure",
+                ) from failures[0]
 
             def _out_transform(s: str) -> str:
                 nonlocal chunk_seq
@@ -4331,52 +4387,46 @@ async def execute_streaming_call(
                     if not stream_mod_state["block_logged"]:
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                        try:
-                            if audit_service and audit_context:
-                                _schedule_background_task(
-                                    audit_service.log_event(
-                                        event_type=AuditEventType.SECURITY_VIOLATION,
-                                        context=audit_context,
-                                        action="moderation.output",
-                                        result="failure",
-                                        metadata={
-                                            "phase": "output",
-                                            "streaming": True,
-                                            "action": "block",
-                                            "pattern": sample,
-                                        },
-                                    ),
-                                    task_name="chat.streaming.output.block.audit",
-                                    pending_tasks=pending_audit_tasks,
+                        mandatory_moderation_audit_tasks.append(
+                            asyncio.create_task(
+                                write_mandatory_moderation_audit(
+                                    audit_service=audit_service,
+                                    audit_context=audit_context,
+                                    audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                                    action="moderation.output",
+                                    result="failure",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "block",
+                                        "pattern": sample,
+                                    },
                                 )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
+                            )
+                        )
                         stream_mod_state["block_logged"] = True
                     raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
                 if resolved_action == "redact":
                     if not stream_mod_state["redact_logged"]:
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                        try:
-                            if audit_service and audit_context:
-                                _schedule_background_task(
-                                    audit_service.log_event(
-                                        event_type=AuditEventType.SECURITY_VIOLATION,
-                                        context=audit_context,
-                                        action="moderation.output",
-                                        result="success",
-                                        metadata={
-                                            "phase": "output",
-                                            "streaming": True,
-                                            "action": "redact",
-                                            "pattern": sample,
-                                        },
-                                    ),
-                                    task_name="chat.streaming.output.redact.audit",
-                                    pending_tasks=pending_audit_tasks,
+                        mandatory_moderation_audit_tasks.append(
+                            asyncio.create_task(
+                                write_mandatory_moderation_audit(
+                                    audit_service=audit_service,
+                                    audit_context=audit_context,
+                                    audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                                    action="moderation.output",
+                                    result="success",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "redact",
+                                        "pattern": sample,
+                                    },
                                 )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
+                            )
+                        )
                         stream_mod_state["redact_logged"] = True
                     redacted_out = (
                         redacted_combined
@@ -4429,6 +4479,7 @@ async def execute_streaming_call(
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
+                before_success_callback=_await_mandatory_moderation_audits,
                 system_message_id=system_message_id,
                 continuation_metadata=normalized_continuation_metadata,
             )
@@ -4440,8 +4491,8 @@ async def execute_streaming_call(
                         stream_tracker.add_chunk()
                     yield chunk
             finally:
-                if pending_audit_tasks:
-                    await asyncio.gather(*pending_audit_tasks, return_exceptions=True)
+                if mandatory_moderation_audit_tasks:
+                    await asyncio.gather(*mandatory_moderation_audit_tasks, return_exceptions=True)
 
     streaming_generator = tracked_streaming_generator()
 
@@ -5059,9 +5110,10 @@ async def execute_non_stream_call(
                         pass
                     try:
                         if audit_service and audit_context:
-                            await audit_service.log_event(
-                                event_type=AuditEventType.SECURITY_VIOLATION,
-                                context=audit_context,
+                            await write_mandatory_moderation_audit(
+                                audit_service=audit_service,
+                                audit_context=audit_context,
+                                audit_event_type=AuditEventType.SECURITY_VIOLATION,
                                 action="moderation.output",
                                 result="success",
                                 metadata={
@@ -5071,8 +5123,8 @@ async def execute_non_stream_call(
                                     "pattern": sample,
                                 },
                             )
-                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                        pass
+                    except MandatoryAuditWriteError:
+                        raise
                     if isinstance(content_to_save, str):
                         content_to_save = (
                             redacted_val
@@ -5091,6 +5143,8 @@ async def execute_non_stream_call(
                     except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
     except HTTPException:
+        raise
+    except MandatoryAuditWriteError:
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation output processing error: {e}")

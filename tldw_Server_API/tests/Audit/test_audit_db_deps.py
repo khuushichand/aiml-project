@@ -14,13 +14,50 @@ class _DummyService:
         self._tldw_stop_scheduled = False
         self._last_used_ts = time.monotonic() - 10.0
         self._tldw_evicted_at = None
+        self.stopped = False
 
     @property
     def owner_loop(self):
         return self._loop
 
     async def stop(self) -> None:
-        raise RuntimeError("stop failed")
+        self.stopped = True
+        raise LookupError("stop failed")
+
+
+class _StoppingService:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+        self.stopped = False
+
+    @property
+    def owner_loop(self):
+        return self._loop
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class _BlockingStopService:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        started_event: asyncio.Event,
+        release_event: asyncio.Event,
+    ) -> None:
+        self._loop = loop
+        self._started_event = started_event
+        self._release_event = release_event
+        self.stopped = False
+
+    @property
+    def owner_loop(self):
+        return self._loop
+
+    async def stop(self) -> None:
+        self.stopped = True
+        self._started_event.set()
+        await self._release_event.wait()
 
 
 @pytest.mark.asyncio
@@ -94,6 +131,86 @@ async def test_schedule_service_stop_clears_flag_on_failure(monkeypatch):
 
     assert svc._tldw_stop_scheduled is False
     assert id(svc) not in deps._services_stopping
+
+
+@pytest.mark.asyncio
+async def test_shutdown_user_audit_service_uses_shared_cache_key(monkeypatch):
+    state = deps._LoopState(cache={})
+    svc = _StoppingService(asyncio.get_running_loop())
+    state.cache[None] = svc
+
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "shared")
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    summary = await deps.shutdown_user_audit_service(123)
+
+    assert isinstance(summary, deps.AuditShutdownSummary)
+    assert summary.requested == 1
+    assert summary.stopped == 1
+    assert summary.error_count == 0
+    assert summary.timeout_count == 0
+    assert svc.stopped is True
+    assert None not in state.cache
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_audit_services_returns_summary_and_can_raise(monkeypatch):
+    loop = asyncio.get_running_loop()
+
+    def _make_state() -> deps._LoopState:
+        return deps._LoopState(cache={
+            1: _StoppingService(loop),
+            2: _DummyService(loop),
+        })
+
+    state = _make_state()
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    summary = await deps.shutdown_all_audit_services()
+
+    assert isinstance(summary, deps.AuditShutdownSummary)
+    assert summary.requested == 2
+    assert summary.stopped == 1
+    assert summary.error_count == 1
+    assert summary.timeout_count == 0
+    assert summary.errors
+    assert "stop failed" in summary.errors[0]
+    assert state.cache == {}
+
+    state = _make_state()
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    with pytest.raises(deps.AuditShutdownError):
+        await deps.shutdown_all_audit_services(raise_on_error=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_audit_services_runs_stop_fan_out_concurrently(monkeypatch):
+    loop = asyncio.get_running_loop()
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+    state = deps._LoopState(cache={
+        1: _BlockingStopService(loop, first_started, release),
+        2: _BlockingStopService(loop, second_started, release),
+    })
+
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    shutdown_task = asyncio.create_task(deps.shutdown_all_audit_services())
+
+    await asyncio.wait_for(first_started.wait(), timeout=5)
+    await asyncio.wait_for(second_started.wait(), timeout=5)
+    release.set()
+
+    summary = await asyncio.wait_for(shutdown_task, timeout=5)
+
+    assert isinstance(summary, deps.AuditShutdownSummary)
+    assert summary.requested == 2
+    assert summary.stopped == 2
+    assert summary.error_count == 0
+    assert summary.timeout_count == 0
+    assert state.cache == {}
 
 
 @pytest.mark.asyncio

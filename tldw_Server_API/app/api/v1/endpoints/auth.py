@@ -59,7 +59,11 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     SessionResponse,
     TokenResponse,
 )
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventType,
+    MandatoryAuditWriteError,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
@@ -3528,6 +3532,15 @@ async def register(
                     expires_in_days=365
                 )
                 api_key_value = key_result.get('key')
+        except MandatoryAuditWriteError as exc:
+            logger.error(
+                "Mandatory audit write failed while auto-generating default API key for new user {}",
+                user_info["user_id"],
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Mandatory audit persistence unavailable",
+            ) from exc
         except _AUTH_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to auto-generate API key for new user {user_info['user_id']}: {_e}")
 

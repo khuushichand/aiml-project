@@ -32,6 +32,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.Evaluations.audit_adapter import MandatoryAuditWriteError
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     get_unified_evaluation_service_for_user,
 )
@@ -332,6 +333,13 @@ async def create_run(
         return RunResponse(**run)
     except HTTPException:
         raise
+    except MandatoryAuditWriteError as e:
+        raise create_error_response(
+            message="Mandatory audit persistence unavailable",
+            error_type="service_unavailable",
+            code="audit_persistence_failure",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from e
     except _EVALS_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create run: {e}")
         raise create_error_response(
