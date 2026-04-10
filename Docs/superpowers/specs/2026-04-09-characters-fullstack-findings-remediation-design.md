@@ -24,6 +24,7 @@ These findings should be remediated as one coordinated effort because the fronte
 - normalize frontend workspace tooling so the prescribed Character Vitest and Playwright commands execute against repo-local tooling
 - fix manual Character memory-extraction ownership validation
 - change streamed Character assistant persistence to save once, then return `503` on internal quota/count-check failure without duplicating the assistant reply on retry
+- update Character streamed-persist callers so a saved-but-degraded `503` does not trigger duplicate fallback persistence
 - widen Character handoff payloads so existing pre-hydration consumers receive the fields they already read
 - seed assistant identity metadata during quick-chat promotion before navigation when the data is already available
 - add backend, frontend, and browser regressions for the reviewed findings
@@ -103,6 +104,8 @@ Required behavior:
 - assistant reply persists once
 - response returns `503`
 - retry of the same streamed reply does not write a duplicate assistant message
+- the degraded `503` exposes a machine-detectable saved outcome in error details so Character clients can distinguish "saved but validation degraded" from "not saved"
+- Character callers that currently fall back to `addChatMessage()` treat that saved-degraded outcome as terminal and do not perform duplicate fallback persistence
 
 ### Workstream 3: Frontend Handoff Correctness
 
@@ -117,6 +120,8 @@ The shared Character handoff payload should preserve the fields current pre-hydr
 
 The purpose is not to create a new canonical frontend Character shape. It is to stop handing downstream consumers a knowingly weaker temporary object than the data already available at the handoff point.
 
+Implement this through one shared field-preserving builder/helper used by both normal Character selection and quick-chat promotion, so the handoff contract cannot drift immediately across duplicate mappers.
+
 #### Quick-Chat Assistant Metadata Seeding
 
 Quick-chat promotion should set:
@@ -129,12 +134,15 @@ before navigation whenever the promoted state already has enough information to 
 
 Later `getChat()`-based hydration remains the fallback for incomplete or stale state.
 
+Pre-seeding must not mark server-chat metadata as fully loaded by itself. Keep `serverChatMetaLoaded` false unless the promoted state is already equivalent to authoritative server-chat metadata, so the later `getChat()` hydration path can still correct stale or incomplete assistant identity.
+
 ### Workstream 4: Regression Coverage
 
 Add the minimal targeted regressions that directly encode the reviewed findings:
 
 - backend endpoint regression for memory-extraction ownership
 - backend persist regression for save-once, `503`, and no duplicate on retry
+- frontend streamed-persist regression for saved-degraded `503` handling without `addChatMessage()` duplication
 - frontend regression for Character handoff payload richness
 - frontend regression for quick-chat metadata seeding before navigation
 - browser journey regression for Character selection and prompt propagation into `/chat/completions`
@@ -150,10 +158,19 @@ Recommended contract:
 - store the identity in persisted assistant-message metadata
 - on retry, detect an existing assistant message for the same persist identity and return the existing logical outcome instead of writing a second assistant reply
 
+Because the current streamed-persist request schema does not carry a dedicated idempotency key, server-side deterministic fingerprinting should be the default identity source.
+
+Fingerprint inputs should include the smallest stable fields that identify the same streamed reply:
+
+- conversation id
+- parent/user message id when present
+- speaker Character identity when present
+- normalized assistant reply payload
+
 Identity source preference:
 
-1. reuse an existing stable per-turn or per-message reference if the request already carries one across retries
-2. otherwise derive a deterministic fingerprint from conversation id, parent/user message id, and assistant reply payload
+1. derive the deterministic server-side fingerprint above
+2. reuse an existing stable per-turn or per-message reference only if the implementation confirms the request already carries one consistently across retries
 
 This should be narrow enough to avoid blocking legitimate repeated assistant turns while still preventing duplicates when the initial save succeeded but the endpoint responded with `503`.
 
@@ -199,7 +216,7 @@ After backend fixes:
 
 After frontend fixes:
 
-- add targeted unit/integration tests for payload fidelity and quick-chat metadata seeding
+- add targeted unit/integration tests for payload fidelity, quick-chat metadata seeding, and saved-degraded streamed-persist handling
 - rerun the prescribed Character frontend Vitest slice
 
 ### Browser Verification
@@ -256,6 +273,7 @@ The remediation is complete when all of the following are true:
 - the shared frontend workspace resolves the prescribed Character Vitest and Playwright commands through repo-local tooling
 - manual memory extraction authorizes owned chats correctly
 - streamed Character persist saves once, returns `503` on internal quota/count-check failure, and does not duplicate on retry
+- Character streamed-persist callers recognize the saved-degraded `503` outcome and do not fall back to duplicate `addChatMessage()` persistence
 - Character handoff payloads include the fields already consumed before hydration
 - quick-chat promotion seeds assistant metadata before navigation when possible
 - backend, frontend, and browser regressions exist for the reviewed findings
