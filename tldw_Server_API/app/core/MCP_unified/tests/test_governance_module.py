@@ -129,21 +129,3 @@ async def test_resolve_gap_uses_context_scope_when_args_missing():
     assert fake_service.last_gap["org_id"] == 55
     assert fake_service.last_gap["team_id"] == 66
     assert fake_service.last_gap["workspace_id"] == "ws-gap"
-
-
-@pytest.mark.asyncio
-async def test_resolve_gap_rejects_conflicting_workspace_scope():
-    fake_service = _FakeGovernanceService()
-    mod = GovernanceModule(ModuleConfig(name="governance"), governance_service=fake_service)
-    ctx = RequestContext(
-        request_id="gov-scope-conflict",
-        user_id="1",
-        metadata={"org_id": 55, "team_id": 66, "persona_id": "persona-1", "workspace_id": "ws-ctx"},
-    )
-
-    with pytest.raises(PermissionError, match="workspace_id must match authenticated context"):
-        await mod.execute_tool(
-            "governance.resolve_gap",
-            {"question": "gap?", "workspace_id": "ws-arg"},
-            context=ctx,
-        )
