@@ -1,17 +1,39 @@
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import React from "react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { KnowledgeContextBar } from "../context/KnowledgeContextBar"
 
 const PROFILES_STORAGE_KEY = "tldw:knowledge-qa:saved-profiles"
+const storageState = new Map<string, unknown>()
+
+vi.mock("@plasmohq/storage/hook", () => ({
+  useStorage: (key: string, defaultValue: unknown) => {
+    const [value, setValue] = React.useState(() =>
+      storageState.has(key) ? storageState.get(key) : defaultValue
+    )
+
+    const updateValue = async (nextValue: unknown) => {
+      const resolved =
+        typeof nextValue === "function"
+          ? (nextValue as (previousValue: unknown) => unknown)(
+              storageState.has(key) ? storageState.get(key) : defaultValue
+            )
+          : nextValue
+      storageState.set(key, resolved)
+      setValue(resolved)
+      return resolved
+    }
+
+    return [value, updateValue] as const
+  },
+}))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
   tldwClient: {
     initialize: vi.fn().mockResolvedValue(undefined),
     getProviders: vi.fn().mockResolvedValue({
       default_provider: "openai",
-      providers: [
-        { name: "openai", display_name: "OpenAI", models: ["gpt-4o-mini"] },
-      ],
+      providers: [{ name: "openai", display_name: "OpenAI", models: ["gpt-4o-mini"] }],
     }),
     listMedia: vi.fn().mockResolvedValue({ items: [] }),
     listNotes: vi.fn().mockResolvedValue({ items: [] }),
@@ -43,8 +65,7 @@ function renderContextBar(overrides: Record<string, unknown> = {}) {
 }
 
 function openProfileMenu() {
-  const profilesButton = screen.getByRole("button", { name: /Profiles/i })
-  fireEvent.click(profilesButton)
+  fireEvent.click(screen.getByRole("button", { name: /Profiles/i }))
 }
 
 function enterSaveMode() {
@@ -52,8 +73,9 @@ function enterSaveMode() {
 }
 
 function typeProfileName(name: string) {
-  const nameInput = screen.getByPlaceholderText("Profile name")
-  fireEvent.change(nameInput, { target: { value: name } })
+  fireEvent.change(screen.getByPlaceholderText("Profile name"), {
+    target: { value: name },
+  })
 }
 
 function clickSaveButton() {
@@ -62,18 +84,15 @@ function clickSaveButton() {
 
 describe("KnowledgeContextBar saved search profiles", () => {
   beforeEach(() => {
-    localStorage.removeItem(PROFILES_STORAGE_KEY)
+    storageState.clear()
   })
 
   afterEach(() => {
-    localStorage.removeItem(PROFILES_STORAGE_KEY)
+    storageState.clear()
   })
 
-  // -----------------------------------------------------------------------
-  // Test 1: Profile save
-  // -----------------------------------------------------------------------
   describe("profile save", () => {
-    it("saves current settings to localStorage when a name is provided", () => {
+    it("saves current settings through the shared storage hook when a name is provided", () => {
       renderContextBar({
         preset: "fast",
         sources: ["media_db", "notes"],
@@ -87,7 +106,7 @@ describe("KnowledgeContextBar saved search profiles", () => {
       typeProfileName("My Research Setup")
       clickSaveButton()
 
-      const stored = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY)!)
+      const stored = storageState.get(PROFILES_STORAGE_KEY) as Array<Record<string, unknown>>
       expect(stored).toHaveLength(1)
       expect(stored[0]).toEqual({
         name: "My Research Setup",
@@ -98,17 +117,14 @@ describe("KnowledgeContextBar saved search profiles", () => {
     })
 
     it("replaces a profile with the same name instead of duplicating", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          {
-            name: "Existing",
-            sources: ["media_db"],
-            preset: "balanced",
-            enableWebFallback: false,
-          },
-        ])
-      )
+      storageState.set(PROFILES_STORAGE_KEY, [
+        {
+          name: "Existing",
+          sources: ["media_db"],
+          preset: "balanced",
+          enableWebFallback: false,
+        },
+      ])
 
       renderContextBar({
         preset: "thorough",
@@ -121,7 +137,7 @@ describe("KnowledgeContextBar saved search profiles", () => {
       typeProfileName("Existing")
       clickSaveButton()
 
-      const stored = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY)!)
+      const stored = storageState.get(PROFILES_STORAGE_KEY) as Array<Record<string, unknown>>
       expect(stored).toHaveLength(1)
       expect(stored[0].preset).toBe("thorough")
       expect(stored[0].sources).toEqual(["notes"])
@@ -129,22 +145,16 @@ describe("KnowledgeContextBar saved search profiles", () => {
     })
   })
 
-  // -----------------------------------------------------------------------
-  // Test 2: Profile load
-  // -----------------------------------------------------------------------
   describe("profile load", () => {
     it("applies saved profile settings when clicked", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          {
-            name: "Deep Research",
-            sources: ["media_db", "notes", "chats"],
-            preset: "thorough",
-            enableWebFallback: false,
-          },
-        ])
-      )
+      storageState.set(PROFILES_STORAGE_KEY, [
+        {
+          name: "Deep Research",
+          sources: ["media_db", "notes", "chats"],
+          preset: "thorough",
+          enableWebFallback: false,
+        },
+      ])
 
       const { props } = renderContextBar({
         preset: "fast",
@@ -155,28 +165,20 @@ describe("KnowledgeContextBar saved search profiles", () => {
       openProfileMenu()
       fireEvent.click(screen.getByRole("menuitem", { name: /Deep Research/i }))
 
-      expect(props.onSourcesChange).toHaveBeenCalledWith([
-        "media_db",
-        "notes",
-        "chats",
-      ])
+      expect(props.onSourcesChange).toHaveBeenCalledWith(["media_db", "notes", "chats"])
       expect(props.onPresetChange).toHaveBeenCalledWith("thorough")
-      // webEnabled is true, profile says false -> onToggleWeb should be called
       expect(props.onToggleWeb).toHaveBeenCalledTimes(1)
     })
 
     it("does not toggle web when profile matches current state", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          {
-            name: "Quick Check",
-            sources: ["media_db"],
-            preset: "fast",
-            enableWebFallback: true,
-          },
-        ])
-      )
+      storageState.set(PROFILES_STORAGE_KEY, [
+        {
+          name: "Quick Check",
+          sources: ["media_db"],
+          preset: "fast",
+          enableWebFallback: true,
+        },
+      ])
 
       const { props } = renderContextBar({
         preset: "balanced",
@@ -191,54 +193,44 @@ describe("KnowledgeContextBar saved search profiles", () => {
     })
   })
 
-  // -----------------------------------------------------------------------
-  // Test 3: Profile delete
-  // -----------------------------------------------------------------------
   describe("profile delete", () => {
-    it("removes the profile from localStorage when delete is clicked", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          {
-            name: "Profile A",
-            sources: ["media_db"],
-            preset: "fast",
-            enableWebFallback: true,
-          },
-          {
-            name: "Profile B",
-            sources: ["notes"],
-            preset: "balanced",
-            enableWebFallback: false,
-          },
-        ])
-      )
+    it("removes the profile from shared storage when delete is clicked", () => {
+      storageState.set(PROFILES_STORAGE_KEY, [
+        {
+          name: "Profile A",
+          sources: ["media_db"],
+          preset: "fast",
+          enableWebFallback: true,
+        },
+        {
+          name: "Profile B",
+          sources: ["notes"],
+          preset: "balanced",
+          enableWebFallback: false,
+        },
+      ])
 
       renderContextBar()
 
       openProfileMenu()
-      const deleteButton = screen.getByRole("button", {
-        name: "Delete profile Profile A",
-      })
-      fireEvent.click(deleteButton)
+      fireEvent.click(
+        screen.getByRole("button", { name: "Delete profile Profile A" })
+      )
 
-      const stored = JSON.parse(localStorage.getItem(PROFILES_STORAGE_KEY)!)
+      const stored = storageState.get(PROFILES_STORAGE_KEY) as Array<Record<string, unknown>>
       expect(stored).toHaveLength(1)
       expect(stored[0].name).toBe("Profile B")
     })
 
     it("keeps the delete action discoverable for keyboard users", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          {
-            name: "Profile A",
-            sources: ["media_db"],
-            preset: "fast",
-            enableWebFallback: true,
-          },
-        ])
-      )
+      storageState.set(PROFILES_STORAGE_KEY, [
+        {
+          name: "Profile A",
+          sources: ["media_db"],
+          preset: "fast",
+          enableWebFallback: true,
+        },
+      ])
 
       renderContextBar()
 
@@ -251,9 +243,6 @@ describe("KnowledgeContextBar saved search profiles", () => {
     })
   })
 
-  // -----------------------------------------------------------------------
-  // Test 4: Max limit
-  // -----------------------------------------------------------------------
   describe("max profiles limit", () => {
     it("disables save button and shows limit message when 5 profiles exist", () => {
       const profiles = Array.from({ length: 5 }, (_, i) => ({
@@ -262,7 +251,7 @@ describe("KnowledgeContextBar saved search profiles", () => {
         preset: "fast",
         enableWebFallback: true,
       }))
-      localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(profiles))
+      storageState.set(PROFILES_STORAGE_KEY, profiles)
 
       renderContextBar()
 
@@ -274,12 +263,9 @@ describe("KnowledgeContextBar saved search profiles", () => {
     })
   })
 
-  // -----------------------------------------------------------------------
-  // Test 5: Corrupt localStorage
-  // -----------------------------------------------------------------------
-  describe("corrupt localStorage", () => {
-    it("renders without saved profiles when localStorage data is corrupt", () => {
-      localStorage.setItem(PROFILES_STORAGE_KEY, "{{not valid json")
+  describe("corrupt storage", () => {
+    it("renders without saved profiles when stored data is corrupt", () => {
+      storageState.set(PROFILES_STORAGE_KEY, "{{not valid json")
 
       renderContextBar()
 
@@ -287,19 +273,16 @@ describe("KnowledgeContextBar saved search profiles", () => {
       expect(screen.getByText("No saved profiles yet.")).toBeInTheDocument()
     })
 
-    it("filters out invalid entries from localStorage", () => {
-      localStorage.setItem(
-        PROFILES_STORAGE_KEY,
-        JSON.stringify([
-          { name: "Valid", sources: ["media_db"], preset: "fast", enableWebFallback: true },
-          { name: "", sources: ["media_db"], preset: "fast", enableWebFallback: true },
-          { name: "Bad preset", sources: ["media_db"], preset: "bogus", enableWebFallback: true },
-          { name: "Bad source", sources: ["bogus"], preset: "fast", enableWebFallback: true },
-          { name: 123, sources: "not-an-array", preset: "fast", enableWebFallback: true },
-          null,
-          "just a string",
-        ])
-      )
+    it("filters out invalid entries from stored data", () => {
+      storageState.set(PROFILES_STORAGE_KEY, [
+        { name: "Valid", sources: ["media_db"], preset: "fast", enableWebFallback: true },
+        { name: "", sources: ["media_db"], preset: "fast", enableWebFallback: true },
+        { name: "Bad preset", sources: ["media_db"], preset: "bogus", enableWebFallback: true },
+        { name: "Bad source", sources: ["bogus"], preset: "fast", enableWebFallback: true },
+        { name: 123, sources: "not-an-array", preset: "fast", enableWebFallback: true },
+        null,
+        "just a string",
+      ])
 
       renderContextBar()
 
@@ -307,14 +290,10 @@ describe("KnowledgeContextBar saved search profiles", () => {
       expect(screen.getByRole("menuitem", { name: /Valid/i })).toBeInTheDocument()
       expect(screen.queryByRole("menuitem", { name: /Bad preset/i })).not.toBeInTheDocument()
       expect(screen.queryByRole("menuitem", { name: /Bad source/i })).not.toBeInTheDocument()
-      // The invalid entries should not appear
       expect(screen.queryByText("123")).not.toBeInTheDocument()
     })
   })
 
-  // -----------------------------------------------------------------------
-  // Test 6: Empty name
-  // -----------------------------------------------------------------------
   describe("empty name prevention", () => {
     it("disables save button when profile name is empty", () => {
       renderContextBar()
@@ -322,8 +301,7 @@ describe("KnowledgeContextBar saved search profiles", () => {
       openProfileMenu()
       enterSaveMode()
 
-      const saveButton = screen.getByRole("button", { name: "Save" })
-      expect(saveButton).toBeDisabled()
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
     })
 
     it("disables save button when profile name is whitespace only", () => {
@@ -333,8 +311,7 @@ describe("KnowledgeContextBar saved search profiles", () => {
       enterSaveMode()
       typeProfileName("   ")
 
-      const saveButton = screen.getByRole("button", { name: "Save" })
-      expect(saveButton).toBeDisabled()
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
     })
 
     it("does not persist anything when Enter is pressed with empty name", () => {
@@ -343,10 +320,9 @@ describe("KnowledgeContextBar saved search profiles", () => {
       openProfileMenu()
       enterSaveMode()
 
-      const nameInput = screen.getByPlaceholderText("Profile name")
-      fireEvent.keyDown(nameInput, { key: "Enter" })
+      fireEvent.keyDown(screen.getByPlaceholderText("Profile name"), { key: "Enter" })
 
-      expect(localStorage.getItem(PROFILES_STORAGE_KEY)).toBeNull()
+      expect(storageState.has(PROFILES_STORAGE_KEY)).toBe(false)
     })
   })
 })

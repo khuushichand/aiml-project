@@ -7317,6 +7317,8 @@ export class TldwApiClient {
     options?: {
       titleHint?: string
       theme?: string
+      visualStyleId?: string
+      visualStyleScope?: string
       provider?: string
       model?: string
       temperature?: number
@@ -7340,6 +7342,8 @@ export class TldwApiClient {
     const body: Record<string, unknown> = { media_id: mediaId }
     if (options?.titleHint) body.title_hint = options.titleHint
     if (options?.theme) body.theme = options.theme
+    if (options?.visualStyleId) body.visual_style_id = options.visualStyleId
+    if (options?.visualStyleScope) body.visual_style_scope = options.visualStyleScope
     if (options?.provider) body.provider = options.provider
     if (options?.model) body.model = options.model
     if (options?.temperature != null) body.temperature = options.temperature
