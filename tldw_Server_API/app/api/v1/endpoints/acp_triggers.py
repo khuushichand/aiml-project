@@ -151,7 +151,8 @@ async def receive_webhook(trigger_id: str, request: Request) -> dict[str, Any]:
             status_code = 400
 
     if status_code != 200:
-        raise HTTPException(status_code=status_code, detail=result)
+        safe_detail = {"status": result.get("status"), "error": result.get("error")}
+        raise HTTPException(status_code=status_code, detail=safe_detail)
 
     return result
 
