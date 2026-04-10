@@ -185,6 +185,59 @@ async def test_process_pdf_task_ignores_invalid_backend_concurrency_cap(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_process_pdf_task_filters_internal_backend_details_from_output(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF import PDF_Processing_Lib as pdf_lib
+
+    class _SensitiveBackend(_StubLLMOCROBackend):
+        def describe(self) -> dict[str, Any]:
+            return {
+                "mode": "managed",
+                "configured": True,
+                "runtime": self.name,
+                "backend_concurrency_cap": self.backend_concurrency_cap,
+                "argv": ["llama-server", "--model", "/models/private.gguf"],
+                "host": "127.0.0.1",
+                "port": 19090,
+                "url": "http://127.0.0.1:19090/v1/chat/completions",
+                "prompt": "internal prompt",
+                "model": "/models/private.gguf",
+            }
+
+    stub_backend = _SensitiveBackend(name="llamacpp", backend_concurrency_cap=2)
+
+    monkeypatch.setattr(pdf_lib, "_get_ocr_backend", lambda name=None: stub_backend)
+    monkeypatch.setattr(
+        pdf_lib,
+        "_ocr_pdf_pages",
+        lambda **kwargs: ("OCR PAGE TEXT", 1, 1, [{"text": "OCR PAGE TEXT", "raw": {"page": 1}}]),
+    )
+    monkeypatch.setattr(pdf_lib, "pymupdf4llm_parse_pdf", lambda path: "parser text")
+    monkeypatch.setenv("OCR_PAGE_CONCURRENCY", "4")
+
+    result = await pdf_lib.process_pdf_task(
+        file_bytes=_build_minimal_pdf_bytes(),
+        filename="llamacpp-sensitive.pdf",
+        parser="pymupdf4llm",
+        perform_chunking=False,
+        perform_analysis=False,
+        enable_ocr=True,
+        ocr_backend="llamacpp",
+        ocr_mode="always",
+    )
+
+    ocr_details = result["analysis_details"]["ocr"]
+    assert ocr_details["runtime"] == "llamacpp"  # nosec B101
+    assert ocr_details["backend_concurrency_cap"] == 2  # nosec B101
+    assert "argv" not in ocr_details  # nosec B101
+    assert "host" not in ocr_details  # nosec B101
+    assert "port" not in ocr_details  # nosec B101
+    assert "url" not in ocr_details  # nosec B101
+    assert "prompt" not in ocr_details  # nosec B101
+    assert "model" not in ocr_details  # nosec B101
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 @pytest.mark.parametrize("backend_name", ["llamacpp", "chatllm"])
 async def test_process_pdf_task_appends_ocr_text_when_append_branch_is_taken(
     monkeypatch, backend_name: str

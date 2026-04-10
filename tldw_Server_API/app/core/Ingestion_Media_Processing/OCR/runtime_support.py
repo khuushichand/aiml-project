@@ -345,6 +345,7 @@ def wait_for_managed_http_ready(
     *,
     host: str,
     port: int,
+    scheme: str = "http",
     timeout_total: float = 30.0,
     interval: float = 0.5,
     paths: tuple[str, ...] = ("/health", "/v1/models"),
@@ -352,7 +353,8 @@ def wait_for_managed_http_ready(
     deadline = time.monotonic() + max(timeout_total, 0.0)
     while time.monotonic() < deadline:
         for path in paths:
-            connection = http.client.HTTPConnection(host, port, timeout=min(5.0, max(interval, 0.1)))
+            connection_cls = http.client.HTTPSConnection if str(scheme).strip().lower() == "https" else http.client.HTTPConnection
+            connection = connection_cls(host, port, timeout=min(5.0, max(interval, 0.1)))
             try:
                 connection.request("GET", path)
                 response = connection.getresponse()

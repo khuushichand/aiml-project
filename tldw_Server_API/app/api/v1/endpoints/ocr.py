@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (
     list_backends as _list_backends,
 )
+from tldw_Server_API.app.core.Utils.Utils import logging
 
 router = APIRouter(prefix="/ocr", tags=["ocr"])
 
@@ -42,6 +43,16 @@ def _describe_mineru_backend_error(exc: Exception) -> dict[str, Any]:
         "mode": "cli",
         "error": str(exc),
     }
+
+
+def _record_backend_discovery_error(
+    out: dict[str, Any],
+    backend_name: str,
+    exc: Exception,
+) -> None:
+    logging.error(f"OCR backend discovery failed for {backend_name}: {exc}", exc_info=True)
+    out.setdefault(backend_name, {})
+    out[backend_name]["error"] = str(exc)
 
 
 @router.get("/backends")
@@ -139,8 +150,8 @@ def list_ocr_backends() -> dict[str, Any]:
                 "backend_concurrency_cap": llamacpp_desc.get("backend_concurrency_cap"),
             }
         )
-    except _OCR_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _OCR_NONCRITICAL_EXCEPTIONS as exc:
+        _record_backend_discovery_error(out, "llamacpp", exc)
 
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr import (
@@ -166,8 +177,8 @@ def list_ocr_backends() -> dict[str, Any]:
                 "model": chatllm_desc.get("model"),
             }
         )
-    except _OCR_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _OCR_NONCRITICAL_EXCEPTIONS as exc:
+        _record_backend_discovery_error(out, "chatllm", exc)
 
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.nemotron_parse import (

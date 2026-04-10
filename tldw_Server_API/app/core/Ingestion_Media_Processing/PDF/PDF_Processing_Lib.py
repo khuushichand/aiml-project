@@ -82,6 +82,7 @@ _INLINE_WHITESPACE_RE = re.compile(r"[ \t]+")
 _PUNCTUATION_RE = re.compile(r"[^\w\s]")
 _LIST_CONTINUATION_RE = re.compile(r"^\s{2,}\S")
 _CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]")
+_OCR_BACKEND_OUTPUT_DENYLIST = {"argv", "host", "port", "url", "prompt", "model"}
 #
 #######################################################################################################################
 # Function Definitions
@@ -100,6 +101,14 @@ def _should_replace_ocr_content(
     return (ocr_mode or "fallback").lower() == "always" or content_text_len < _ocr_min_text_threshold(
         ocr_min_page_text_chars
     )
+
+
+def _sanitize_ocr_backend_details_for_output(details: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in details.items()
+        if key not in _OCR_BACKEND_OUTPUT_DENYLIST
+    }
 
 
 def _is_usable_torch_module_for_docling() -> bool:
@@ -815,7 +824,9 @@ def process_pdf(
                                 refreshed_backend_details = backend_details
 
                             if refreshed_backend_details:
-                                refreshed_backend_details = dict(refreshed_backend_details)
+                                refreshed_backend_details = _sanitize_ocr_backend_details_for_output(
+                                    dict(refreshed_backend_details)
+                                )
                                 if backend_page_concurrency is None:
                                     refreshed_backend_details.pop("backend_concurrency_cap", None)
                                     refreshed_backend_details.pop("max_page_concurrency", None)

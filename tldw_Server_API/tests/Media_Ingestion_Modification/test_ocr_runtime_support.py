@@ -181,3 +181,61 @@ def test_managed_process_registry_is_keyed_by_backend_name():
     assert clear_managed_process("llamacpp") is process_a  # nosec B101
     assert get_managed_process("llamacpp") is None  # nosec B101
     assert get_managed_process("chatllm") is process_b  # nosec B101
+
+
+@pytest.mark.unit
+def test_wait_for_managed_http_ready_uses_https_connection_when_requested(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR import runtime_support as runtime_mod
+
+    captured: dict[str, object] = {"https_calls": 0, "http_calls": 0}
+
+    class _Response:
+        status = 200
+
+        def read(self):
+            return b""
+
+    class _HTTPSConnection:
+        def __init__(self, host, port, timeout):
+            captured["https_calls"] = captured.get("https_calls", 0) + 1
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def request(self, method, path):
+            captured["method"] = method
+            captured["path"] = path
+
+        def getresponse(self):
+            return _Response()
+
+        def close(self):
+            return None
+
+    class _HTTPConnection:
+        def __init__(self, host, port, timeout):
+            captured["http_calls"] = captured.get("http_calls", 0) + 1
+
+        def request(self, method, path):
+            raise AssertionError("HTTPConnection should not be used for https probes")
+
+        def getresponse(self):
+            raise AssertionError("HTTPConnection should not be used for https probes")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(runtime_mod.http.client, "HTTPSConnection", _HTTPSConnection)
+    monkeypatch.setattr(runtime_mod.http.client, "HTTPConnection", _HTTPConnection)
+
+    assert runtime_mod.wait_for_managed_http_ready(
+        host="chatllm.local",
+        port=9443,
+        scheme="https",
+        timeout_total=0.5,
+        interval=0.1,
+        paths=("/ready",),
+    ) is True  # nosec B101
+    assert captured["https_calls"] == 1  # nosec B101
+    assert captured["http_calls"] == 0  # nosec B101
+    assert captured["path"] == "/ready"  # nosec B101

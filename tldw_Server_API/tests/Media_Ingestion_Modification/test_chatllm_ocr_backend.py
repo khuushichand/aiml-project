@@ -10,6 +10,17 @@ import pytest
 
 
 @pytest.mark.unit
+def test_chatllm_extract_message_content_returns_empty_when_choices_missing_or_empty():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr import (
+        _extract_message_content,
+    )
+
+    assert _extract_message_content({"choices": []}) == ""  # nosec B101
+    assert _extract_message_content({"choices": None}) == ""  # nosec B101
+    assert _extract_message_content({}) == ""  # nosec B101
+
+
+@pytest.mark.unit
 def test_chatllm_available_is_local_only_for_remote_mode(monkeypatch):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr import (
         ChatLLMOCRBackend,
@@ -50,6 +61,31 @@ def test_chatllm_managed_availability_requires_explicit_healthcheck_url(monkeypa
     monkeypatch.delenv("CHATLLM_OCR_HEALTHCHECK_URL", raising=False)
 
     assert ChatLLMOCRBackend.available() is False  # nosec B101
+
+
+@pytest.mark.unit
+def test_chatllm_wait_for_healthcheck_uses_https_scheme_and_query(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr import (
+        _wait_for_healthcheck,
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_wait_for_managed_http_ready(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setenv("CHATLLM_OCR_HEALTHCHECK_URL", "https://chatllm.local:9443/ready/status?full=1")
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr.wait_for_managed_http_ready",
+        fake_wait_for_managed_http_ready,
+    )
+
+    assert _wait_for_healthcheck(2.5) is True  # nosec B101
+    assert captured["host"] == "chatllm.local"  # nosec B101
+    assert captured["port"] == 9443  # nosec B101
+    assert captured["scheme"] == "https"  # nosec B101
+    assert captured["paths"] == ("/ready/status?full=1",)  # nosec B101
 
 
 @pytest.mark.unit

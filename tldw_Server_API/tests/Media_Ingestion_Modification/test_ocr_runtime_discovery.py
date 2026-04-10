@@ -96,3 +96,49 @@ def test_list_ocr_backends_enriches_chatllm_discovery(monkeypatch):
     assert payload["chatllm"]["managed_configured"] is True  # nosec B101
     assert payload["chatllm"]["healthcheck_url_configured"] is True  # nosec B101
     assert payload["chatllm"]["backend_concurrency_cap"] == 2  # nosec B101
+
+
+def test_list_ocr_backends_records_llamacpp_discovery_errors(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
+
+    class _BrokenLlamaCppBackend:
+        def describe(self):
+            raise ValueError("llama describe failed")
+
+    monkeypatch.setattr(
+        ocr_mod,
+        "_list_backends",
+        lambda: {"llamacpp": {"available": True}},
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr.LlamaCppOCRBackend",
+        _BrokenLlamaCppBackend,
+    )
+
+    payload = ocr_mod.list_ocr_backends()
+
+    assert payload["llamacpp"]["available"] is True  # nosec B101
+    assert payload["llamacpp"]["error"] == "llama describe failed"  # nosec B101
+
+
+def test_list_ocr_backends_records_chatllm_discovery_errors(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
+
+    class _BrokenChatLLMBackend:
+        def describe(self):
+            raise ValueError("chatllm describe failed")
+
+    monkeypatch.setattr(
+        ocr_mod,
+        "_list_backends",
+        lambda: {"chatllm": {"available": False}},
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.chatllm_ocr.ChatLLMOCRBackend",
+        _BrokenChatLLMBackend,
+    )
+
+    payload = ocr_mod.list_ocr_backends()
+
+    assert payload["chatllm"]["available"] is False  # nosec B101
+    assert payload["chatllm"]["error"] == "chatllm describe failed"  # nosec B101

@@ -119,7 +119,19 @@ def _structured_preset_requested(prompt_preset: str | None) -> bool:
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return str(first_choice or "")
+
+    message = first_choice.get("message", {})
+    if not isinstance(message, dict):
+        return str(message or "")
+
+    content = message.get("content", "")
     if isinstance(content, list):
         pieces: list[str] = []
         for item in content:
@@ -246,9 +258,12 @@ def _wait_for_healthcheck(timeout_total: float) -> bool:
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
         path = parsed.path or "/"
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
         return wait_for_managed_http_ready(
             host=host,
             port=port,
+            scheme=parsed.scheme or "http",
             timeout_total=timeout_total,
             paths=(path,),
         )

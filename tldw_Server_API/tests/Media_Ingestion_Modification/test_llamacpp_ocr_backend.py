@@ -4,9 +4,21 @@ import base64
 import json
 import os
 import socket
+import subprocess
 import types
 
 import pytest
+
+
+@pytest.mark.unit
+def test_llamacpp_extract_message_content_returns_empty_when_choices_missing_or_empty():
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
+        _extract_message_content,
+    )
+
+    assert _extract_message_content({"choices": []}) == ""  # nosec B101
+    assert _extract_message_content({"choices": None}) == ""  # nosec B101
+    assert _extract_message_content({}) == ""  # nosec B101
 
 
 @pytest.mark.unit
@@ -47,11 +59,85 @@ def test_llamacpp_available_is_true_for_managed_mode_when_managed_start_is_confi
 
 
 @pytest.mark.unit
+def test_llamacpp_managed_restarts_unhealthy_existing_runtime(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
+        _ensure_managed_runtime,
+    )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.runtime_support import (
+        register_managed_process,
+        reset_managed_process_registry,
+    )
+
+    reset_managed_process_registry()
+    monkeypatch.setenv("LLAMACPP_OCR_MODE", "managed")
+    monkeypatch.setenv("LLAMACPP_OCR_ALLOW_MANAGED_START", "true")
+    monkeypatch.setenv("LLAMACPP_OCR_HOST", "127.0.0.1")
+    monkeypatch.setenv("LLAMACPP_OCR_PORT", "19090")
+    monkeypatch.setenv("LLAMACPP_OCR_MODEL_PATH", "vision.gguf")
+    monkeypatch.setenv(
+        "LLAMACPP_OCR_ARGV",
+        json.dumps(["llama-ocr", "--serve", "--host", "{host}", "--port", "{port}"]),
+    )
+
+    class _ExistingProcess:
+        pid = None
+        returncode = None
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise TimeoutError("still running")
+            return self.returncode
+
+    class _NewProcess:
+        pid = None
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return 0
+
+    existing = _ExistingProcess()
+    register_managed_process("llamacpp", existing, host="127.0.0.1", port=19090)
+
+    readiness = iter([False, True])
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr._wait_for_managed_http_ready",
+        lambda host, port, timeout_total: next(readiness),
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr.subprocess.Popen",
+        lambda *args, **kwargs: _NewProcess(),
+    )
+
+    host, port = _ensure_managed_runtime()
+
+    assert existing.terminated is True  # nosec B101
+    assert (host, port) == ("127.0.0.1", 19090)  # nosec B101
+    reset_managed_process_registry()
+
+
+@pytest.mark.unit
 def test_llamacpp_auto_mode_prefers_remote_for_invocation(monkeypatch):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
         LlamaCppOCRBackend,
     )
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.runtime_support import (
+        reset_managed_process_registry,
+    )
 
+    reset_managed_process_registry()
     monkeypatch.setenv("LLAMACPP_OCR_MODE", "auto")
     monkeypatch.setenv("LLAMACPP_OCR_HOST", "127.0.0.1")
     monkeypatch.setenv("LLAMACPP_OCR_PORT", "8080")
@@ -85,6 +171,7 @@ def test_llamacpp_auto_mode_prefers_remote_for_invocation(monkeypatch):
     assert captured["method"] == "POST"  # nosec B101
     assert captured["url"] == "http://127.0.0.1:8080/v1/chat/completions"  # nosec B101
     assert result.text == "auto remote text"  # nosec B101
+    reset_managed_process_registry()
 
 
 @pytest.mark.unit
@@ -146,7 +233,8 @@ def test_llamacpp_auto_mode_falls_back_to_cli_when_only_cli_is_configured(monkey
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(stdout="auto cli text", returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -294,11 +382,12 @@ def test_llamacpp_cli_json_output_prefers_full_json_stdout(monkeypatch):
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
         assert cmd[0] == "llama-ocr"  # nosec B101
         assert "{image_path}" not in cmd  # nosec B101
         assert any(str(part).endswith(".png") for part in cmd)  # nosec B101
         assert check is False  # nosec B101
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(
             stdout=json.dumps(
                 {
@@ -334,11 +423,12 @@ def test_llamacpp_cli_uses_closed_temp_image_path(monkeypatch):
 
     seen: dict[str, str] = {}
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
         image_path = cmd[2]
         seen["image_path"] = image_path
         assert image_path.endswith(".png")  # nosec B101
         assert os.path.exists(image_path) is True  # nosec B101
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(stdout="plain text", returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -353,6 +443,37 @@ def test_llamacpp_cli_uses_closed_temp_image_path(monkeypatch):
 
 
 @pytest.mark.unit
+def test_llamacpp_cli_timeout_returns_empty_result(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
+        LlamaCppOCRBackend,
+    )
+
+    monkeypatch.setenv("LLAMACPP_OCR_MODE", "cli")
+    monkeypatch.setenv(
+        "LLAMACPP_OCR_ARGV",
+        json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
+    )
+    monkeypatch.setenv("LLAMACPP_OCR_TIMEOUT", "7")
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, capture_output, text, check, timeout=None):
+        captured["timeout"] = timeout
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    result = LlamaCppOCRBackend().ocr_image_structured(
+        b"png-bytes",
+        output_format="text",
+    )
+
+    assert captured["timeout"] == 7  # nosec B101
+    assert result.text == ""  # nosec B101
+    assert result.format == "text"  # nosec B101
+
+
+@pytest.mark.unit
 def test_llamacpp_structured_preset_parses_json_without_json_output_format(monkeypatch):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr import (
         LlamaCppOCRBackend,
@@ -364,7 +485,8 @@ def test_llamacpp_structured_preset_parses_json_without_json_output_format(monke
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(
             stdout=json.dumps(
                 {
@@ -406,7 +528,8 @@ def test_llamacpp_cli_json_output_falls_back_to_trailing_json_line(monkeypatch):
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(
             stdout='markdown prelude\n{"text":"fallback text","blocks":[{"text":"fallback text"}]}'
         )
@@ -435,8 +558,9 @@ def test_llamacpp_cli_parses_stdout_when_process_exits_nonzero(monkeypatch):
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
         assert check is False  # nosec B101
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(stdout="best effort markdown", returncode=2)
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -462,7 +586,8 @@ def test_llamacpp_cli_json_request_degrades_when_stdout_is_not_json(monkeypatch)
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(stdout="plain extracted text", returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)
@@ -490,7 +615,8 @@ def test_llamacpp_structured_preset_parse_failure_preserves_raw_output(monkeypat
         json.dumps(["llama-ocr", "--image", "{image_path}", "--prompt", "{prompt}"]),
     )
 
-    def fake_run(cmd, capture_output, text, check):
+    def fake_run(cmd, capture_output, text, check, timeout):
+        assert timeout == 60  # nosec B101
         return types.SimpleNamespace(stdout="plain extracted text", returncode=0)
 
     monkeypatch.setattr("subprocess.run", fake_run)

@@ -12,6 +12,7 @@ from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.runtime_support import (
+    cleanup_managed_process,
     get_managed_process_record,
     is_profile_available,
     load_ocr_runtime_profiles,
@@ -153,7 +154,19 @@ def _structured_preset_requested(prompt_preset: str | None) -> bool:
 
 
 def _extract_message_content(payload: dict[str, Any]) -> str:
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return str(first_choice or "")
+
+    message = first_choice.get("message", {})
+    if not isinstance(message, dict):
+        return str(message or "")
+
+    content = message.get("content", "")
     if isinstance(content, list):
         pieces: list[str] = []
         for item in content:
@@ -303,8 +316,9 @@ def _ensure_managed_runtime() -> tuple[str, int]:
             record_host = record.host
             record_port = record.port
             if record_host and record_port is not None:
-                _wait_for_managed_http_ready(record_host, record_port, min(timeout_total, 1.0))
-                return record_host, record_port
+                if _wait_for_managed_http_ready(record_host, record_port, min(timeout_total, 1.0)):
+                    return record_host, record_port
+                cleanup_managed_process(LlamaCppOCRBackend.name, timeout=min(timeout_total, 1.0))
         profile = _resolve_profiles().managed
         host, port = _resolve_managed_endpoint()
         if not profile.allow_managed_start:
@@ -403,6 +417,7 @@ def _cli_configured() -> bool:
 
 def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
     profile = _resolve_profiles().cli
+    timeout_seconds = _env_int("LLAMACPP_OCR_TIMEOUT", 60)
     with tempfile.TemporaryDirectory(prefix="llamacpp_ocr_") as tmpdir:
         image_path = os.path.join(tmpdir, "page.png")
         with open(image_path, "wb") as handle:
@@ -415,12 +430,22 @@ def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
             host=None,
             port=None,
         )
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )  # nosec B603
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+            )  # nosec B603
+        except subprocess.TimeoutExpired as exc:
+            logging.error(
+                "Llama.cpp OCR CLI timed out after %ss for model=%r image_path=%r",
+                timeout_seconds,
+                profile.model_path,
+                image_path,
+            )
+            raise RuntimeError(f"llama.cpp CLI OCR timed out after {timeout_seconds}s") from exc
     return completed.stdout or ""
 
 

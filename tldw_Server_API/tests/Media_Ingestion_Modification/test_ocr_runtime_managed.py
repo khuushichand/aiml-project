@@ -68,7 +68,7 @@ def test_managed_mode_reuses_existing_ocr_process(monkeypatch):
     )
     monkeypatch.setattr(
         "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.llamacpp_ocr._wait_for_managed_http_ready",
-        lambda host, port, timeout_total: False,
+        lambda host, port, timeout_total: True,
     )
     monkeypatch.setattr(
         "tldw_Server_API.app.core.http_client.fetch_json",
