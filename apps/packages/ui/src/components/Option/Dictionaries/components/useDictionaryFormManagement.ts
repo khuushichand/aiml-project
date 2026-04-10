@@ -19,6 +19,7 @@ type UseDictionaryFormManagementParams = {
   notification: {
     error: (config: { message: string; description?: string }) => void
     info: (config: { message: string; description?: string }) => void
+    success: (config: { message: string; description?: string }) => void
   }
   confirmDanger: (config: {
     title: string
@@ -70,6 +71,7 @@ export function useDictionaryFormManagement({
       editId != null ? tldwClient.updateDictionary(editId, values) : Promise.resolve(null),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
+      notification.success({ message: "Dictionary updated" })
       setOpenEdit(false)
       editForm.resetFields()
       setEditId(null)
@@ -133,6 +135,12 @@ export function useDictionaryFormManagement({
         }
 
         await queryClient.invalidateQueries({ queryKey: ["tldw:listDictionaries"] })
+        notification.success({
+          message: "Dictionary created",
+          description: starterTemplate
+            ? `"${values?.name || "Dictionary"}" created with starter entries.`
+            : `"${values?.name || "Dictionary"}" created.`,
+        })
         setOpenCreate(false)
         createForm.resetFields()
       } catch (error: any) {

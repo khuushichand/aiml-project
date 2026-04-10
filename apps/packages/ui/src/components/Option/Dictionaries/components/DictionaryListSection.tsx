@@ -1,7 +1,44 @@
 import React from "react"
 import { Button, Input, Select, Skeleton, Table } from "antd"
-import { Plus } from "lucide-react"
+import { ChevronDown, ChevronUp, Plus } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
+
+const HowItWorksDictionaries: React.FC = () => {
+  const [expanded, setExpanded] = React.useState(true)
+  return (
+    <div className="mb-4 rounded-lg border border-border bg-surface p-4">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between text-sm font-medium text-text"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+      >
+        How it works
+        {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </button>
+      {expanded && (
+        <ol className="mt-3 list-inside list-decimal space-y-2 text-xs text-text-muted">
+          <li>
+            <span className="font-medium text-text">Create a dictionary</span>{" "}
+            — a set of find-and-replace rules (or start from a template).
+          </li>
+          <li>
+            <span className="font-medium text-text">Add entries</span>{" "}
+            — each entry has a pattern to find and text to replace it with.
+          </li>
+          <li>
+            <span className="font-medium text-text">Test with preview</span>{" "}
+            — paste sample text to see the rules in action before going live.
+          </li>
+          <li>
+            <span className="font-medium text-text">Assign to chats</span>{" "}
+            — link the dictionary to chat sessions so rules apply automatically.
+          </li>
+        </ol>
+      )}
+    </div>
+  )
+}
 
 type DictionaryListSectionProps = {
   dictionarySearch: string
@@ -112,6 +149,8 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
       )}
       {status === "success" && !dictionariesUnsupported && (
         Array.isArray(data) && data.length === 0 ? (
+          <>
+          <HowItWorksDictionaries />
           <FeatureEmptyState
             title="No dictionaries yet"
             description="Create your first dictionary to transform text consistently across chats."
@@ -125,6 +164,7 @@ export const DictionaryListSection: React.FC<DictionaryListSectionProps> = ({
             secondaryActionLabel="Import dictionary"
             onSecondaryAction={onOpenImport}
           />
+          </>
         ) : (
           <Table
             rowKey={(record: any) => record.id}

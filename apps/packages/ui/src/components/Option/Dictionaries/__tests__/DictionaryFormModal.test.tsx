@@ -91,7 +91,7 @@ describe("DictionaryFormModal", () => {
     await user.click(screen.getByRole("combobox", { name: "Tags" }))
     await user.keyboard("clinical{Enter}abbr{Enter}")
     await user.type(
-      screen.getByRole("spinbutton", { name: "Default Token Budget" }),
+      screen.getByRole("spinbutton", { name: "Processing limit" }),
       "450"
     )
     await user.click(screen.getByRole("button", { name: "Create" }))

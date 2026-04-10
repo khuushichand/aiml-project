@@ -79,8 +79,8 @@ export const DictionaryFormModal: React.FC<DictionaryFormModalProps> = ({
           name="default_token_budget"
           label={(
             <LabelWithHelp
-              label="Default Token Budget"
-              help={tokenBudgetHelp}
+              label="Processing limit"
+              help="Maximum amount of text processed per message. Leave empty for no limit. Only relevant for large dictionaries."
             />
           )}
           rules={[{ type: "number", min: 1, message: "Must be at least 1 token." }]}

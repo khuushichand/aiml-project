@@ -43,6 +43,8 @@ export function useDictionaryEntryCreate({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tldw:listDictionaryEntries", dictionaryId] })
       qc.invalidateQueries({ queryKey: allEntriesQueryKey })
+      const patternPreview = form.getFieldValue("pattern") || "Entry"
+      notification.success({ message: `Entry "${patternPreview}" added` })
       form.resetFields()
       setRegexError(null)
       setRegexServerError(null)

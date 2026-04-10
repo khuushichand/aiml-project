@@ -88,6 +88,14 @@ export const DictionariesWorkspace: React.FC = () => {
               "Define reusable substitutions so tldw understands your organization’s names, acronyms, and terminology."
             )}
           </p>
+          <a
+            href="https://github.com/rmusser01/tldw_server/blob/main/Docs/User_Guides/WebUI_Extension/Chat_Dictionaries_Guide.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-text-muted hover:text-text underline"
+          >
+            Learn more about dictionaries
+          </a>
         </div>
         <DictionariesManager />
       </PageShell>

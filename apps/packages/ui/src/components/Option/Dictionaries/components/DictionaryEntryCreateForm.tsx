@@ -1,4 +1,4 @@
-import { AutoComplete, Button, Form, Input, InputNumber, Select, Slider, Switch } from "antd"
+import { AutoComplete, Button, Form, Input, InputNumber, Select, Slider, Switch, Tooltip } from "antd"
 import React from "react"
 import { useTranslation } from "react-i18next"
 import { AlertCircle, ChevronDown, ChevronUp } from "lucide-react"
@@ -82,7 +82,7 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
             help={regexError || regexServerError}
           >
             <Input
-              placeholder={t("option:dictionaries.patternPlaceholder", "e.g., KCl or /hel+o/i")}
+              placeholder={t("option:dictionaries.patternPlaceholder", "e.g., gonna or /colour/i")}
               className="font-mono"
               onChange={(event) => onPatternChange(event.target.value)}
               aria-describedby="pattern-help"
@@ -103,7 +103,7 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
             rules={[{ required: true, message: "Replacement is required" }]}
           >
             <Input
-              placeholder={t("option:dictionaries.replacementPlaceholder", "e.g., Potassium Chloride")}
+              placeholder={t("option:dictionaries.replacementPlaceholder", "e.g., going to or color")}
               onChange={onReplacementChange}
               aria-describedby="replacement-help"
             />
@@ -306,15 +306,17 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
           </div>
         )}
 
-        <Button
-          type="primary"
-          htmlType="submit"
-          loading={adding}
-          disabled={!!regexError || !!regexServerError}
-          className="w-full mt-3"
-        >
-          {t("option:dictionaries.addEntryButton", "Add Entry")}
-        </Button>
+        <Tooltip title="Ctrl+Enter">
+          <Button
+            type="primary"
+            htmlType="submit"
+            loading={adding}
+            disabled={!!regexError || !!regexServerError}
+            className="w-full mt-3"
+          >
+            {t("option:dictionaries.addEntryButton", "Add Entry")}
+          </Button>
+        </Tooltip>
       </Form>
     </div>
   )
