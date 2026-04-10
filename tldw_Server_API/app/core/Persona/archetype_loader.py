@@ -74,7 +74,7 @@ def load_archetypes_from_directory(
                     yaml_file.name,
                 )
                 continue
-            template = ArchetypeTemplate(**archetype_data)
+            template = ArchetypeTemplate.model_validate(archetype_data)
             new_cache[template.key] = template
             logger.debug("Loaded archetype '{}' from {}", template.key, yaml_file.name)
         except (OSError, ValidationError, yaml.YAMLError):

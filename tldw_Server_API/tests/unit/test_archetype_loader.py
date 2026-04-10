@@ -114,6 +114,15 @@ class TestLoadArchetypesFromDirectory:
         assert len(result) == 1
         assert "researcher" in result
 
+    def test_yaml_with_non_string_archetype_keys_skipped(self, tmp_path: Path):
+        (tmp_path / "good.yaml").write_text(_VALID_YAML, encoding="utf-8")
+        (tmp_path / "bad.yaml").write_text("archetype:\n  1: bad\n", encoding="utf-8")
+
+        result = archetype_loader.load_archetypes_from_directory(tmp_path)
+
+        assert len(result) == 1
+        assert "researcher" in result
+
     def test_empty_directory(self, tmp_path: Path):
         result = archetype_loader.load_archetypes_from_directory(tmp_path)
 
