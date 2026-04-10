@@ -1,3 +1,5 @@
+"""ChatLLM OCR backend with remote, managed, and CLI execution modes."""
+
 from __future__ import annotations
 
 import base64
@@ -102,7 +104,11 @@ def _active_mode() -> str:
 
 
 def _resolve_prompt(prompt_preset: str | None, output_format: str | None) -> str:
-    preset = (prompt_preset or os.getenv("CHATLLM_OCR_PROMPT_PRESET_DEFAULT") or "").strip().lower()
+    preset = (
+        prompt_preset
+        or os.getenv("CHATLLM_OCR_PROMPT_PRESET_DEFAULT")
+        or ""
+    ).strip().lower()
     if not preset:
         fmt = normalize_ocr_format(output_format)
         if fmt == "json":
@@ -200,7 +206,9 @@ def _resolve_remote_url() -> str:
 
 
 def _remote_configured() -> bool:
-    return bool((os.getenv("CHATLLM_OCR_URL") or "").strip()) and bool((os.getenv("CHATLLM_OCR_MODEL") or "").strip())
+    return bool((os.getenv("CHATLLM_OCR_URL") or "").strip()) and bool(
+        (os.getenv("CHATLLM_OCR_MODEL") or "").strip()
+    )
 
 
 def _cli_binary() -> str | None:
@@ -238,7 +246,11 @@ def _healthcheck_url_configured() -> bool:
 
 
 def _managed_configured() -> bool:
-    if not _managed_server_binary() or not _managed_server_argv() or not _healthcheck_url_configured():
+    if (
+        not _managed_server_binary()
+        or not _managed_server_argv()
+        or not _healthcheck_url_configured()
+    ):
         return False
     try:
         _resolve_managed_endpoint()
@@ -274,7 +286,11 @@ def _wait_for_healthcheck(timeout_total: float) -> bool:
 
 def _build_openai_payload(image_bytes: bytes, prompt: str) -> dict[str, Any]:
     return {
-        "model": os.getenv("CHATLLM_OCR_MODEL") or os.getenv("CHATLLM_OCR_MODEL_PATH") or "chatllm-ocr",
+        "model": (
+            os.getenv("CHATLLM_OCR_MODEL")
+            or os.getenv("CHATLLM_OCR_MODEL_PATH")
+            or "chatllm-ocr"
+        ),
         "messages": [
             {
                 "role": "user",
@@ -283,7 +299,10 @@ def _build_openai_payload(image_bytes: bytes, prompt: str) -> dict[str, Any]:
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+                            "url": (
+                                "data:image/png;base64,"
+                                f"{base64.b64encode(image_bytes).decode('ascii')}"
+                            )
                         },
                     },
                 ],
@@ -330,7 +349,10 @@ def _ensure_managed_runtime() -> tuple[str, int]:
         binary = _managed_server_binary()
         argv = _managed_server_argv()
         if not binary or not argv:
-            raise RuntimeError("managed OCR startup requires CHATLLM_OCR_SERVER_BINARY and CHATLLM_OCR_SERVER_ARGS_JSON")
+            raise RuntimeError(
+                "managed OCR startup requires CHATLLM_OCR_SERVER_BINARY and "
+                "CHATLLM_OCR_SERVER_ARGS_JSON"
+            )
 
         command = [binary, *render_argv_template(
             argv,
@@ -405,6 +427,8 @@ def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
 
 
 class ChatLLMOCRBackend(OCRBackend):
+    """OCR backend that can use ChatLLM through an endpoint, managed runtime, or CLI."""
+
     name = "chatllm"
 
     @classmethod
@@ -426,11 +450,19 @@ class ChatLLMOCRBackend(OCRBackend):
         return {
             "mode": mode,
             "model": os.getenv("CHATLLM_OCR_MODEL_PATH") or os.getenv("CHATLLM_OCR_MODEL"),
-            "configured": _remote_configured() or _cli_configured() or _managed_configured() or managed_process_running(self.name),
+            "configured": (
+                _remote_configured()
+                or _cli_configured()
+                or _managed_configured()
+                or managed_process_running(self.name)
+            ),
             "supports_structured_output": True,
             "supports_json": True,
             "auto_eligible": _env_bool("CHATLLM_OCR_AUTO_ELIGIBLE", False),
-            "auto_high_quality_eligible": _env_bool("CHATLLM_OCR_AUTO_HIGH_QUALITY_ELIGIBLE", False),
+            "auto_high_quality_eligible": _env_bool(
+                "CHATLLM_OCR_AUTO_HIGH_QUALITY_ELIGIBLE",
+                False,
+            ),
             "managed_configured": mode == "managed" and _managed_configured(),
             "managed_running": managed_process_running(self.name),
             "allow_managed_start": _env_bool("CHATLLM_OCR_ALLOW_MANAGED_START", False),
@@ -461,7 +493,10 @@ class ChatLLMOCRBackend(OCRBackend):
             if mode == "managed":
                 _ensure_managed_runtime()
             else:
-                logging.warning("ChatLLM OCR backend not available: configure CHATLLM_OCR runtime settings.")
+                logging.warning(
+                    "ChatLLM OCR backend not available: configure CHATLLM_OCR "
+                    "runtime settings."
+                )
                 return OCRResult(text="", format=fmt, meta={"backend": self.name, "mode": mode})
 
         try:
@@ -497,7 +532,10 @@ class ChatLLMOCRBackend(OCRBackend):
                     raw=parsed,
                     meta=meta,
                 )
-            warning = "JSON output requested but CLI output could not be parsed; returning plain text."
+            warning = (
+                "JSON output requested but CLI output could not be parsed; "
+                "returning plain text."
+            )
             if fmt == "json":
                 return OCRResult(
                     text=raw_output.strip(),

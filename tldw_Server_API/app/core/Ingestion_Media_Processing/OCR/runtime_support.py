@@ -1,3 +1,5 @@
+"""Shared helpers for OCR runtime configuration, managed processes, and readiness probes."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

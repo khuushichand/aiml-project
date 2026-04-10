@@ -1,3 +1,5 @@
+"""Llama.cpp OCR backend with auto, remote, managed, and CLI runtime support."""
+
 from __future__ import annotations
 
 import base64
@@ -12,6 +14,10 @@ from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.runtime_support import (
+    CLIOCRProfile,
+    ManagedOCRProfile,
+    OCRRuntimeProfiles,
+    RemoteOCRProfile,
     cleanup_managed_process,
     get_managed_process_record,
     is_profile_available,
@@ -28,6 +34,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+_LlamaCppProfile = RemoteOCRProfile | ManagedOCRProfile | CLIOCRProfile
 _LLAMACPP_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     ConnectionError,
@@ -67,7 +74,7 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _resolve_profiles():
+def _resolve_profiles() -> OCRRuntimeProfiles:
     return load_ocr_runtime_profiles("LLAMACPP")
 
 
@@ -78,7 +85,7 @@ def _configured_mode() -> str:
     return "cli"
 
 
-def _profile_for_mode(mode: str):
+def _profile_for_mode(mode: str) -> _LlamaCppProfile:
     profiles = _resolve_profiles()
     if mode == "remote":
         return replace(profiles.remote, mode="remote")
@@ -87,7 +94,7 @@ def _profile_for_mode(mode: str):
     return replace(profiles.cli, mode="cli")
 
 
-def _active_profile():
+def _active_profile() -> _LlamaCppProfile | None:
     mode = _configured_mode()
     if mode == "remote":
         return _profile_for_mode("remote")
@@ -124,7 +131,11 @@ def _wait_for_managed_http_ready(host: str, port: int, timeout_total: float) -> 
 
 
 def _startup_timeout_seconds() -> float:
-    raw = os.getenv("LLAMACPP_OCR_STARTUP_TIMEOUT_SEC") or os.getenv("LLAMACPP_OCR_STARTUP_TIMEOUT") or "30"
+    raw = (
+        os.getenv("LLAMACPP_OCR_STARTUP_TIMEOUT_SEC")
+        or os.getenv("LLAMACPP_OCR_STARTUP_TIMEOUT")
+        or "30"
+    )
     try:
         return max(float(raw), 0.1)
     except (TypeError, ValueError):
@@ -232,7 +243,11 @@ def _ocr_via_remote(image_bytes: bytes, prompt: str) -> str:
     if not host or not port:
         raise RuntimeError("LLAMACPP remote OCR requires LLAMACPP_OCR_HOST and LLAMACPP_OCR_PORT")
 
-    model = getattr(profile, "model_path", None) or os.getenv("LLAMACPP_OCR_MODEL_PATH") or "llamacpp-ocr"
+    model = (
+        getattr(profile, "model_path", None)
+        or os.getenv("LLAMACPP_OCR_MODEL_PATH")
+        or "llamacpp-ocr"
+    )
     timeout = _env_int("LLAMACPP_OCR_TIMEOUT", 60)
     use_data_url = _env_bool("LLAMACPP_OCR_USE_DATA_URL", True)
 
@@ -288,7 +303,10 @@ def _resolve_managed_endpoint() -> tuple[str, int]:
     if admin_port <= 0:
         admin_port = _env_int("LLAMACPP_PORT", 0)
     if admin_port > 0 and port == admin_port:
-        raise RuntimeError("LLAMACPP managed OCR requires an OCR-private port distinct from the admin server port")
+        raise RuntimeError(
+            "LLAMACPP managed OCR requires an OCR-private port distinct from "
+            "the admin server port"
+        )
     return host, port
 
 
@@ -358,7 +376,11 @@ def _ensure_managed_runtime() -> tuple[str, int]:
 
 def _ocr_via_managed(image_bytes: bytes, prompt: str) -> str:
     host, port = _ensure_managed_runtime()
-    model = _resolve_profiles().managed.model_path or os.getenv("LLAMACPP_OCR_MODEL_PATH") or "llamacpp-ocr"
+    model = (
+        _resolve_profiles().managed.model_path
+        or os.getenv("LLAMACPP_OCR_MODEL_PATH")
+        or "llamacpp-ocr"
+    )
     timeout = _env_int("LLAMACPP_OCR_TIMEOUT", 60)
     use_data_url = _env_bool("LLAMACPP_OCR_USE_DATA_URL", True)
 
@@ -450,6 +472,8 @@ def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
 
 
 class LlamaCppOCRBackend(OCRBackend):
+    """OCR backend that can call llama.cpp remotely, via a managed server, or via CLI."""
+
     name = "llamacpp"
 
     @classmethod
@@ -480,13 +504,21 @@ class LlamaCppOCRBackend(OCRBackend):
             "mode": active_mode,
             "configured_mode": _configured_mode(),
             "model": getattr(active, "model_path", None),
-            "configured": _remote_configured() or _cli_configured() or _managed_runtime_configured() or managed_process_running(self.name),
+            "configured": (
+                _remote_configured()
+                or _cli_configured()
+                or _managed_runtime_configured()
+                or managed_process_running(self.name)
+            ),
             "supports_structured_output": True,
             "supports_json": True,
             "prompt": getattr(active, "prompt", None) or os.getenv("LLAMACPP_OCR_PROMPT"),
             "configured_flags": os.getenv("LLAMACPP_OCR_CONFIGURED_FLAGS"),
             "auto_eligible": _env_bool("LLAMACPP_OCR_AUTO_ELIGIBLE", False),
-            "auto_high_quality_eligible": _env_bool("LLAMACPP_OCR_AUTO_HIGH_QUALITY_ELIGIBLE", False),
+            "auto_high_quality_eligible": _env_bool(
+                "LLAMACPP_OCR_AUTO_HIGH_QUALITY_ELIGIBLE",
+                False,
+            ),
             "backend_concurrency_cap": active.max_page_concurrency,
             "allow_managed_start": profiles.managed.allow_managed_start,
             "url_configured": _remote_configured(),
@@ -526,7 +558,10 @@ class LlamaCppOCRBackend(OCRBackend):
             if mode == "managed":
                 _ensure_managed_runtime()
             else:
-                logging.warning("LlamaCppOCRBackend not available: configure LLAMACPP_OCR runtime settings.")
+                logging.warning(
+                    "LlamaCppOCRBackend not available: configure LLAMACPP_OCR "
+                    "runtime settings."
+                )
                 return OCRResult(text="", format=fmt, meta={"backend": self.name, "mode": mode})
 
         try:
@@ -553,8 +588,13 @@ class LlamaCppOCRBackend(OCRBackend):
             "model": self.describe().get("model"),
             "configured_flags": os.getenv("LLAMACPP_OCR_CONFIGURED_FLAGS"),
             "auto_eligible": _env_bool("LLAMACPP_OCR_AUTO_ELIGIBLE", False),
-            "auto_high_quality_eligible": _env_bool("LLAMACPP_OCR_AUTO_HIGH_QUALITY_ELIGIBLE", False),
-            "backend_concurrency_cap": (_active_profile() or _resolve_profiles().cli).max_page_concurrency,
+            "auto_high_quality_eligible": _env_bool(
+                "LLAMACPP_OCR_AUTO_HIGH_QUALITY_ELIGIBLE",
+                False,
+            ),
+            "backend_concurrency_cap": (
+                _active_profile() or _resolve_profiles().cli
+            ).max_page_concurrency,
         }
 
         parse_structured = fmt == "json" or _structured_preset_requested(prompt_preset)
@@ -567,7 +607,10 @@ class LlamaCppOCRBackend(OCRBackend):
                     raw=parsed,
                     meta=meta,
                 )
-            warning = "JSON output requested but CLI output could not be parsed; returning plain text."
+            warning = (
+                "JSON output requested but CLI output could not be parsed; "
+                "returning plain text."
+            )
             if fmt == "json":
                 return OCRResult(
                     text=raw_output.strip(),

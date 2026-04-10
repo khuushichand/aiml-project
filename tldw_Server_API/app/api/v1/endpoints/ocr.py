@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from tldw_Server_API.app.api.v1.schemas.ocr_schemas import OCRBackendsResponse
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import (
     list_backends as _list_backends,
 )
@@ -55,7 +56,7 @@ def _record_backend_discovery_error(
     out[backend_name]["error"] = str(exc)
 
 
-@router.get("/backends")
+@router.get("/backends", response_model=OCRBackendsResponse)
 def list_ocr_backends() -> dict[str, Any]:
     """List available OCR backends with lightweight health information."""
     out = _list_backends()

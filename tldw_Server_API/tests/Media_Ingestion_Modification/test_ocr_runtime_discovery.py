@@ -1,6 +1,42 @@
 from __future__ import annotations
 
 
+def test_list_ocr_backends_matches_response_schema(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
+    from tldw_Server_API.app.api.v1.schemas.ocr_schemas import OCRBackendsResponse
+
+    monkeypatch.setattr(
+        ocr_mod,
+        "_list_backends",
+        lambda: {
+            "llamacpp": {"available": True},
+            "mineru": {"available": False},
+        },
+    )
+    monkeypatch.setattr(
+        ocr_mod,
+        "_describe_mineru_backend",
+        lambda: {
+            "available": False,
+            "pdf_only": True,
+            "document_level": True,
+            "opt_in_only": True,
+            "supports_per_page_metrics": True,
+            "mode": "cli",
+            "timeout_sec": 30,
+            "max_concurrency": 2,
+            "tmp_root": "/tmp/mineru",
+            "debug_save_raw": False,
+        },
+    )
+
+    payload = ocr_mod.list_ocr_backends()
+    validated = OCRBackendsResponse.model_validate(payload)
+
+    assert validated.root["llamacpp"].available is True  # nosec B101
+    assert validated.root["mineru"].timeout_sec == 30  # nosec B101
+
+
 def test_list_ocr_backends_enriches_llamacpp_discovery(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
 

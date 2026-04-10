@@ -117,17 +117,44 @@ def get_backend(name: str | None = None) -> OCRBackend | None:
     if name == "auto_high_quality":
         preferred_order = _resolve_priority_from_config()
         if not preferred_order:
-            preferred_order = ["llamacpp", "chatllm", "nemotron_parse", "hunyuan", "deepseek", "points", "dots", "dolphin", "tesseract"]
+            preferred_order = [
+                "llamacpp",
+                "chatllm",
+                "nemotron_parse",
+                "hunyuan",
+                "deepseek",
+                "points",
+                "dots",
+                "dolphin",
+                "tesseract",
+            ]
     else:
         # Try config override for normal auto
         preferred_order = _resolve_priority_from_config()
         if not preferred_order:
-            preferred_order = ["tesseract", "nemotron_parse", "points", "deepseek", "hunyuan", "dots", "dolphin", "llamacpp", "chatllm"]
+            preferred_order = [
+                "tesseract",
+                "nemotron_parse",
+                "points",
+                "deepseek",
+                "hunyuan",
+                "dots",
+                "dolphin",
+                "llamacpp",
+                "chatllm",
+            ]
 
     if preferred_order:
         for key in preferred_order:
             cls = _BACKENDS.get(key)
-            if cls and _is_auto_eligible(key, high_quality=name == "auto_high_quality") and cls.available():
+            if (
+                cls
+                and _is_auto_eligible(
+                    key,
+                    high_quality=name == "auto_high_quality",
+                )
+                and cls.available()
+            ):
                 return cls()
         # fallback to discovery order below
 
@@ -135,7 +162,10 @@ def get_backend(name: str | None = None) -> OCRBackend | None:
     for cls in _BACKENDS.values():
         if getattr(cls, "name", None) in _AUTO_EXCLUDE:
             continue
-        if not _is_auto_eligible(getattr(cls, "name", ""), high_quality=name == "auto_high_quality"):
+        if not _is_auto_eligible(
+            getattr(cls, "name", ""),
+            high_quality=name == "auto_high_quality",
+        ):
             continue
         if cls.available():
             candidates.append(cls)
