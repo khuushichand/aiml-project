@@ -105,32 +105,26 @@ class GovernanceModule(BaseModule):
             return self._to_jsonable(result)
 
         if tool_name == "governance.validate_change":
+            scope = self._verified_scope(args, metadata)
             result = await service.validate_change(
                 surface=str(args.get("surface") or ""),
                 summary=str(args.get("summary") or ""),
                 category=self._optional_str(args.get("category")),
-                metadata=metadata,
+                metadata={**metadata, **scope},
                 fallback_mode=self._optional_str(args.get("fallback_mode")),
             )
             return self._to_jsonable(result)
 
         if tool_name == "governance.resolve_gap":
+            scope = self._verified_scope(args, metadata)
             result = await service.resolve_gap(
                 question=str(args.get("question") or ""),
                 category=self._optional_str(args.get("category")),
                 metadata=metadata,
-                org_id=self._optional_int(
-                    self._first_non_none(args.get("org_id"), metadata.get("org_id"))
-                ),
-                team_id=self._optional_int(
-                    self._first_non_none(args.get("team_id"), metadata.get("team_id"))
-                ),
-                persona_id=self._optional_str(
-                    self._first_non_none(args.get("persona_id"), metadata.get("persona_id"))
-                ),
-                workspace_id=self._optional_str(
-                    self._first_non_none(args.get("workspace_id"), metadata.get("workspace_id"))
-                ),
+                org_id=scope["org_id"],
+                team_id=scope["team_id"],
+                persona_id=scope["persona_id"],
+                workspace_id=scope["workspace_id"],
                 resolution_mode=self._optional_str(args.get("resolution_mode")),
             )
             return self._to_jsonable(result)
@@ -159,10 +153,6 @@ class GovernanceModule(BaseModule):
             return self._governance_service
 
     @staticmethod
-    def _first_non_none(primary: Any, secondary: Any) -> Any:
-        return primary if primary is not None else secondary
-
-    @staticmethod
     def _optional_int(value: Any) -> int | None:
         if value is None:
             return None
@@ -179,6 +169,26 @@ class GovernanceModule(BaseModule):
             return None
         rendered = str(value).strip()
         return rendered or None
+
+    def _verified_scope(self, args: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+        verified = {
+            "org_id": self._optional_int(metadata.get("org_id")),
+            "team_id": self._optional_int(metadata.get("team_id")),
+            "persona_id": self._optional_str(metadata.get("persona_id")),
+            "workspace_id": self._optional_str(metadata.get("workspace_id")),
+        }
+        for field, expected in verified.items():
+            provided = args.get(field)
+            if provided is None or expected is None:
+                continue
+            if str(provided) != str(expected):
+                raise PermissionError(f"{field} must match authenticated context")
+        return {
+            "org_id": verified["org_id"] if verified["org_id"] is not None else self._optional_int(args.get("org_id")),
+            "team_id": verified["team_id"] if verified["team_id"] is not None else self._optional_int(args.get("team_id")),
+            "persona_id": verified["persona_id"] if verified["persona_id"] is not None else self._optional_str(args.get("persona_id")),
+            "workspace_id": verified["workspace_id"] if verified["workspace_id"] is not None else self._optional_str(args.get("workspace_id")),
+        }
 
     @staticmethod
     def _merged_metadata(arguments: dict[str, Any], context: Any | None) -> dict[str, Any]:
