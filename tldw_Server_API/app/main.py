@@ -53,6 +53,10 @@ from tldw_Server_API.app.core.testing import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
 )
+from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
+    ensure_chacha_rls,
+    ensure_prompt_studio_rls,
+)
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     managed_media_database,
 )
@@ -135,6 +139,18 @@ def _claims_rebuild_db_session(
         initialize=False,
     ) as db:
         yield user_id, db_path, db
+
+
+def _run_pg_rls_auto_ensure(backend: Any) -> tuple[bool, bool]:
+    """Apply both PostgreSQL RLS installers and log the combined result."""
+    prompt_ok = ensure_prompt_studio_rls(backend)
+    chacha_ok = ensure_chacha_rls(backend)
+    logger.info(
+        "PG RLS ensure invoked (prompt_studio_applied={}, chacha_applied={})",
+        prompt_ok,
+        chacha_ok,
+    )
+    return prompt_ok, chacha_ok
 
 
 def _apply_shutdown_transition_gate(app: FastAPI, readiness_state: Any | None) -> None:
@@ -1224,6 +1240,13 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        _HAS_WEB_CLIPPER = True
+    except _IMPORT_EXCEPTIONS as _wc_err:
+        logger.warning(f"Web clipper endpoints unavailable; skipping import: {_wc_err}")
+        _HAS_WEB_CLIPPER = False
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -1406,6 +1429,22 @@ else:
     except _IMPORT_EXCEPTIONS as _acp_import_err:
         logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
         acp_router = None  # type: ignore[assignment]
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+    except _IMPORT_EXCEPTIONS as _acp_sched_err:
+        logger.warning(f"ACP schedules endpoints unavailable at import time; deferring: {_acp_sched_err}")
+        acp_schedules_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+    except _IMPORT_EXCEPTIONS as _acp_trig_err:
+        logger.warning(f"ACP triggers endpoints unavailable at import time; deferring: {_acp_trig_err}")
+        acp_triggers_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+    except _IMPORT_EXCEPTIONS as _acp_perm_err:
+        logger.warning(f"ACP permissions endpoints unavailable at import time; deferring: {_acp_perm_err}")
+        acp_permissions_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -1415,6 +1454,9 @@ else:
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+        router as study_suggestions_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
         public_router as llamacpp_public_router,
     )
@@ -1655,6 +1697,23 @@ async def lifespan(app: FastAPI):
         logger.exception(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
 
+    # Startup: Validate ACP runner configuration (non-fatal warnings)
+    try:
+        if route_enabled("acp", default_stable=False):
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
+                load_acp_runner_config as _load_acp_cfg,
+                validate_acp_config as _validate_acp_cfg,
+            )
+
+            _acp_cfg = _load_acp_cfg()
+            _acp_warnings = _validate_acp_cfg(_acp_cfg)
+            for _acp_w in _acp_warnings:
+                logger.warning("ACP config: {}", _acp_w)
+            if not _acp_warnings:
+                logger.info("App Startup: ACP runner configuration validated")
+    except _STARTUP_GUARD_EXCEPTIONS as _acp_val_err:
+        logger.debug("App Startup: ACP config validation skipped: {}", _acp_val_err)
+
     # Startup: Validate Postgres content backend when enabled
     try:
         from tldw_Server_API.app.core.DB_Management.DB_Manager import (
@@ -1733,6 +1792,22 @@ async def lifespan(app: FastAPI):
             logger.debug(f"App Startup: FastAPI instrumentation skipped: {_otel_app_err}")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Startup: Failed to initialize telemetry: {e}")
+
+    # Startup: Initialize Sentry error tracking (optional)
+    _sentry_dsn = os.getenv("SENTRY_DSN", "")
+    if _sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(
+                dsn=_sentry_dsn,
+                traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+                environment=os.getenv("DEPLOYMENT_ENV", "development"),
+                release=os.getenv("OTEL_SERVICE_VERSION", "1.0.0"),
+                send_default_pii=False,
+            )
+            logger.info("App Startup: Sentry error tracking initialized")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _sentry_err:
+            logger.warning("App Startup: Sentry initialization failed: {}", _sentry_err)
 
     # Startup: Warn if first-time setup is enabled (local-only, no proxies)
     try:
@@ -2476,6 +2551,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
     study_pack_jobs_task = None
+    study_suggestions_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2489,6 +2565,7 @@ async def lifespan(app: FastAPI):
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
     study_pack_jobs_stop_event = None
+    study_suggestions_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -2720,6 +2797,26 @@ async def lifespan(app: FastAPI):
             logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
+
+    # Study-suggestions Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED", "study-suggestions")
+        if _enabled:
+            from tldw_Server_API.app.services.study_suggestions_jobs_worker import (
+                run_study_suggestions_jobs_worker as _run_study_suggestions_jobs,
+            )
+
+            study_suggestions_jobs_stop_event = _asyncio.Event()
+            study_suggestions_jobs_task = _asyncio.create_task(
+                _run_study_suggestions_jobs(study_suggestions_jobs_stop_event)
+            )
+            logger.info("Study-suggestions Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-suggestions Jobs worker disabled by flag (STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-suggestions Jobs worker: {e}")
 
     # Privilege snapshot worker
     try:
@@ -3369,18 +3466,15 @@ async def lifespan(app: FastAPI):
     try:
         _ensure_rls = _shared_env_flag_enabled("RAG_ENSURE_PG_RLS")
         if _ensure_rls:
-            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, DatabaseError
             from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-            from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
-                ensure_chacha_rls,
-                ensure_prompt_studio_rls,
-            )
 
             _cfg = DatabaseConfig.from_env()
             _backend = DatabaseBackendFactory.create_backend(_cfg)
-            _ps_ok = ensure_prompt_studio_rls(_backend)
-            _cc_ok = ensure_chacha_rls(_backend)
-            logger.info(f"PG RLS ensure invoked (prompt_studio_applied={_ps_ok}, chacha_applied={_cc_ok})")
+            try:
+                _run_pg_rls_auto_ensure(_backend)
+            except DatabaseError as e:
+                logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
         else:
             logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
@@ -4072,6 +4166,16 @@ async def lifespan(app: FastAPI):
                     study_pack_jobs_task.cancel()
             else:
                 study_pack_jobs_task.cancel()
+        if "study_suggestions_jobs_task" in locals() and study_suggestions_jobs_task:
+            if "study_suggestions_jobs_stop_event" in locals() and study_suggestions_jobs_stop_event:
+                try:
+                    study_suggestions_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_suggestions_jobs_task, timeout=5.0)
+                    logger.info("Study-suggestions Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_suggestions_jobs_task.cancel()
+            else:
+                study_suggestions_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:
@@ -4587,6 +4691,36 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Shutting down unified audit services...")
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.sharing import (
+                shutdown_sharing_audit_service,
+            )
+
+            await shutdown_sharing_audit_service()
+            logger.info("App Shutdown: Sharing audit service stopped")
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
+            logger.debug(f"Sharing audit service shutdown skipped: {_e}")
+
+        try:
+            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+                shutdown_local_audit_adapter_loop,
+            )
+
+            shutdown_local_audit_adapter_loop()
+            logger.info("App Shutdown: Embeddings audit adapter loop stopped")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Embeddings audit adapter loop shutdown skipped: {}", _e)
+
+        try:
+            from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+                shutdown_local_evaluations_audit_loop,
+            )
+
+            shutdown_local_evaluations_audit_loop()
+            logger.info("App Shutdown: Evaluations audit adapter loop stopped")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Evaluations audit adapter loop shutdown skipped: {}", _e)
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
 
@@ -4642,17 +4776,6 @@ async def lifespan(app: FastAPI):
                 logger.info("AuthNZ scheduler stopped")
         except _IMPORT_EXCEPTIONS as _e:
             logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
-
-        # Shutdown cached audit adapter services (Embeddings adapter)
-        try:
-            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
-                shutdown_audit_adapter_services as _shutdown_audit_adapter,
-            )
-
-            await _shutdown_audit_adapter()
-            logger.info("Embeddings audit adapter services shutdown")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
-            logger.debug(f"Embeddings audit adapter shutdown skipped: {_e}")
 
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")
@@ -5945,29 +6068,9 @@ async def root():
 
 # Metrics endpoint for Prometheus scraping (registered conditionally below)
 async def metrics():
-    """Prometheus metrics endpoint.
+    from tldw_Server_API.app.api.v1.endpoints.metrics import build_prometheus_metrics_response
 
-    Exposes both the internal registry (JSON-backed) and the default
-    prometheus_client REGISTRY used by embeddings/orchestrator code paths.
-    """
-    from fastapi.responses import PlainTextResponse
-
-    try:
-        from prometheus_client import REGISTRY as PC_REGISTRY
-        from prometheus_client import generate_latest as pc_generate_latest
-    except _IMPORT_EXCEPTIONS:
-        PC_REGISTRY = None
-        pc_generate_latest = None
-
-    registry = get_metrics_registry()
-    combined = registry.export_prometheus_format() or ""
-    try:
-        if pc_generate_latest and PC_REGISTRY:
-            combined = (combined + "\n" + pc_generate_latest(PC_REGISTRY).decode("utf-8")).strip() + "\n"
-    except _REQUEST_GUARD_EXCEPTIONS:
-        # If prometheus_client is unavailable, ignore
-        pass
-    return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
+    return await build_prometheus_metrics_response()
 
 
 # OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
@@ -6310,6 +6413,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except _IMPORT_EXCEPTIONS as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        app.include_router(web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
+    except _IMPORT_EXCEPTIONS as _web_clipper_min_err:
+        logger.debug(f"Skipping web clipper router in minimal test app: {_web_clipper_min_err}")
     # Skills endpoints (SKILL.md management)
     try:
         from tldw_Server_API.app.api.v1.endpoints.skills import router as skills_router
@@ -6441,6 +6550,14 @@ elif _MINIMAL_TEST_APP:
         app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
     except _IMPORT_EXCEPTIONS as _quiz_min_err:
         logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+            router as study_suggestions_router,
+        )
+
+        app.include_router(study_suggestions_router, prefix=f"{API_V1_PREFIX}", tags=["study-suggestions"])
+    except _IMPORT_EXCEPTIONS as _study_suggestions_min_err:
+        logger.debug(f"Skipping study_suggestions router in minimal test app: {_study_suggestions_min_err}")
     # Writing Playground endpoints (ChaChaNotes-backed) for integration tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
@@ -6519,6 +6636,25 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+
+        app.include_router(acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"])
+    except _IMPORT_EXCEPTIONS as _acp_sched_min_err:
+        logger.debug(f"Skipping ACP schedules router in minimal test app: {_acp_sched_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+
+        app.include_router(acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"])
+    except _IMPORT_EXCEPTIONS as _acp_trig_min_err:
+        logger.debug(f"Skipping ACP triggers router in minimal test app: {_acp_trig_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+
+        app.include_router(acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"])
+    except _IMPORT_EXCEPTIONS as _acp_perm_min_err:
+        logger.debug(f"Skipping ACP permissions router in minimal test app: {_acp_perm_min_err}")
     # Agent Orchestration endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
@@ -6772,6 +6908,12 @@ else:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     if "acp_router" in locals() and acp_router is not None:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
+    if "acp_schedules_router" in locals() and acp_schedules_router is not None:
+        _include_if_enabled("acp", acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"], default_stable=False)
+    if "acp_triggers_router" in locals() and acp_triggers_router is not None:
+        _include_if_enabled("acp", acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"], default_stable=False)
+    if "acp_permissions_router" in locals() and acp_permissions_router is not None:
+        _include_if_enabled("acp", acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_memory_router" in locals():
@@ -6968,6 +7110,8 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    if _HAS_WEB_CLIPPER:
+        _include_if_enabled("web-clipper", web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
     _include_if_enabled("translation", translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
     _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
@@ -7139,6 +7283,13 @@ else:
     )
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
+    )
+    _include_if_enabled(
+        "study-suggestions",
+        study_suggestions_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["study-suggestions"],
+        default_stable=True,
     )
     if "writing_router" in locals() and writing_router is not None:
         _include_if_enabled(

@@ -139,7 +139,6 @@ export function CompanionHomeShell({
           </div>
         </div>
       )}
-
       <CompanionHomePage
         onPersonalizationEnabled={onPersonalizationEnabled}
         surface={surface}

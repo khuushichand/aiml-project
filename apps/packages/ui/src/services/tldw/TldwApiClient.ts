@@ -7597,6 +7597,7 @@ import { collectionsMethods } from "./domains/collections"
 import { modelsAudioMethods } from "./domains/models-audio"
 import { presentationsMethods } from "./domains/presentations"
 import { workspaceApiMethods } from "./domains/workspace-api"
+import { webClipperMethods } from "./domains/web-clipper"
 
 // Declaration merging: extend the class type with all domain methods
 export interface TldwApiClient
@@ -7608,7 +7609,8 @@ export interface TldwApiClient
     Omit<typeof collectionsMethods, never>,
     Omit<typeof modelsAudioMethods, never>,
     Omit<typeof presentationsMethods, never>,
-    Omit<typeof workspaceApiMethods, never> {}
+    Omit<typeof workspaceApiMethods, never>,
+    Omit<typeof webClipperMethods, never> {}
 
 // Apply domain methods to the prototype
 Object.assign(
@@ -7620,7 +7622,8 @@ Object.assign(
   collectionsMethods,
   modelsAudioMethods,
   presentationsMethods,
-  workspaceApiMethods
+  workspaceApiMethods,
+  webClipperMethods
 )
 
 // Also expose core helpers that domain files reference via `this`

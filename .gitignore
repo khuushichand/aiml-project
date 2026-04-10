@@ -369,6 +369,7 @@ Config_Files/session_encryption.key
 :memory:
 /tldw_Server_API/WebUI/node_modules
 /apps/node_modules
+/apps/**/node_modules/
 /node_modules
 /.mkdocs-venv
 /tmp_dir

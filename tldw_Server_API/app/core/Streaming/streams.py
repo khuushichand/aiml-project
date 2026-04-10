@@ -327,6 +327,8 @@ class SSEStream:
 
     async def _enqueue(self, line: str, *, force: bool = False) -> None:
         # Blocking (default) backpressure policy; force=True drops oldest to ensure termination frames.
+        if self._closed and not force:
+            return
         enq_ts = time.monotonic()
         if not force:
             await self._queue.put((line, enq_ts))

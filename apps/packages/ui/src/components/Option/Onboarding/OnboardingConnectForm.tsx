@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, useReducer } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, useReducer, type ReactNode } from "react"
 import { Input, Button, Tooltip, message, Select } from "antd"
 import type { InputRef } from "antd"
 import {
@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Sparkles,
   ArrowRight,
+  ArrowLeft,
   RefreshCw,
   MessageSquare,
   Shield,
@@ -48,6 +49,9 @@ import { openSidepanelForActiveTab } from "@/utils/sidepanel"
 import { requestOptionalHostPermission } from "@/utils/extension-permissions"
 import { useQuickIngestStore } from "@/store/quick-ingest"
 import { cn } from "@/libs/utils"
+import { setSetting } from "@/services/settings/registry"
+import { HEADER_SHORTCUT_SELECTION_SETTING } from "@/services/settings/ui-settings"
+import { getDefaultShortcutsForPersona } from "@/components/Layouts/header-shortcut-items"
 import { isExtensionRuntime } from "@/utils/browser-runtime"
 import { getProviderDisplayName, normalizeProviderKey } from "@/utils/provider-registry"
 import {
@@ -176,6 +180,66 @@ const LOCALHOST_PROBE_TIMEOUT_MS = 2_000
 const TROUBLESHOOTING_URL =
   "https://github.com/rmusser01/tldw/blob/main/Docs/Getting_Started/TROUBLESHOOTING.md"
 
+type IntentStepsProps = {
+  testId: string
+  icon: ReactNode
+  title: string
+  steps: string[]
+  primaryLabel: string
+  onPrimaryClick: () => void
+  secondaryLabel: string
+  onSecondaryClick: () => void
+  backLabel: string
+  onBackClick: () => void
+}
+
+function IntentSteps({
+  testId,
+  icon,
+  title,
+  steps,
+  primaryLabel,
+  onPrimaryClick,
+  secondaryLabel,
+  onSecondaryClick,
+  backLabel,
+  onBackClick,
+}: IntentStepsProps) {
+  return (
+    <div data-testid={testId} className="rounded-xl border border-border/60 bg-surface2/30 p-5">
+      <div className="mb-4 flex items-center gap-2">
+        {icon}
+        <span className="text-sm font-semibold text-text">{title}</span>
+      </div>
+      <div className="space-y-2.5">
+        {steps.map((step, index) => (
+          <div key={step} className="flex items-start gap-2.5">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+              {index + 1}
+            </span>
+            <span className="text-sm text-text">{step}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex items-center gap-2">
+        <Button type="primary" onClick={onPrimaryClick}>
+          {primaryLabel}
+          <ArrowRight className="ml-1 h-4 w-4" />
+        </Button>
+        <Button onClick={onSecondaryClick}>{secondaryLabel}</Button>
+        <button
+          type="button"
+          onClick={onBackClick}
+          className="ml-auto flex items-center gap-1 text-xs text-text-muted hover:text-text"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          {backLabel}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Single-step onboarding form for the new UX redesign.
  * Features:
@@ -230,6 +294,9 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     showSuccess,
     hasRunConnectionTest,
   } = uiState
+
+  // Post-connection guided flow: when user selects an intent, show persona-specific steps
+  const [selectedIntent, setSelectedIntent] = useState<"chat" | "family" | "research" | null>(null)
 
   const {
     data: availableModels = [],
@@ -819,14 +886,27 @@ export function OnboardingConnectForm({ onFinish }: Props) {
   )
 
   const handleOpenIngestFlow = useCallback(async () => {
+    try {
+      await actions.setUserPersona("researcher")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
+    try {
+      const researcherShortcuts = getDefaultShortcutsForPersona("researcher")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, researcherShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist researcher shortcuts", err)
+    }
     await finishAndNavigate("/media", { openQuickIngestIntro: true })
-  }, [finishAndNavigate])
+  }, [actions, finishAndNavigate])
+
+  const handleResearchGetStarted = handleOpenIngestFlow
 
   const handleOpenMediaFlow = useCallback(async () => {
     await finishAndNavigate("/media")
   }, [finishAndNavigate])
 
-  const handleOpenChatFlow = useCallback(async () => {
+  const handleGoToChat = useCallback(async () => {
     try {
       await openSidepanelForActiveTab()
     } catch (err) {
@@ -835,13 +915,39 @@ export function OnboardingConnectForm({ onFinish }: Props) {
     await finishAndNavigate("/chat")
   }, [finishAndNavigate])
 
+  const handleOpenChatFlow = useCallback(async () => {
+    try {
+      await actions.setUserPersona("explorer")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
+    try {
+      const explorerShortcuts = getDefaultShortcutsForPersona("explorer")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, explorerShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist explorer shortcuts", err)
+    }
+    await handleGoToChat()
+  }, [actions, handleGoToChat])
+
   const handleOpenSettingsFlow = useCallback(async () => {
     await finishAndNavigate("/settings/tldw")
   }, [finishAndNavigate])
 
   const handleOpenFamilyFlow = useCallback(async () => {
+    try {
+      await actions.setUserPersona("family")
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] setUserPersona failed", err)
+    }
+    try {
+      const familyShortcuts = getDefaultShortcutsForPersona("family")
+      await setSetting(HEADER_SHORTCUT_SELECTION_SETTING, familyShortcuts)
+    } catch (err) {
+      console.debug("[OnboardingConnectForm] Failed to persist family shortcuts", err)
+    }
     await finishAndNavigate("/settings/family-guardrails")
-  }, [finishAndNavigate])
+  }, [actions, finishAndNavigate])
 
   // Copy server command
   const handleCopyCommand = useCallback(
@@ -943,60 +1049,98 @@ export function OnboardingConnectForm({ onFinish }: Props) {
 
         {/* Intent selector — route to persona-appropriate next step */}
         <div data-testid="intent-selector" className="mb-6">
-          <p className="mb-3 text-sm font-medium text-text-muted">
-            {t("settings:onboarding.success.intentTitle", "What would you like to do first?")}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <button
-              type="button"
-              onClick={handleOpenChatFlow}
-              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
-            >
-              <MessageSquare className="h-5 w-5 text-primary" />
-              <span className="text-sm font-medium text-text">
-                {t("settings:onboarding.success.intentChat", "Chat with AI")}
-              </span>
-              <span className="text-xs text-text-muted">
-                {t("settings:onboarding.success.intentChatDesc", "Start a conversation with your configured models.")}
-              </span>
-            </button>
+          {selectedIntent == null ? (
+            <>
+              <p className="mb-3 text-sm font-medium text-text-muted">
+                {t("settings:onboarding.success.intentTitle", "What would you like to do first?")}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={handleOpenChatFlow}
+                  className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+                >
+                  <MessageSquare className="h-5 w-5 text-primary" />
+                  <span className="text-sm font-medium text-text">
+                    {t("settings:onboarding.success.intentChat", "Chat with AI")}
+                  </span>
+                  <span className="text-xs text-text-muted">
+                    {t("settings:onboarding.success.intentChatDesc", "Start a conversation with your configured models.")}
+                  </span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handleOpenFamilyFlow}
-              disabled={!familyGuardrailsAvailable}
-              className={cn(
-                "flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors",
-                familyGuardrailsAvailable
-                  ? "hover:border-primary/50 hover:bg-surface2"
-                  : "opacity-50 cursor-not-allowed"
-              )}
-            >
-              <Shield className={cn("h-5 w-5", familyGuardrailsAvailable ? "text-primary" : "text-text-subtle")} />
-              <span className="text-sm font-medium text-text">
-                {t("settings:onboarding.success.intentFamily", "Set up family safety")}
-              </span>
-              <span className="text-xs text-text-muted">
-                {familyGuardrailsAvailable
-                  ? t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")
-                  : t("settings:onboarding.success.intentFamilyUnavailable", "Not available on this server.")}
-              </span>
-            </button>
+                <button
+                  type="button"
+                  onClick={() => familyGuardrailsAvailable && setSelectedIntent("family")}
+                  disabled={!familyGuardrailsAvailable}
+                  className={cn(
+                    "flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors",
+                    familyGuardrailsAvailable
+                      ? "hover:border-primary/50 hover:bg-surface2"
+                      : "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  <Shield className={cn("h-5 w-5", familyGuardrailsAvailable ? "text-primary" : "text-text-subtle")} />
+                  <span className="text-sm font-medium text-text">
+                    {t("settings:onboarding.success.intentFamily", "Set up family safety")}
+                  </span>
+                  <span className="text-xs text-text-muted">
+                    {familyGuardrailsAvailable
+                      ? t("settings:onboarding.success.intentFamilyDesc", "Create family profiles and content safety rules.")
+                      : t("settings:onboarding.success.intentFamilyUnavailable", "Not available on this server.")}
+                  </span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handleOpenIngestFlow}
-              className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
-            >
-              <BookOpen className="h-5 w-5 text-primary" />
-              <span className="text-sm font-medium text-text">
-                {t("settings:onboarding.success.intentResearch", "Research my documents")}
-              </span>
-              <span className="text-xs text-text-muted">
-                {t("settings:onboarding.success.intentResearchDesc", "Import documents and ask questions about them.")}
-              </span>
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIntent("research")}
+                  className="flex flex-col items-start gap-2 rounded-xl border border-border/60 bg-surface2/30 p-4 text-left transition-colors hover:border-primary/50 hover:bg-surface2"
+                >
+                  <BookOpen className="h-5 w-5 text-primary" />
+                  <span className="text-sm font-medium text-text">
+                    {t("settings:onboarding.success.intentResearch", "Research my documents")}
+                  </span>
+                  <span className="text-xs text-text-muted">
+                    {t("settings:onboarding.success.intentResearchDesc", "Import documents and ask questions about them.")}
+                  </span>
+                </button>
+              </div>
+            </>
+          ) : selectedIntent === "family" ? (
+            <IntentSteps
+              testId="intent-steps-family"
+              icon={<Shield className="h-5 w-5 text-primary" />}
+              title={t("settings:onboarding.success.familyStepsTitle", "Your next steps")}
+              steps={[
+                t("settings:onboarding.success.familyStep1", "Set up family profiles in the Family Guardrails wizard"),
+                t("settings:onboarding.success.familyStep2", "Review content safety rules in Content Controls"),
+                t("settings:onboarding.success.familyStep3", "Test your rules with a sample message"),
+              ]}
+              primaryLabel={t("settings:onboarding.success.getStarted", "Get Started")}
+              onPrimaryClick={handleOpenFamilyFlow}
+              secondaryLabel={t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
+              onSecondaryClick={handleGoToChat}
+              backLabel={t("settings:onboarding.success.backToChoices", "Back")}
+              onBackClick={() => setSelectedIntent(null)}
+            />
+          ) : (
+            <IntentSteps
+              testId="intent-steps-research"
+              icon={<BookOpen className="h-5 w-5 text-primary" />}
+              title={t("settings:onboarding.success.researchStepsTitle", "Your next steps")}
+              steps={[
+                t("settings:onboarding.success.researchStep1", "Import your first document via Quick Ingest"),
+                t("settings:onboarding.success.researchStep2", "Browse your library in Media"),
+                t("settings:onboarding.success.researchStep3", "Ask questions about it in Chat"),
+              ]}
+              primaryLabel={t("settings:onboarding.success.getStarted", "Get Started")}
+              onPrimaryClick={handleOpenIngestFlow}
+              secondaryLabel={t("settings:onboarding.success.skipToChat", "Skip, go to chat")}
+              onSecondaryClick={handleGoToChat}
+              backLabel={t("settings:onboarding.success.backToChoices", "Back")}
+              onBackClick={() => setSelectedIntent(null)}
+            />
+          )}
         </div>
 
         <div className="mb-6 rounded-2xl border border-border/70 bg-surface p-4">

@@ -66,6 +66,7 @@ type QuickIngestBatchResult = {
   type: string
   data?: unknown
   error?: string
+  persisted?: boolean
 }
 
 type QuickIngestBatchResponse = {
@@ -667,7 +668,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           url,
           type: resolvedType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({
@@ -748,7 +750,8 @@ const runDirectQuickIngestBatch = async (
               status: "ok",
               fileName,
               type: mediaType,
-              data: pollResult.data
+              data: pollResult.data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(mediaType)
             })
           } catch (error) {
             if (!shouldFallbackToPersistentAdd(error)) {
@@ -763,7 +766,8 @@ const runDirectQuickIngestBatch = async (
               status: "ok",
               fileName,
               type: mediaType,
-              data
+              data,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(mediaType)
             })
           }
           continue
@@ -782,7 +786,8 @@ const runDirectQuickIngestBatch = async (
           status: "ok",
           fileName,
           type: mediaType,
-          data
+          data,
+          persisted: false
         })
       } catch (error) {
         out.push({

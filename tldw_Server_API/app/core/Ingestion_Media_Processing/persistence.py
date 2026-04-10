@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Metrics.stt_metrics import emit_stt_run_write_total
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled,
     is_explicit_pytest_runtime,
@@ -99,6 +100,15 @@ _MEDIA_INGESTION_BYTES_CATEGORY = "ingestion_bytes"
 
 _media_ingestion_daily_ledger = None
 _media_ingestion_daily_ledger_lock = asyncio.Lock()
+
+_SHARED_TRANSCRIPT_REUSABLE_HOSTS = frozenset(
+    {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+    }
+)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1229,6 +1239,489 @@ def _normalize_dedupe_url_for_db(value: str) -> str:
         return raw
     normalized = normalize_media_dedupe_url(raw)
     return str(normalized).strip() if normalized else raw
+
+
+def _merge_video_lite_summary_safe_metadata(
+    safe_meta: dict[str, Any],
+    *,
+    process_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Reserve a stable lightweight-summary slot separate from generic analysis content."""
+    summary_value = process_result.get("summary")
+    if summary_value is None:
+        summary_value = process_result.get("analysis")
+
+    merged = dict(safe_meta)
+    existing_block = merged.get("video_lite")
+    if isinstance(existing_block, dict):
+        video_lite_meta = dict(existing_block)
+    else:
+        video_lite_meta = {}
+
+    summary_status = str(
+        process_result.get("video_lite_summary_status") or ""
+    ).strip().lower()
+    if summary_value is not None:
+        summary_text = str(summary_value).strip()
+        if summary_text:
+            video_lite_meta["summary"] = summary_text
+            video_lite_meta["summary_status"] = "ready"
+            merged["video_lite"] = video_lite_meta
+            return merged
+
+    if summary_status == "failed":
+        video_lite_meta["summary_status"] = "failed"
+        merged["video_lite"] = video_lite_meta
+        return merged
+
+    if not video_lite_meta:
+        return safe_meta
+
+    merged["video_lite"] = video_lite_meta
+    return merged
+
+
+def _shared_transcript_dedupe_candidates(
+    *,
+    source_path_or_url: str,
+    source_hash: str | None,
+    form_data: Any,
+) -> list[tuple[str, str]]:
+    raw_source = str(source_path_or_url or "").strip()
+    if not raw_source:
+        return []
+
+    signature_payload = {
+        "transcription_model": getattr(form_data, "transcription_model", None),
+        "transcription_language": getattr(form_data, "transcription_language", None),
+        "start_time": getattr(form_data, "start_time", None),
+        "end_time": getattr(form_data, "end_time", None),
+        "timestamp_option": getattr(form_data, "timestamp_option", None),
+        "diarize": bool(getattr(form_data, "diarize", False)),
+        "vad_use": bool(getattr(form_data, "vad_use", False)),
+    }
+    normalized_signature = {
+        key: value
+        for key, value in signature_payload.items()
+        if value not in (None, "")
+    }
+    reuse_signature = json.dumps(
+        normalized_signature,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+    candidates: list[tuple[str, str]] = []
+    if raw_source.lower().startswith(("http://", "https://")):
+        normalized = normalize_media_dedupe_url(raw_source) or raw_source
+        parsed = urlparse(str(normalized))
+        host = (parsed.netloc or "").strip().lower()
+        if ":" in host:
+            host = host.split(":", 1)[0]
+        if host in _SHARED_TRANSCRIPT_REUSABLE_HOSTS:
+            candidates.append(("url", f"{str(normalized).strip()}|{reuse_signature}"))
+        return candidates
+
+    source_hash_value = str(source_hash or "").strip()
+    if source_hash_value:
+        candidates.append(("source_hash", f"{source_hash_value}|{reuse_signature}"))
+    return candidates
+
+
+async def _get_media_ingest_dedupe_repo():
+    from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.AuthNZ.repos.media_ingest_dedupe_repo import (
+        MediaIngestDedupeRepo,
+    )
+
+    pool = await get_db_pool()
+    repo = MediaIngestDedupeRepo(pool)
+    await repo.ensure_tables()
+    return repo
+
+
+def _parse_normalized_stt_artifact(raw_value: Any) -> dict[str, Any] | None:
+    if isinstance(raw_value, dict):
+        return dict(raw_value)
+    if not isinstance(raw_value, str):
+        return None
+    stripped = raw_value.lstrip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return None
+    return dict(parsed) if isinstance(parsed, dict) else None
+
+
+def _extract_reusable_transcript_payload(
+    *,
+    source_media: dict[str, Any],
+    transcript_rows: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any] | None]:
+    normalized_stt = None
+    for row in transcript_rows:
+        normalized_stt = _parse_normalized_stt_artifact(row.get("transcription"))
+        if normalized_stt:
+            break
+
+    content_text = ""
+    if isinstance(normalized_stt, dict):
+        content_text = str(normalized_stt.get("text") or "").strip()
+    if not content_text:
+        content_text = str(source_media.get("content") or "").strip()
+
+    if normalized_stt is None and content_text:
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+            to_normalized_stt_artifact,
+        )
+
+        normalized_stt = to_normalized_stt_artifact(
+            text=content_text,
+            segments=None,
+            language=None,
+            provider="dedupe",
+            model=str(source_media.get("transcription_model") or "dedupe"),
+        )
+
+    return content_text, normalized_stt
+
+
+def _build_reused_process_result(
+    *,
+    original_input_ref: str,
+    media_type: str,
+    content_text: str,
+    source_media: dict[str, Any],
+    normalized_stt: dict[str, Any] | None,
+) -> dict[str, Any]:
+    reusable_content_text = str(content_text or "").strip()
+    if not reusable_content_text and isinstance(normalized_stt, dict):
+        reusable_content_text = str(normalized_stt.get("text") or "").strip()
+    artifact_meta = (
+        dict(normalized_stt.get("metadata") or {})
+        if isinstance(normalized_stt, dict)
+        else {}
+    )
+    metadata = {
+        "title": source_media.get("title"),
+        "author": source_media.get("author"),
+        "url": source_media.get("url"),
+        "source_url": source_media.get("url"),
+        "model": artifact_meta.get("model") or source_media.get("transcription_model"),
+        "provider": artifact_meta.get("provider"),
+        "source_hash": source_media.get("source_hash"),
+    }
+    metadata = {key: value for key, value in metadata.items() if value not in (None, "")}
+
+    analysis_details: dict[str, Any] = {}
+    language_value = artifact_meta.get("language")
+    if language_value:
+        analysis_details["transcription_language"] = language_value
+
+    return {
+        "status": "Success",
+        "input_ref": original_input_ref,
+        "processing_source": original_input_ref,
+        "media_type": media_type,
+        "metadata": metadata,
+        "content": reusable_content_text,
+        "segments": (
+            normalized_stt.get("segments")
+            if isinstance(normalized_stt, dict)
+            else None
+        ),
+        "chunks": None,
+        "analysis": None,
+        "summary": None,
+        "analysis_details": analysis_details,
+        "error": None,
+        "warnings": None,
+        "normalized_stt": normalized_stt,
+        "video_lite_summary_status": None,
+    }
+
+
+def _synthesize_reused_transcript_analysis_sync(
+    *,
+    process_result: dict[str, Any],
+    form_data: Any,
+    chunk_options: dict[str, Any] | None,
+) -> tuple[str | None, list[str], list[dict[str, Any]] | None]:
+    from tldw_Server_API.app.core.Chunking import improved_chunking_process
+    from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+
+    warnings: list[str] = []
+    text_to_analyze = str(process_result.get("content") or "").strip()
+    if not text_to_analyze:
+        return None, warnings, None
+
+    api_name = getattr(form_data, "api_name", None)
+    if not api_name or str(api_name).strip().lower() == "none":
+        return None, warnings, None
+
+    custom_prompt = getattr(form_data, "custom_prompt", None)
+    system_prompt = getattr(form_data, "system_prompt", None)
+    perform_chunking = bool(getattr(form_data, "perform_chunking", True))
+    summarize_recursively = bool(getattr(form_data, "summarize_recursively", False))
+
+    if not perform_chunking or not chunk_options:
+        return (
+            analyze(
+                api_name,
+                text_to_analyze,
+                custom_prompt,
+                None,
+                system_message=system_prompt,
+            ),
+            warnings,
+            None,
+        )
+
+    try:
+        chunked_texts_list = improved_chunking_process(text_to_analyze, chunk_options)
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        warnings.append(f"Chunking process failed during dedupe reuse: {exc}")
+        return (
+            analyze(
+                api_name,
+                text_to_analyze,
+                custom_prompt,
+                None,
+                system_message=system_prompt,
+            ),
+            warnings,
+            None,
+        )
+
+    if not chunked_texts_list:
+        warnings.append("Chunking yielded no chunks during dedupe reuse.")
+        return (
+            analyze(
+                api_name,
+                text_to_analyze,
+                custom_prompt,
+                None,
+                system_message=system_prompt,
+            ),
+            warnings,
+            None,
+        )
+
+    chunk_summaries: list[str] = []
+    for index, chunk_block in enumerate(chunked_texts_list):
+        chunk_text = str((chunk_block or {}).get("text") or "").strip()
+        if not chunk_text:
+            continue
+        try:
+            chunk_summary = analyze(
+                api_name,
+                chunk_text,
+                custom_prompt,
+                None,
+                system_message=system_prompt,
+            )
+        except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+            warnings.append(f"Chunk summarization failed during dedupe reuse for chunk {index}: {exc}")
+            continue
+        if chunk_summary:
+            chunk_summaries.append(str(chunk_summary))
+            if isinstance(chunk_block.get("metadata"), dict):
+                chunk_block["metadata"]["summary"] = str(chunk_summary)
+            else:
+                chunk_block["metadata"] = {"summary": str(chunk_summary)}
+
+    if not chunk_summaries:
+        warnings.append("No chunk summaries were produced during dedupe reuse.")
+        return None, warnings, chunked_texts_list
+
+    if summarize_recursively and len(chunk_summaries) > 1:
+        combined_chunk_summaries = "\n\n---\n\n".join(chunk_summaries)
+        return (
+            analyze(
+                api_name,
+                combined_chunk_summaries,
+                custom_prompt or "Summarize the key points from the preceding text sections.",
+                None,
+                system_message=system_prompt,
+            ),
+            warnings,
+            chunked_texts_list,
+        )
+
+    return "\n\n---\n\n".join(chunk_summaries), warnings, chunked_texts_list
+
+
+async def _populate_reused_transcript_summary(
+    *,
+    process_result: dict[str, Any],
+    form_data: Any,
+    chunk_options: dict[str, Any] | None,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    if process_result.get("analysis") or process_result.get("summary"):
+        return
+    if not getattr(form_data, "perform_analysis", False):
+        return
+
+    analysis_details = process_result.get("analysis_details")
+    if not isinstance(analysis_details, dict):
+        analysis_details = {}
+        process_result["analysis_details"] = analysis_details
+    analysis_details["llm_api"] = getattr(form_data, "api_name", None)
+    analysis_details["custom_prompt"] = getattr(form_data, "custom_prompt", None)
+    analysis_details["system_prompt"] = getattr(form_data, "system_prompt", None)
+    if chunk_options:
+        analysis_details["chunking_options"] = dict(chunk_options)
+
+    try:
+        analysis_text, warnings, chunks = await loop.run_in_executor(
+            None,
+            functools.partial(
+                _synthesize_reused_transcript_analysis_sync,
+                process_result=process_result,
+                form_data=form_data,
+                chunk_options=chunk_options,
+            ),
+        )
+        if chunks is not None:
+            process_result["chunks"] = chunks
+        if warnings:
+            _ensure_warnings_list(process_result).extend(warnings)
+        process_result["analysis"] = analysis_text
+        process_result["summary"] = analysis_text
+        if analysis_text:
+            process_result["video_lite_summary_status"] = "ready"
+        else:
+            process_result["video_lite_summary_status"] = "failed"
+    except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as exc:
+        _ensure_warnings_list(process_result).append(
+            f"Summary generation failed during dedupe reuse: {exc}"
+        )
+        process_result["video_lite_summary_status"] = "failed"
+
+
+async def _maybe_build_reused_transcript_process_result(
+    *,
+    media_type: str,
+    original_input_ref: str,
+    source_path_or_url: str,
+    source_hash: str | None,
+    form_data: Any,
+    chunk_options: dict[str, Any] | None,
+    loop: asyncio.AbstractEventLoop,
+) -> dict[str, Any] | None:
+    if str(media_type) != "video":
+        return None
+
+    dedupe_candidates = _shared_transcript_dedupe_candidates(
+        source_path_or_url=source_path_or_url,
+        source_hash=source_hash,
+        form_data=form_data,
+    )
+    if not dedupe_candidates:
+        return None
+
+    repo = await _get_media_ingest_dedupe_repo()
+    hit = await repo.lookup_source(
+        media_type=str(media_type),
+        dedupe_keys=[f"{kind}:{value}" for kind, value in dedupe_candidates],
+    )
+    if not hit:
+        return None
+
+    source_user_id = hit.get("source_user_id")
+    source_media_id = hit.get("source_media_id")
+    try:
+        source_user_id_int = int(source_user_id)
+        source_media_id_int = int(source_media_id)
+    except (TypeError, ValueError):
+        return None
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.media_db.api import (
+        get_media_transcripts,
+    )
+
+    source_db = create_media_database(
+        client_id=f"media_ingest_dedupe_source:{source_user_id_int}",
+        db_path=str(DatabasePaths.get_media_db_path(str(source_user_id_int))),
+    )
+    try:
+        source_media = source_db.get_media_by_id(
+            source_media_id_int,
+            include_deleted=False,
+            include_trash=False,
+        )
+        if not source_media:
+            return None
+        transcript_rows = get_media_transcripts(source_db, source_media_id_int)
+        content_text, normalized_stt = _extract_reusable_transcript_payload(
+            source_media=source_media,
+            transcript_rows=transcript_rows,
+        )
+        if not content_text:
+            return None
+        reused_result = _build_reused_process_result(
+            original_input_ref=original_input_ref,
+            media_type=media_type,
+            content_text=content_text,
+            source_media=source_media,
+            normalized_stt=normalized_stt,
+        )
+    finally:
+        source_db.close_connection()
+
+    await _populate_reused_transcript_summary(
+        process_result=reused_result,
+        form_data=form_data,
+        chunk_options=chunk_options,
+        loop=loop,
+    )
+    return reused_result
+
+
+async def _register_reusable_transcript_source(
+    *,
+    media_type: str,
+    original_input_ref: str,
+    source_hash: str | None,
+    process_result: dict[str, Any],
+    user_id: int | None,
+    form_data: Any,
+) -> None:
+    if str(media_type) != "video" or user_id is None:
+        return
+
+    media_id = process_result.get("db_id")
+    if media_id is None:
+        return
+    try:
+        media_id_int = int(media_id)
+    except (TypeError, ValueError):
+        return
+
+    dedupe_candidates = _shared_transcript_dedupe_candidates(
+        source_path_or_url=original_input_ref,
+        source_hash=source_hash,
+        form_data=form_data,
+    )
+    if not dedupe_candidates:
+        return
+
+    repo = await _get_media_ingest_dedupe_repo()
+    for key_type, key_value in dedupe_candidates:
+        await repo.upsert_source(
+            dedupe_key=f"{key_type}:{key_value}",
+            key_type=key_type,
+            media_type=str(media_type),
+            source_user_id=int(user_id),
+            source_media_id=media_id_int,
+            source_url=original_input_ref if key_type == "url" else None,
+            source_hash=source_hash if key_type == "source_hash" else None,
+        )
 
 
 def _build_url_match_clause(
@@ -3038,6 +3531,10 @@ async def persist_primary_av_item(
                 for kk in ("DOI", "ArXiv", "PMID", "PMCID"):
                     if ext.get(kk):
                         safe_meta[kk.lower()] = ext.get(kk)
+            safe_meta = _merge_video_lite_summary_safe_metadata(
+                safe_meta,
+                process_result=process_result,
+            )
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
             safe_meta = {}
 
@@ -3235,45 +3732,67 @@ async def persist_primary_av_item(
                 and transcription_model_used
                 and content_for_db
             ):
-                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
-                    to_normalized_stt_artifact,
-                )
-                from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
-                    get_stt_provider_registry,
-                )
+                artifact = process_result.get("normalized_stt")
+                provider_name = None
+                if isinstance(artifact, dict):
+                    artifact = dict(artifact)
+                    artifact_meta = artifact.get("metadata") or {}
+                    if isinstance(artifact_meta, dict):
+                        provider_name = artifact_meta.get("provider")
+                else:
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (  # type: ignore
+                        to_normalized_stt_artifact,
+                    )
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.stt_provider_adapter import (  # type: ignore
+                        get_stt_provider_registry,
+                    )
 
-                registry = get_stt_provider_registry()
-                provider_name, provider_model, _ = registry.resolve_provider_for_model(
-                    str(transcription_model_used)
-                )
-                analysis_details = process_result.get("analysis_details") or {}
-                lang_for_stt = analysis_details.get("transcription_language")
+                    registry = get_stt_provider_registry()
+                    provider_name, provider_model, _ = registry.resolve_provider_for_model(
+                        str(transcription_model_used)
+                    )
+                    analysis_details = process_result.get("analysis_details") or {}
+                    lang_for_stt = analysis_details.get("transcription_language")
 
-                artifact = to_normalized_stt_artifact(
-                    text=str(content_for_db),
-                    segments=process_result.get("segments"),
-                    language=lang_for_stt,
-                    provider=provider_name,
-                    model=provider_model or str(transcription_model_used),
-                )
+                    artifact = to_normalized_stt_artifact(
+                        text=str(content_for_db),
+                        segments=process_result.get("segments"),
+                        language=lang_for_stt,
+                        provider=provider_name,
+                        model=provider_model or str(transcription_model_used),
+                    )
                 serialized_artifact = json.dumps(artifact, default=str)
+                artifact_meta = artifact.get("metadata") or {}
+                whisper_model_value = str(
+                    artifact_meta.get("model") or transcription_model_used
+                )
 
-                def _upsert_worker() -> None:
-                    _with_media_db_session(
+                def _upsert_worker() -> dict[str, Any]:
+                    return _with_media_db_session(
                         db_path=db_path,
                         client_id=client_id,
                         operation=lambda db: upsert_transcript(
                             db_instance=db,
                             media_id=int(media_id_result),
                             transcription=serialized_artifact,
-                            whisper_model=artifact["metadata"]["model"],
+                            whisper_model=whisper_model_value,
                         ),
                     )
 
-                await loop.run_in_executor(None, _upsert_worker)
+                write_payload = await loop.run_in_executor(None, _upsert_worker)
+                with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                    emit_stt_run_write_total(
+                        provider=provider_name,
+                        write_result=(write_payload or {}).get("write_result", "created"),
+                    )
                 # Attach normalized artifact to the process_result for callers
                 process_result["normalized_stt"] = artifact
         except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as stt_err:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                emit_stt_run_write_total(
+                    provider=locals().get("provider_name"),
+                    write_result="failed",
+                )
             logger.debug(
                 "STT transcript upsert skipped/failed for {} (media_id={}): {}",
                 original_input_ref,
@@ -3401,6 +3920,7 @@ async def process_batch_media(
     combined_results: list[dict[str, Any]] = []
     all_processing_sources = urls + uploaded_file_paths
     items_to_process: list[str] = []
+    reused_processing_results: list[dict[str, Any]] = []
     source_hash_by_ref: dict[str, list[str]] = {}
     source_hash_by_source: dict[str, str] = {}
     source_hash_column_available: bool | None = None
@@ -3549,7 +4069,6 @@ async def process_batch_media(
                                 SELECT id
                                 FROM Media
                                 WHERE {url_clause}
-                                  AND transcription_model = ?
                                   AND source_hash = ?
                                   AND is_trash = 0
                                   AND deleted = 0
@@ -3560,7 +4079,7 @@ async def process_batch_media(
                             )  # nosec B608
                             cursor = db.execute_query(
                                 pre_check_query,
-                                (*url_params, model_for_check, source_hash),
+                                (*url_params, source_hash),
                             )
                             existing_record = cursor.fetchone()
                             if not existing_record:
@@ -3569,7 +4088,6 @@ async def process_batch_media(
                                     FROM Media m
                                     JOIN DocumentVersions dv ON dv.media_id = m.id
                                     WHERE {url_clause_alias}
-                                      AND m.transcription_model = ?
                                       AND m.is_trash = 0
                                       AND m.deleted = 0
                                       AND dv.deleted = 0
@@ -3582,7 +4100,7 @@ async def process_batch_media(
                                 hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                                 cursor = db.execute_query(
                                     pre_check_query,
-                                    (*url_params_alias, model_for_check, hash_fragment),
+                                    (*url_params_alias, hash_fragment),
                                 )
                                 existing_record = cursor.fetchone()
                         else:
@@ -3591,7 +4109,6 @@ async def process_batch_media(
                                 FROM Media m
                                 JOIN DocumentVersions dv ON dv.media_id = m.id
                                 WHERE {url_clause_alias}
-                                  AND m.transcription_model = ?
                                   AND m.is_trash = 0
                                   AND m.deleted = 0
                                   AND dv.deleted = 0
@@ -3604,7 +4121,7 @@ async def process_batch_media(
                             hash_fragment = f"%\"source_hash\":\"{source_hash}\"%"
                             cursor = db.execute_query(
                                 pre_check_query,
-                                (*url_params_alias, model_for_check, hash_fragment),
+                                (*url_params_alias, hash_fragment),
                             )
                             existing_record = cursor.fetchone()
                         return existing_record
@@ -3620,14 +4137,13 @@ async def process_batch_media(
                         should_process = False
                         reason = (
                             f"Media exists (ID: {existing_id}) with the same filename "
-                            f"and source hash for transcription model ('{model_for_check}'). "
+                            "and source hash. "
                             "Overwrite is False."
                         )
                     else:
                         should_process = True
                         reason = (
-                            "Media not found with this filename and source hash "
-                            "for transcription model."
+                            "Media not found with this filename and source hash."
                         )
                 elif not is_url and not source_hash:
                     should_process = True
@@ -3640,16 +4156,16 @@ async def process_batch_media(
                                           SELECT id
                                           FROM Media
                                           WHERE {url_clause}
-                                            AND transcription_model = ?
                                             AND is_trash = 0
                                             AND deleted = 0
+                                          LIMIT 1
                                           """
                         pre_check_query = pre_check_query_template.format(
                             url_clause=url_clause
                         )  # nosec B608
                         cursor = db.execute_query(
                             pre_check_query,
-                            (*url_params, model_for_check),
+                            url_params,
                         )
                         return cursor.fetchone()
 
@@ -3664,13 +4180,12 @@ async def process_batch_media(
                         should_process = False
                         reason = (
                             f"Media exists (ID: {existing_id}) with the same URL/identifier "
-                            f"and transcription model ('{model_for_check}'). Overwrite is False."
+                            "for this user. Overwrite is False."
                         )
                     else:
                         should_process = True
                         reason = (
-                            "Media not found with this URL/identifier and "
-                            "transcription model."
+                            "Media not found with this URL/identifier."
                         )
             except (DatabaseError, sqlite3.Error) as check_err:
                 logger.error(
@@ -3707,6 +4222,26 @@ async def process_batch_media(
                 "of existence."
             )
 
+        if should_process:
+            reused_process_result = await _maybe_build_reused_transcript_process_result(
+                media_type=str(media_type),
+                original_input_ref=str(input_ref),
+                source_path_or_url=str(source_path_or_url),
+                source_hash=source_hash,
+                form_data=form_data,
+                chunk_options=chunk_options,
+                loop=loop,
+            )
+            if reused_process_result is not None:
+                if pre_check_warning:
+                    _ensure_warnings_list(reused_process_result).append(pre_check_warning)
+                reused_processing_results.append(reused_process_result)
+                logger.info(
+                    "Reused internal transcript source for {} without rerunning processor work.",
+                    input_ref,
+                )
+                continue
+
         if not should_process:
             logger.info("Skipping processing for {}: {}", input_ref, reason)
             skipped_warnings = [pre_check_warning] if pre_check_warning else None
@@ -3738,7 +4273,7 @@ async def process_batch_media(
                 source_to_ref_map[source_path_or_url] = (input_ref, pre_check_warning)
             logger.info(log_msg)
 
-    if not items_to_process:
+    if not items_to_process and not reused_processing_results:
         logging.info("No items require processing after pre-checks.")
         return combined_results
 
@@ -3776,7 +4311,13 @@ async def process_batch_media(
 
     processing_output: dict[str, Any] | None = None
     try:
-        if str(media_type) == "video":
+        if not items_to_process:
+            processing_output = {
+                "results": [],
+                "errors_count": 0,
+                "errors": [],
+            }
+        elif str(media_type) == "video":
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (  # type: ignore  # noqa: E501
                 process_videos,
             )
@@ -3973,10 +4514,10 @@ async def process_batch_media(
         return combined_results
 
     final_batch_results: list[dict[str, Any]] = []
-    processing_results_list: list[dict[str, Any]] = []
+    processing_results_list: list[dict[str, Any]] = list(reused_processing_results)
 
     if processing_output and isinstance(processing_output.get("results"), list):
-        processing_results_list = processing_output["results"]
+        processing_results_list.extend(processing_output["results"])
         if processing_output.get("errors_count", 0) > 0:
             logger.warning(
                 "Batch {} processor reported errors: {}",
@@ -4116,6 +4657,15 @@ async def process_batch_media(
             client_id=client_id,
             loop=loop,
             claims_context=claims_context,
+        )
+
+        await _register_reusable_transcript_source(
+            media_type=str(media_type),
+            original_input_ref=str(original_input_ref) if original_input_ref else "",
+            source_hash=source_hash,
+            process_result=process_result,
+            user_id=user_id,
+            form_data=form_data,
         )
 
         final_batch_results.append(process_result)

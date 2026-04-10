@@ -408,6 +408,18 @@ class AuditEventType(Enum):
     OPS_INCIDENT = "ops.incident"
 
 
+def _event_type_value(event_type: AuditEventType | str) -> str:
+    if isinstance(event_type, AuditEventType):
+        return event_type.value
+    return str(event_type).strip()
+
+
+def _event_type_name(event_type: AuditEventType | str) -> str:
+    if isinstance(event_type, AuditEventType):
+        return event_type.name.lower()
+    return _event_type_value(event_type).lower().replace(".", "_")
+
+
 class AuditSeverity(Enum):
     """Severity levels for audit events"""
     DEBUG = "debug"
@@ -442,7 +454,7 @@ class AuditEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     category: AuditEventCategory = AuditEventCategory.SYSTEM
-    event_type: AuditEventType = AuditEventType.SYSTEM_START
+    event_type: AuditEventType | str = AuditEventType.SYSTEM_START
     severity: AuditSeverity = AuditSeverity.INFO
     tenant_user_id: Optional[str] = None
 
@@ -483,7 +495,7 @@ class AuditEvent:
             "event_id": self.event_id,
             "timestamp": ts.isoformat(),
             "category": self.category.value,
-            "event_type": self.event_type.value,
+            "event_type": _event_type_value(self.event_type),
             "severity": self.severity.value,
             "tenant_user_id": self.tenant_user_id,
             "resource_type": self.resource_type,
@@ -803,19 +815,23 @@ class RiskScorer:
             except _AUDIT_NONCRITICAL_EXCEPTIONS:
                 return default
 
-        # Event type risk
-        if event.event_type in [
-            AuditEventType.SECURITY_VIOLATION,
-            AuditEventType.PERMISSION_DENIED,
-            AuditEventType.SUSPICIOUS_ACTIVITY,
-            AuditEventType.SYSTEM_ERROR,
-        ]:
+        # Event type risk — normalize to string so raw string callers
+        # receive the same risk bonuses as enum callers.
+        _et = _event_type_value(event.event_type).lower()
+        _high_risk_types = {
+            AuditEventType.SECURITY_VIOLATION.value,
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+            AuditEventType.SYSTEM_ERROR.value,
+        }
+        _medium_risk_types = {
+            AuditEventType.AUTH_LOGIN_FAILURE.value,
+            AuditEventType.DATA_DELETE.value,
+            AuditEventType.CONFIG_CHANGED.value,
+        }
+        if _et in _high_risk_types:
             score += 50
-        elif event.event_type in [
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            AuditEventType.DATA_DELETE,
-            AuditEventType.CONFIG_CHANGED
-        ]:
+        elif _et in _medium_risk_types:
             score += 30
 
         # Failed operations (case-insensitive)
@@ -1497,7 +1513,8 @@ class UnifiedAuditService:
                     risk_score INTEGER,
                     pii_detected BOOLEAN,
                     compliance_flags TEXT,
-                    metadata TEXT
+                    metadata TEXT,
+                    chain_hash TEXT
                 )
                 """
             )
@@ -1531,7 +1548,8 @@ class UnifiedAuditService:
                     risk_score INTEGER,
                     pii_detected BOOLEAN,
                     compliance_flags TEXT,
-                    metadata TEXT
+                    metadata TEXT,
+                    chain_hash TEXT
                 )
                 """
             )
@@ -1641,10 +1659,11 @@ class UnifiedAuditService:
                             "pii_detected": bool(data.get("pii_detected") or False),
                             "compliance_flags": _json_text(data.get("compliance_flags"), default="[]"),
                             "metadata": _json_text(data.get("metadata"), default="{}"),
+                            "chain_hash": str(data.get("chain_hash") or ""),
                         }
                         if self._shared_mode:
                             record["tenant_user_id"] = self._resolve_tenant_id_for_write(
-                                raw_tenant=None,
+                                raw_tenant=data.get("tenant_user_id"),
                                 context_user_id=context_user_id,
                                 event_type=event_type_val,
                                 category=record.get("category"),
@@ -2136,7 +2155,7 @@ class UnifiedAuditService:
 
     async def log_event(
         self,
-        event_type: AuditEventType,
+        event_type: AuditEventType | str,
         context: Optional[AuditContext] = None,
         category: Optional[AuditEventCategory] = None,
         severity: Optional[AuditSeverity] = None,
@@ -2149,7 +2168,8 @@ class UnifiedAuditService:
         tokens_used: Optional[int] = None,
         estimated_cost: Optional[float] = None,
         result_count: Optional[int] = None,
-        metadata: Optional[dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None,
+        tenant_user_id_override: Optional[str] = None,
     ) -> str:
         """
         Log an audit event.
@@ -2183,7 +2203,7 @@ class UnifiedAuditService:
         tenant_user_id = None
         if self._shared_mode:
             tenant_user_id = self._resolve_tenant_id_for_write(
-                raw_tenant=None,
+                raw_tenant=tenant_user_id_override,
                 context_user_id=context.user_id,
                 event_type=event_type,
                 category=category,
@@ -2263,7 +2283,7 @@ class UnifiedAuditService:
             if event.risk_score >= HIGH_RISK_SCORE:
                 self.stats["high_risk_events"] += 1
                 logger.warning(
-                    f"High-risk event: {event_type.value} "
+                    f"High-risk event: {_event_type_value(event_type)} "
                     f"(risk: {event.risk_score}, user: {context.user_id})"
                 )
 
@@ -2365,14 +2385,19 @@ class UnifiedAuditService:
             return deduped
         return [event for event in deduped if event.event_id not in existing_ids]
 
-    def _apply_chain_hashes(self, records: list[dict[str, Any]]) -> None:
+    def _apply_chain_hashes(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        previous_hash: Optional[str] = None,
+    ) -> str:
         """Compute and assign chain hashes to a batch of event records.
 
-        Mutates each record in-place, setting the ``chain_hash`` key.
-        Updates ``self._last_chain_hash`` so subsequent batches continue
-        the chain.
+        Mutates each record in-place, setting the ``chain_hash`` key and returns
+        the last computed hash. Callers are responsible for updating
+        ``self._last_chain_hash`` only after the write is durably committed.
         """
-        prev = self._last_chain_hash
+        prev = self._last_chain_hash if previous_hash is None else previous_hash
         for rec in records:
             event_dict = {
                 "action": rec.get("action", ""),
@@ -2383,7 +2408,7 @@ class UnifiedAuditService:
             h = compute_event_hash(event_dict, prev)
             rec["chain_hash"] = h
             prev = h
-        self._last_chain_hash = prev
+        return prev
 
     async def flush(self, *, raise_on_failure: bool = False) -> bool:
         """Flush buffered events to database.
@@ -2417,10 +2442,14 @@ class UnifiedAuditService:
                             # Prepare batch data
                             records = [event.to_dict() for event in new_events]
                             self._ensure_record_tenant_ids(records)
-                            self._apply_chain_hashes(records)
+                            committed_chain_hash = self._apply_chain_hashes(
+                                records,
+                                previous_hash=self._last_chain_hash,
+                            )
                             await db.executemany(self._event_insert_sql, records)
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
+                            self._last_chain_hash = committed_chain_hash
                     else:
                         db = await self._ensure_db_pool()
                         async with self._db_lock:
@@ -2432,12 +2461,16 @@ class UnifiedAuditService:
 
                             # Batch insert
                             self._ensure_record_tenant_ids(records)
-                            self._apply_chain_hashes(records)
+                            committed_chain_hash = self._apply_chain_hashes(
+                                records,
+                                previous_hash=self._last_chain_hash,
+                            )
                             await db.executemany(self._event_insert_sql, records)
 
                             # Update daily statistics
                             await self._update_daily_stats(db, new_events)
                             await db.commit()
+                            self._last_chain_hash = committed_chain_hash
 
                     # Success
                     self.stats["events_flushed"] += len(new_events)
@@ -2737,7 +2770,7 @@ class UnifiedAuditService:
                     except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         return AuditEventCategory.SYSTEM
 
-            def _as_event_type(val: Any) -> AuditEventType:
+            def _as_event_type(val: Any) -> AuditEventType | str:
                 try:
                     if isinstance(val, AuditEventType):
                         return val
@@ -2746,7 +2779,8 @@ class UnifiedAuditService:
                     try:
                         return AuditEventType[str(val)]
                     except _AUDIT_NONCRITICAL_EXCEPTIONS:
-                        return AuditEventType.SYSTEM_START
+                        normalized = str(val).strip()
+                        return normalized if normalized else AuditEventType.SYSTEM_START
 
             def _as_severity(val: Any) -> AuditSeverity:
                 try:
@@ -2843,6 +2877,7 @@ class UnifiedAuditService:
                     return 0
 
                 async def _do_write() -> int:
+                    nonlocal replay_chain_hash
                     record_ids = [str(r.get("event_id")) for r in records_chunk if r.get("event_id")]
                     existing_ids = await self._fetch_existing_event_ids(db, record_ids)
                     seen: set[str] = set()
@@ -2864,6 +2899,10 @@ class UnifiedAuditService:
                         record["pii_detected"] = _coerce_bool(record.get("pii_detected"), False)
 
                     self._ensure_record_tenant_ids(filtered_records)
+                    committed_chain_hash = self._apply_chain_hashes(
+                        filtered_records,
+                        previous_hash=replay_chain_hash,
+                    )
                     await db.executemany(self._event_insert_sql, filtered_records)
                     if stats_events:
                         filtered_stats: list[AuditEvent] = []
@@ -2880,6 +2919,8 @@ class UnifiedAuditService:
                         if filtered_stats:
                             await self._update_daily_stats(db, filtered_stats)
                     await db.commit()
+                    replay_chain_hash = committed_chain_hash
+                    self._last_chain_hash = committed_chain_hash
                     return len(filtered_records)
 
                 if use_db_lock:
@@ -2888,6 +2929,7 @@ class UnifiedAuditService:
                 else:
                     return await _do_write()
 
+            replay_chain_hash = self._last_chain_hash
             temp_path = fb_path.with_suffix(".tmp")
             bad_path = fb_path.with_suffix(".bad.jsonl")
             inserted = 0
@@ -3084,23 +3126,24 @@ class UnifiedAuditService:
     ) -> int:
         """Count audit events with filters."""
         self._touch()
-        base_query, params = self._build_events_query(
-            start_time=start_time,
-            end_time=end_time,
-            event_types=event_types,
-            categories=categories,
-            user_id=user_id,
-            request_id=request_id,
-            correlation_id=correlation_id,
-            ip_address=ip_address,
-            session_id=session_id,
-            endpoint=endpoint,
-            method=method,
-            min_risk_score=min_risk_score,
-            allow_cross_tenant=allow_cross_tenant,
-        )
-        query = "SELECT COUNT(*) as cnt " + base_query
         try:
+            await self.flush(raise_on_failure=True)
+            base_query, params = self._build_events_query(
+                start_time=start_time,
+                end_time=end_time,
+                event_types=event_types,
+                categories=categories,
+                user_id=user_id,
+                request_id=request_id,
+                correlation_id=correlation_id,
+                ip_address=ip_address,
+                session_id=session_id,
+                endpoint=endpoint,
+                method=method,
+                min_risk_score=min_risk_score,
+                allow_cross_tenant=allow_cross_tenant,
+            )
+            query = "SELECT COUNT(*) as cnt " + base_query
             async with self._read_db() as db, db.execute(query, params) as cursor:
                 row = await cursor.fetchone()
                 return int(row[0]) if row else 0
@@ -3153,6 +3196,11 @@ class UnifiedAuditService:
             If file_path is provided: the number of rows written
         """
         self._touch()
+        try:
+            await self.flush(raise_on_failure=True)
+        except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Failed to flush before export: {e}")
+            raise AuditReadError("Failed to flush audit buffer before export") from e
         fmt = (format or "json").lower()
         if fmt not in {"json", "csv", "jsonl"}:
             raise ValueError("format must be 'json', 'csv', or 'jsonl'")
@@ -3468,67 +3516,74 @@ class UnifiedAuditService:
         p.write_text(_rows_to_csv(all_rows), encoding="utf-8")
         return len(all_rows)
 
-    def _determine_category(self, event_type: AuditEventType) -> AuditEventCategory:
-        """Auto-determine category from event type"""
-        type_name = event_type.name.lower()
+    def _determine_category(self, event_type: AuditEventType | str) -> AuditEventCategory:
+        """Auto-determine category from event type."""
+        type_name = _event_type_name(event_type)
+        type_value = _event_type_value(event_type).lower()
 
         if type_name.startswith("auth_"):
             return AuditEventCategory.AUTHENTICATION
-        elif type_name.startswith("user_"):
+        if type_name.startswith("user_"):
             return AuditEventCategory.AUTHORIZATION
-        elif type_name.startswith("data_"):
-            # Differentiate read vs modification operations
-            if type_name.endswith("write") or type_name.endswith("update") or type_name.endswith("delete") or type_name.endswith("import") or type_name.endswith("export"):
+        if type_name.startswith("data_"):
+            if any(type_name.endswith(suffix) for suffix in ("write", "update", "delete", "import", "export")):
                 return AuditEventCategory.DATA_MODIFICATION
             return AuditEventCategory.DATA_ACCESS
-        elif type_name.startswith("rag_"):
+        if type_name.startswith("rag_"):
             return AuditEventCategory.RAG
-        elif type_name.startswith("eval_"):
+        if type_name.startswith("eval_"):
             return AuditEventCategory.EVALUATION
-        elif type_name.startswith("api_"):
-            # Keep API operations under API_CALL consistently (rate limiting, errors)
+        if type_name.startswith("api_"):
             return AuditEventCategory.API_CALL
-        elif type_name.startswith("security_"):
+        if type_name.startswith("security_"):
             return AuditEventCategory.SECURITY
-        elif type_name.startswith("system_"):
+        if type_name.startswith("system_"):
             return AuditEventCategory.SYSTEM
-        else:
-            # Map specific non-prefixed types to appropriate categories
-            if event_type in (AuditEventType.PERMISSION_DENIED, AuditEventType.SUSPICIOUS_ACTIVITY):
-                return AuditEventCategory.SECURITY
-            if event_type is AuditEventType.PII_DETECTED:
-                return AuditEventCategory.COMPLIANCE
-            return AuditEventCategory.SYSTEM
+        if type_value.startswith("share."):
+            return AuditEventCategory.DATA_MODIFICATION
+        if type_value == "token.used":
+            return AuditEventCategory.DATA_ACCESS
+        if type_value.startswith("token.password_"):
+            return AuditEventCategory.SECURITY
+        if type_value.startswith("token."):
+            return AuditEventCategory.DATA_MODIFICATION
+        if type_value in {
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+        }:
+            return AuditEventCategory.SECURITY
+        if type_value == AuditEventType.PII_DETECTED.value:
+            return AuditEventCategory.COMPLIANCE
+        return AuditEventCategory.SYSTEM
 
-    def _determine_severity(self, event_type: AuditEventType, result: str) -> AuditSeverity:
-        """Auto-determine severity from event type and result"""
+    def _determine_severity(self, event_type: AuditEventType | str, result: str) -> AuditSeverity:
+        """Auto-determine severity from event type and result."""
         result_norm = _normalize_result(result)
-        # Critical events
-        if event_type in [
-            AuditEventType.SECURITY_VIOLATION,
-            AuditEventType.SUSPICIOUS_ACTIVITY
-        ]:
+        type_value = _event_type_value(event_type).lower()
+
+        if type_value in {
+            AuditEventType.SECURITY_VIOLATION.value,
+            AuditEventType.SUSPICIOUS_ACTIVITY.value,
+        }:
             return AuditSeverity.CRITICAL
 
         if result_norm == "error":
             return AuditSeverity.ERROR
-        elif result_norm == "failure" or event_type in [
-            AuditEventType.AUTH_LOGIN_FAILURE,
-            AuditEventType.PERMISSION_DENIED,
-            AuditEventType.API_RATE_LIMITED
-        ]:
+        if result_norm == "failure" or type_value in {
+            AuditEventType.AUTH_LOGIN_FAILURE.value,
+            AuditEventType.PERMISSION_DENIED.value,
+            AuditEventType.API_RATE_LIMITED.value,
+            "token.password_failed",
+        }:
             return AuditSeverity.WARNING
 
-        # Debug events
-        elif event_type in [
-            AuditEventType.SYSTEM_START,
-            AuditEventType.SYSTEM_STOP
-        ]:
+        if type_value in {
+            AuditEventType.SYSTEM_START.value,
+            AuditEventType.SYSTEM_STOP.value,
+        }:
             return AuditSeverity.DEBUG
 
-        # Default to INFO
-        else:
-            return AuditSeverity.INFO
+        return AuditSeverity.INFO
 
     def get_statistics(self) -> dict[str, Any]:
         """Get current statistics"""

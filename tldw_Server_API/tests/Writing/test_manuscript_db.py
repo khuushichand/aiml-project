@@ -52,13 +52,20 @@ class TestWordCount:
 
 class TestProjectCRUD:
     def test_create_and_get(self, mdb):
-        pid = mdb.create_project("My Novel", author="Alice", genre="Fantasy")
+        pid = mdb.create_project(
+            "My Novel",
+            author="Alice",
+            genre="Fantasy",
+            settings={"theme": "noir", "view": {"mode": "board"}},
+        )
         proj = mdb.get_project(pid)
         assert proj is not None
         assert proj["title"] == "My Novel"
         assert proj["author"] == "Alice"
         assert proj["genre"] == "Fantasy"
         assert proj["status"] == "draft"
+        assert proj["settings"] == {"theme": "noir", "view": {"mode": "board"}}
+        assert "settings_json" not in proj
         assert proj["word_count"] == 0
         assert proj["version"] == 1
         assert proj["deleted"] == 0
@@ -117,6 +124,28 @@ class TestProjectCRUD:
 
         proj = mdb.get_project(pid)
         assert proj["settings"] == {"theme": "dark"}
+        assert "settings_json" not in proj
+
+    def test_project_settings_roundtrip(self, mdb):
+        pid = mdb.create_project("With Settings", settings={"font": "serif", "columns": 2})
+        proj = mdb.get_project(pid)
+        assert proj["settings"] == {"font": "serif", "columns": 2}
+        assert "settings_json" not in proj
+
+    def test_list_projects_settings_deserialized(self, mdb):
+        mdb.create_project("P1", settings={"a": 1})
+        projects, _ = mdb.list_projects()
+        assert projects[0]["settings"] == {"a": 1}
+        assert "settings_json" not in projects[0]
+
+    def test_list_projects_exposes_settings_dict(self, mdb):
+        mdb.create_project("With Settings", settings={"theme": "dark", "autosave": True})
+
+        projects, total = mdb.list_projects()
+
+        assert total == 1
+        assert projects[0]["settings"] == {"theme": "dark", "autosave": True}
+        assert "settings_json" not in projects[0]
 
     def test_update_project_version_conflict(self, mdb):
         pid = mdb.create_project("Conflicted")
@@ -207,6 +236,19 @@ class TestPartCRUD:
         mdb.soft_delete_part(part_id, expected_version=1)
         assert mdb.get_part(part_id) is None
 
+    def test_soft_delete_part_cascades_scenes(self, mdb):
+        project_id = mdb.create_project("Novel")
+        part_id = mdb.create_part(project_id, "Part I")
+        chapter_id = mdb.create_chapter(project_id, "Chapter 1", part_id=part_id)
+        scene_id = mdb.create_scene(chapter_id, project_id, title="Scene 1", content_plain="alpha beta")
+        part = mdb.get_part(part_id)
+
+        mdb.soft_delete_part(part_id, expected_version=part["version"])
+
+        assert mdb.get_part(part_id) is None
+        assert mdb.get_chapter(chapter_id) is None
+        assert mdb.get_scene(scene_id) is None
+
     def test_get_missing_part(self, mdb):
         assert mdb.get_part("no-such-id") is None
 
@@ -233,6 +275,14 @@ class TestChapterCRUD:
 
         ch = mdb.get_chapter(cid)
         assert ch["part_id"] == part_id
+
+    def test_create_chapter_rejects_cross_project_part(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        foreign_part = mdb.create_part(right, "Foreign")
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.create_chapter(left, "Intruder", part_id=foreign_part)
 
     def test_list_chapters(self, mdb):
         pid = mdb.create_project("Novel")
@@ -264,6 +314,28 @@ class TestChapterCRUD:
         ch = mdb.get_chapter(cid)
         assert ch["title"] == "New"
         assert ch["version"] == 2
+
+    def test_update_chapter_part_id(self, mdb):
+        pid = mdb.create_project("Novel")
+        part_a = mdb.create_part(pid, "Part A")
+        part_b = mdb.create_part(pid, "Part B")
+        cid = mdb.create_chapter(pid, "Movable", part_id=part_a)
+
+        mdb.update_chapter(cid, {"part_id": part_b}, expected_version=1)
+
+        ch = mdb.get_chapter(cid)
+        assert ch["part_id"] == part_b
+        assert ch["version"] == 2
+
+    def test_update_chapter_rejects_cross_project_part(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        local_part = mdb.create_part(left, "Local")
+        foreign_part = mdb.create_part(right, "Foreign")
+        chapter_id = mdb.create_chapter(left, "Movable", part_id=local_part)
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.update_chapter(chapter_id, {"part_id": foreign_part}, expected_version=1)
 
     def test_update_chapter_version_conflict(self, mdb):
         pid = mdb.create_project("Novel")
@@ -602,6 +674,33 @@ class TestReorder:
 
         ch = mdb.get_chapter(cid)
         assert ch["part_id"] == part2
+
+    def test_reorder_with_reparent_rejects_cross_project_part(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        local_part = mdb.create_part(left, "Local")
+        foreign_part = mdb.create_part(right, "Foreign")
+        chapter_id = mdb.create_chapter(left, "Movable", part_id=local_part)
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.reorder_items(
+                "chapter",
+                [{"id": chapter_id, "sort_order": 0, "part_id": foreign_part}],
+                project_id=left,
+            )
+
+    def test_reorder_with_reparent_rejects_cross_project_part_without_project_id(self, mdb):
+        left = mdb.create_project("Left")
+        right = mdb.create_project("Right")
+        local_part = mdb.create_part(left, "Local")
+        foreign_part = mdb.create_part(right, "Foreign")
+        chapter_id = mdb.create_chapter(left, "Movable", part_id=local_part)
+
+        with pytest.raises(ValueError, match="different project"):
+            mdb.reorder_items(
+                "chapter",
+                [{"id": chapter_id, "sort_order": 0, "part_id": foreign_part}],
+            )
 
     def test_reorder_parts(self, mdb):
         pid = mdb.create_project("Novel")

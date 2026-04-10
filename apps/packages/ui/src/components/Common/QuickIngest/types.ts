@@ -26,6 +26,8 @@ export type ResultItem = {
   type: string
   data?: unknown
   error?: string
+  /** Whether the original file was persisted during this ingest run. */
+  persisted?: boolean
 }
 
 export type ResultOutcome =

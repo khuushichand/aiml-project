@@ -385,7 +385,7 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
     Raises:
         HTTPException: 403 if admin privileges are required but not present.
     """
-    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+    if not _evals_heavy_admin_only_enabled():
         return
     if principal is None:
         raise HTTPException(

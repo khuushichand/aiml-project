@@ -5,6 +5,7 @@ to avoid circular imports with the in-memory session store layer.
 """
 from __future__ import annotations
 
+import fnmatch as _fnmatch
 import json
 import os
 import sqlite3
@@ -17,7 +18,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 10
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -104,6 +105,48 @@ CREATE TABLE IF NOT EXISTS agent_health_history (
 );
 CREATE INDEX IF NOT EXISTS idx_health_agent_time
     ON agent_health_history(agent_type, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS permission_policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    rules_json TEXT NOT NULL,
+    org_id TEXT,
+    team_id TEXT,
+    priority INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS permission_decisions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    tool_pattern TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'session',
+    session_id TEXT,
+    persona_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT,
+    reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_perm_dec_user ON permission_decisions(user_id);
+CREATE INDEX IF NOT EXISTS idx_perm_dec_pattern ON permission_decisions(tool_pattern);
+
+CREATE TABLE IF NOT EXISTS webhook_triggers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'generic',
+    secret_encrypted TEXT NOT NULL,
+    owner_user_id INTEGER NOT NULL,
+    agent_config_json TEXT NOT NULL DEFAULT '{}',
+    prompt_template TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_triggers_owner
+    ON webhook_triggers(owner_user_id);
 """
 
 # Columns that are stored as INTEGER 0/1 but should be returned as bool
@@ -353,6 +396,56 @@ class ACPSessionsDB:
                     "budget_exhausted",
                     "budget_exhausted INTEGER NOT NULL DEFAULT 0",
                 )
+            if current_version < 8:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS permission_policies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        description TEXT DEFAULT '',
+                        rules_json TEXT NOT NULL,
+                        org_id TEXT,
+                        team_id TEXT,
+                        priority INTEGER DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                """)
+            if current_version < 9:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS permission_decisions (
+                        id TEXT PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        tool_pattern TEXT NOT NULL,
+                        decision TEXT NOT NULL,
+                        scope TEXT NOT NULL DEFAULT 'session',
+                        session_id TEXT,
+                        persona_id TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        expires_at TEXT,
+                        reason TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_perm_dec_user
+                        ON permission_decisions(user_id);
+                    CREATE INDEX IF NOT EXISTS idx_perm_dec_pattern
+                        ON permission_decisions(tool_pattern);
+                """)
+            if current_version < 10:
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS webhook_triggers (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        source_type TEXT NOT NULL DEFAULT 'generic',
+                        secret_encrypted TEXT NOT NULL,
+                        owner_user_id INTEGER NOT NULL,
+                        agent_config_json TEXT NOT NULL DEFAULT '{}',
+                        prompt_template TEXT NOT NULL DEFAULT '',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_webhook_triggers_owner
+                        ON webhook_triggers(owner_user_id);
+                """)
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -703,6 +796,114 @@ class ACPSessionsDB:
         )
         rows = conn.execute(query, [since_iso]).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Run history queries (date-filtered)
+    # ------------------------------------------------------------------
+
+    def list_runs(
+        self,
+        *,
+        user_id: int | None = None,
+        status: str | None = None,
+        agent_type: str | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Query session records with optional filters including date range.
+
+        Returns ``(rows, total_count)`` where each row is a deserialized dict.
+        """
+        conn = self._get_conn()
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if agent_type is not None:
+            clauses.append("agent_type = ?")
+            params.append(agent_type)
+        if from_date is not None:
+            clauses.append("created_at >= ?")
+            params.append(from_date)
+        if to_date is not None:
+            clauses.append("created_at <= ?")
+            params.append(to_date)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        count_row = conn.execute(
+            f"SELECT COUNT(*) FROM sessions{where}", params,
+        ).fetchone()
+        total = count_row[0] if count_row else 0
+
+        rows = conn.execute(
+            f"SELECT * FROM sessions{where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+
+        return [self._row_to_dict(r) for r in rows], total
+
+    def aggregate_runs(
+        self,
+        *,
+        user_id: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate token usage and session counts with optional filters.
+
+        Returns a summary dict with total_sessions, prompt_tokens,
+        completion_tokens, total_tokens, and per-session cost data for the
+        service layer to compute estimated costs.
+        """
+        conn = self._get_conn()
+        clauses: list[str] = []
+        params: list[Any] = []
+
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if from_date is not None:
+            clauses.append("created_at >= ?")
+            params.append(from_date)
+        if to_date is not None:
+            clauses.append("created_at <= ?")
+            params.append(to_date)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        row = conn.execute(
+            f"SELECT "
+            f"  COUNT(*) AS total_sessions, "
+            f"  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            f"  COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            f"  COALESCE(SUM(total_tokens), 0) AS total_tokens "
+            f"FROM sessions{where}",
+            params,
+        ).fetchone()
+
+        result: dict[str, Any] = {
+            "total_sessions": row["total_sessions"] if row else 0,
+            "prompt_tokens": row["prompt_tokens"] if row else 0,
+            "completion_tokens": row["completion_tokens"] if row else 0,
+            "total_tokens": row["total_tokens"] if row else 0,
+        }
+
+        # Also return per-session cost data so the service layer can compute costs
+        cost_rows = conn.execute(
+            f"SELECT model, prompt_tokens, completion_tokens FROM sessions{where}",
+            params,
+        ).fetchall()
+        result["_cost_rows"] = [dict(r) for r in cost_rows]
+
+        return result
 
     # ------------------------------------------------------------------
     # Text normalization (local helper — no external imports)
@@ -1339,6 +1540,297 @@ class ACPSessionsDB:
             (agent_type, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Permission Policy CRUD
+    # ------------------------------------------------------------------
+
+    def create_permission_policy(
+        self,
+        name: str,
+        rules_json: str,
+        priority: int = 0,
+        description: str = "",
+        org_id: str | None = None,
+        team_id: str | None = None,
+    ) -> int:
+        """Insert a permission policy. Returns the new row ID."""
+        conn = self._get_conn()
+        now = _utcnow_iso()
+        cursor = conn.execute(
+            """
+            INSERT INTO permission_policies
+                (name, description, rules_json, org_id, team_id, priority,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (name, description, rules_json, org_id, team_id, priority, now, now),
+        )
+        conn.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+    def get_permission_policy(self, policy_id: int) -> dict[str, Any] | None:
+        """Fetch a single policy by ID, or None."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM permission_policies WHERE id = ?", (policy_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    def list_permission_policies(self) -> list[dict[str, Any]]:
+        """List all policies ordered by priority DESC, then name ASC."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM permission_policies ORDER BY priority DESC, name ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_permission_policy(self, policy_id: int, **kwargs: Any) -> bool:
+        """Update fields on a permission policy.
+
+        Accepted kwargs: name, description, rules_json, org_id, team_id, priority.
+        Returns True if the row was found and updated.
+        """
+        allowed = {"name", "description", "rules_json", "org_id", "team_id", "priority"}
+        updates = {k: v for k, v in kwargs.items() if k in allowed}
+        if not updates:
+            return False
+        updates["updated_at"] = _utcnow_iso()
+        set_clause = ", ".join(f"{col} = ?" for col in updates)
+        values = list(updates.values()) + [policy_id]
+        conn = self._get_conn()
+        cursor = conn.execute(
+            f"UPDATE permission_policies SET {set_clause} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_permission_policy(self, policy_id: int) -> bool:
+        """Delete a policy by ID. Returns True if a row was removed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM permission_policies WHERE id = ?", (policy_id,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def resolve_permission_tier(self, tool_name: str) -> str | None:
+        """Query all policies, match tool_name against rules using fnmatch.
+
+        Returns the tier from the highest-priority matching rule, or None
+        if no rule matches.
+        """
+        policies = self.list_permission_policies()
+        best_priority = -1
+        best_tier: str | None = None
+        for pol in policies:
+            priority = pol.get("priority", 0)
+            raw = pol.get("rules_json", "[]")
+            try:
+                rules = json.loads(raw) if isinstance(raw, str) else raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for rule in rules:
+                pattern = rule.get("tool_pattern", "")
+                tier = rule.get("tier", "")
+                if _fnmatch.fnmatch(tool_name.lower(), pattern.lower()):
+                    if priority > best_priority:
+                        best_priority = priority
+                        best_tier = tier
+        return best_tier
+
+    # ------------------------------------------------------------------
+    # Permission Decision CRUD
+    # ------------------------------------------------------------------
+
+    def insert_permission_decision(
+        self,
+        id: str,
+        user_id: int,
+        tool_pattern: str,
+        decision: str,
+        scope: str = "session",
+        session_id: str | None = None,
+        persona_id: str | None = None,
+        reason: str | None = None,
+        expires_at: str | None = None,
+    ) -> None:
+        """Insert a persisted permission decision."""
+        conn = self._get_conn()
+        conn.execute(
+            """
+            INSERT INTO permission_decisions
+                (id, user_id, tool_pattern, decision, scope,
+                 session_id, persona_id, created_at, expires_at, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                id, user_id, tool_pattern, decision, scope,
+                session_id, persona_id, _utcnow_iso(), expires_at, reason,
+            ),
+        )
+        conn.commit()
+
+    def list_permission_decisions(
+        self,
+        user_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """List permission decisions, optionally filtered by user_id."""
+        conn = self._get_conn()
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM permission_decisions WHERE user_id = ? ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM permission_decisions ORDER BY created_at DESC"
+            ).fetchall()
+        now_iso = _utcnow_iso()
+        results: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            # Skip expired decisions
+            if d.get("expires_at") and d["expires_at"] < now_iso:
+                continue
+            results.append(d)
+        return results
+
+    def check_permission_decision(
+        self,
+        user_id: int,
+        tool_name: str,
+        session_id: str | None = None,
+    ) -> str | None:
+        """Find a matching persisted decision for user_id + tool_name.
+
+        Returns ``'allow'`` or ``'deny'`` if a matching non-expired decision
+        exists, otherwise ``None``.  Global scope is checked first, then
+        session scope (if *session_id* is provided).
+        """
+        decisions = self.list_permission_decisions(user_id=user_id)
+        for d in decisions:
+            if not _fnmatch.fnmatch(tool_name, d["tool_pattern"]):
+                continue
+            if d["scope"] == "global":
+                return d["decision"]
+            if d["scope"] == "session" and d.get("session_id") == session_id:
+                return d["decision"]
+        return None
+
+    def delete_permission_decision(self, decision_id: str) -> bool:
+        """Delete a permission decision by ID. Returns True if a row was removed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM permission_decisions WHERE id = ?", (decision_id,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def get_permission_decision(self, decision_id: str) -> dict[str, Any] | None:
+        """Fetch a single permission decision by ID, or None."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM permission_decisions WHERE id = ?", (decision_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    # ------------------------------------------------------------------
+    # Webhook trigger CRUD
+    # ------------------------------------------------------------------
+
+    def create_webhook_trigger(
+        self,
+        trigger_id: str,
+        name: str,
+        source_type: str,
+        secret_encrypted: str,
+        owner_user_id: int,
+        agent_config_json: str = "{}",
+        prompt_template: str = "",
+        enabled: bool = True,
+    ) -> None:
+        """Insert a new webhook trigger row."""
+        conn = self._get_conn()
+        now = _utcnow_iso()
+        conn.execute(
+            """
+            INSERT INTO webhook_triggers
+                (id, name, source_type, secret_encrypted, owner_user_id,
+                 agent_config_json, prompt_template, enabled,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trigger_id,
+                name,
+                source_type,
+                secret_encrypted,
+                owner_user_id,
+                agent_config_json,
+                prompt_template,
+                1 if enabled else 0,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+    def list_webhook_triggers(self, owner_user_id: int) -> list[dict[str, Any]]:
+        """Return all webhook triggers owned by *owner_user_id*."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM webhook_triggers WHERE owner_user_id = ? ORDER BY created_at DESC",
+            (owner_user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_webhook_trigger(self, trigger_id: str) -> dict[str, Any] | None:
+        """Return a single webhook trigger by id, or ``None``."""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM webhook_triggers WHERE id = ?", (trigger_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
+
+    _WEBHOOK_TRIGGER_UPDATABLE_COLS = frozenset({
+        "name", "source_type", "secret_encrypted", "agent_config_json",
+        "prompt_template", "enabled", "updated_at",
+    })
+
+    def update_webhook_trigger(self, trigger_id: str, updates: dict[str, Any]) -> bool:
+        """Update fields of a webhook trigger. Returns True if a row was modified."""
+        if not updates:
+            return False
+        for k in updates:
+            if k not in self._WEBHOOK_TRIGGER_UPDATABLE_COLS:
+                raise ValueError(f"Cannot update column: {k!r}")
+        conn = self._get_conn()
+        updates["updated_at"] = _utcnow_iso()
+        set_clauses = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [trigger_id]
+        cursor = conn.execute(
+            f"UPDATE webhook_triggers SET {set_clauses} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def delete_webhook_trigger(self, trigger_id: str) -> bool:
+        """Delete a webhook trigger. Returns True if a row was removed."""
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "DELETE FROM webhook_triggers WHERE id = ?", (trigger_id,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
     # Lifecycle

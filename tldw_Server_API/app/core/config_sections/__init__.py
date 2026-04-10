@@ -7,6 +7,7 @@ from .audio import AudioConfig, load_audio_config
 from .auth import AuthConfig, load_auth_config
 from .providers import ProvidersConfig, load_providers_config
 from .rag import RAGConfig, load_rag_config
+from .stt import STTConfig, load_stt_config
 from .types import ConfigParserLike
 
 
@@ -16,6 +17,7 @@ class ConfigSections:
     rag: RAGConfig
     audio: AudioConfig
     providers: ProvidersConfig
+    stt: STTConfig
 
 
 def load_config_sections(config_parser: ConfigParserLike | None = None) -> ConfigSections:
@@ -29,6 +31,7 @@ def load_config_sections(config_parser: ConfigParserLike | None = None) -> Confi
         rag=load_rag_config(config_parser),
         audio=load_audio_config(config_parser),
         providers=load_providers_config(config_parser),
+        stt=load_stt_config(config_parser),
     )
 
 
@@ -38,9 +41,11 @@ __all__ = [
     "ConfigSections",
     "ProvidersConfig",
     "RAGConfig",
+    "STTConfig",
     "load_audio_config",
     "load_auth_config",
     "load_config_sections",
     "load_providers_config",
     "load_rag_config",
+    "load_stt_config",
 ]

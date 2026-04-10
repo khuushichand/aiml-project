@@ -4,6 +4,8 @@ import StarterKit from "@tiptap/starter-kit"
 import Placeholder from "@tiptap/extension-placeholder"
 import CharacterCount from "@tiptap/extension-character-count"
 import { SceneBreakExtension } from "./extensions/SceneBreakExtension"
+import { CitationExtension } from "./extensions/CitationExtension"
+import { AIAnnotationExtension } from "./extensions/AIAnnotationExtension"
 import { tipTapJsonToPlainText } from "./writing-tiptap-utils"
 
 export type WritingTipTapEditorProps = {
@@ -27,6 +29,8 @@ export function WritingTipTapEditor({
         heading: { levels: [1, 2, 3] },
       }),
       SceneBreakExtension,
+      CitationExtension,
+      AIAnnotationExtension,
       Placeholder.configure({ placeholder }),
       CharacterCount,
     ],

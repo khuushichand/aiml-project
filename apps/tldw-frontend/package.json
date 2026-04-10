@@ -59,6 +59,7 @@
     "e2e:all-tiers": "playwright test --project=tier-1 --project=tier-2 --project=tier-3 --project=tier-4 --project=tier-5 --project=journeys"
   },
   "dependencies": {
+    "@sentry/nextjs": "^9.27.0",
     "@ant-design/cssinjs": "^2.0.3",
     "@ant-design/icons": "^5.5.0",
     "@dnd-kit/abstract": "^0.1.21",
@@ -121,6 +122,7 @@
     "react-pdf": "^9.2.1",
     "react-syntax-highlighter": "^16.1.0",
     "react-toastify": "^11.0.5",
+    "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "rehype-mathjax": "^7.1.0",
     "remark-gfm": "^4.0.1",
@@ -130,7 +132,7 @@
     "tailwindcss": "^3.4.19",
     "turndown": "^7.2.2",
     "unist-util-visit": "^5.0.0",
-    "xlsx": "^0.18.5",
+    "exceljs": "^4.4.0",
     "xterm": "^5.3.0",
     "zod": "^4.2.1",
     "zustand": "^5.0.10"

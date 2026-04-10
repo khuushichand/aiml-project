@@ -10,10 +10,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # File categories
-FileCategory = Literal["tts_audio", "image", "voice_clone", "mindmap", "spreadsheet"]
+FileCategory = Literal["tts_audio", "stt_audio", "image", "voice_clone", "mindmap", "spreadsheet"]
 
 # Source features
-SourceFeature = Literal["tts", "image_gen", "voice_studio", "mindmap", "data_tables", "export"]
+SourceFeature = Literal["tts", "stt", "image_gen", "voice_studio", "mindmap", "data_tables", "export"]
 
 # Retention policies
 RetentionPolicy = Literal["user_default", "permanent", "transient", "custom"]

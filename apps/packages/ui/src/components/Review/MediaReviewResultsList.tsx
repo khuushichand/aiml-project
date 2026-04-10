@@ -4,8 +4,11 @@ import { Upload } from "lucide-react"
 import type { MediaReviewState, MediaReviewActions } from "@/components/Review/media-review-types"
 import { includesId } from "@/components/Review/media-review-types"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
-
-const FIRST_INGEST_DISMISSED_KEY = "tldw_first_ingest_tutorial_dismissed"
+import {
+  persistFirstIngestDismissed,
+  readFirstIngestDismissed,
+  clearFirstIngestDismissed
+} from "@/utils/ftux-storage"
 
 interface MediaReviewResultsListProps {
   state: MediaReviewState
@@ -23,20 +26,12 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
   } = state
 
   const [tutorialDismissed, setTutorialDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem(FIRST_INGEST_DISMISSED_KEY) === "true"
-    } catch {
-      return false
-    }
+    return readFirstIngestDismissed()
   })
 
   const handleDismissTutorial = React.useCallback(() => {
     setTutorialDismissed(true)
-    try {
-      localStorage.setItem(FIRST_INGEST_DISMISSED_KEY, "true")
-    } catch {
-      // ignore storage errors
-    }
+    persistFirstIngestDismissed()
   }, [])
 
   const handleRequestQuickIngestOpen = React.useCallback(() => {
@@ -45,11 +40,7 @@ export const MediaReviewResultsList: React.FC<MediaReviewResultsListProps> = ({ 
 
   const handleShowTutorialAgain = React.useCallback(() => {
     setTutorialDismissed(false)
-    try {
-      localStorage.removeItem(FIRST_INGEST_DISMISSED_KEY)
-    } catch {
-      // ignore storage errors
-    }
+    clearFirstIngestDismissed()
   }, [])
 
   // Show first-ingest tutorial when library is empty (no query, no results, not fetching)

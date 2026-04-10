@@ -31,8 +31,10 @@
   - TopicMonitoringService: loads watchlists JSON, compiles rules, evaluates text, deduplicates, persists alerts, and calls `NotificationService`. Singleton accessor: tldw_Server_API/app/core/Monitoring/topic_monitoring_service.py:305
   - Compiled rules hold `regex`, `category`, `severity`; dangerous regex patterns are rejected; snippets are bounded to avoid large payloads.
   - Alerts persistence via `TopicMonitoringDB` (SQLite, WAL, indexes on timestamps/users/watchlists); shape defined in module docstring: tldw_Server_API/app/core/DB_Management/TopicMonitoring_DB.py:1
-  - NotificationService: JSONL file sink for notifications with optional webhook/email (best‑effort threads + retries): tldw_Server_API/app/core/Monitoring/notification_service.py:1
+  - NotificationService: JSONL file sink for topic alerts with optional best-effort webhook/email attempts: tldw_Server_API/app/core/Monitoring/notification_service.py:1
   - NotificationService also serves **guardian alert dispatch** — `dispatch_guardian_notification()` in `supervised_policy.py` calls `notify_or_batch()` to route guardian alerts through the same JSONL/webhook/email pipeline.
+  - Generic notifications only use the JSONL sink plus optional webhook dispatch; they do not send email in the current implementation.
+  - `notify_or_batch()` buffers payloads in `hourly`/`daily` digest modes, and `flush_digest()` currently clears buffered items and returns the count only.
 
 - Configuration (env or config file `monitoring.*`)
   - Topic monitor:
@@ -75,5 +77,6 @@
   - Use the admin APIs to manage watchlists; reload via `/api/v1/monitoring/reload` after file edits.
 - Pitfalls & Gotchas
   - Webhook/email sends are best‑effort and may be disabled in restricted environments; rely on JSONL for auditability.
+  - Public alert mutation endpoints return minimal acknowledgements; re-list alerts for authoritative merged state.
   - Large texts are truncated for scanning; test your rules with realistic snippets.
   - Regex complexity can impact performance; prefer literals or well‑scoped regexes.

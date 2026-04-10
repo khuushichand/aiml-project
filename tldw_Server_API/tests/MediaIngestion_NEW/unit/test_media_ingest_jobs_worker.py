@@ -109,6 +109,70 @@ async def test_media_ingest_worker_updates_progress_fields(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_media_ingest_worker_returns_existing_media_id_for_skipped_dedupe_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.db"))
+    monkeypatch.delenv("JOBS_DB_URL", raising=False)
+
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+
+    class _DummyDB:
+        def __init__(self, path: str):
+            self.db_path_str = path
+            self.client_id = "media_ingest_test"
+
+        def close_connection(self):
+            return None
+
+    def _fake_create_db(_user_id: str):
+        return _DummyDB(str(tmp_path / "media.db"))
+
+    async def _fake_process_batch_media(**_kwargs):
+        return [
+            {
+                "status": "Skipped",
+                "db_id": 321,
+                "media_uuid": "existing-media-uuid",
+                "message": "Media already exists.",
+                "warnings": None,
+            }
+        ]
+
+    monkeypatch.setattr(worker, "_create_db", _fake_create_db, raising=True)
+    monkeypatch.setattr(worker, "process_batch_media", _fake_process_batch_media, raising=True)
+    monkeypatch.setattr(worker, "prepare_chunking_options_dict", lambda _form: None, raising=True)
+
+    jm = JobManager()
+    payload = {
+        "batch_id": "batch-skip",
+        "media_type": "video",
+        "source": "https://example.com/video?id=123",
+        "source_kind": "url",
+        "input_ref": "https://example.com/video?id=123",
+        "options": {"media_type": "video", "transcription_model": "whisper-test"},
+    }
+    row = jm.create_job(
+        domain="media_ingest",
+        queue="default",
+        job_type="media_ingest_item",
+        payload=payload,
+        owner_user_id="1",
+    )
+
+    job = jm.get_job(int(row.get("id")))
+    progress = worker._ProgressState()
+    result = await worker._handle_job(job, jm, progress)
+
+    assert result == {
+        "status": "Skipped",
+        "media_id": 321,
+        "media_uuid": "existing-media-uuid",
+        "error": None,
+        "warnings": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_media_ingest_heavy_worker_uses_configured_queue(monkeypatch):
     import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
 
