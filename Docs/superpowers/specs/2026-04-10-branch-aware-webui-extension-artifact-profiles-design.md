@@ -13,7 +13,7 @@ For the WebUI, branch-aware behavior maps onto the existing networking split alr
 - `production` profile uses the current quickstart-style artifact
 - `development` profile uses the current advanced/custom-host artifact
 
-For the extension, branch-aware behavior changes artifact profile and output naming, not the meaning of the live `dev` command. Non-`main` builds remain packaged extension artifacts, but they are branded in filenames as development builds. Both unpacked output directories and zipped artifacts should include a `-dev` suffix.
+For the extension, branch-aware behavior changes artifact profile and output naming, not the meaning of the live `dev` command. Non-`main` builds remain packaged extension artifacts, but they are branded in exported artifact names as development builds. The implementation should keep canonical internal build roots stable for tooling, then emit developer-facing unpacked install directories and zipped artifacts with a `-dev` suffix.
 
 The design keeps local behavior aligned with branch intent while preserving explicit production validation in CI so `main`-grade artifacts do not silently degrade.
 
@@ -42,7 +42,7 @@ That policy should apply locally by default, not only inside GitHub Actions.
 - Keep explicit overrides available through `build:prod` and `build:dev`
 - Reuse the current WebUI quickstart versus advanced networking model instead of inventing a second release-mode abstraction
 - Keep extension development branding in filenames rather than in the user-facing UI
-- Apply `-dev` naming to both unpacked extension build directories and zipped extension artifacts
+- Apply `-dev` naming to exported unpacked extension install directories and zipped extension artifacts while keeping internal canonical build roots stable
 - Keep CI and release automation deterministic by allowing forced production builds
 - Minimize disruption to existing developer flows and existing release/container conventions
 
@@ -85,6 +85,8 @@ The extension package in [`apps/extension/package.json`](../../../apps/extension
 
 However, packaged artifact builds are not branch-aware today. A developer on a feature branch still produces standard-looking build outputs unless they manually treat them as non-release artifacts.
 
+The extension also has many tests, helper scripts, and docs that directly reference current unsuffixed paths such as `build/chrome-mv3` and `.output/chrome-mv3`. That makes a full path rename much higher risk than the original proposal first implied.
+
 The current WXT config in [`apps/extension/wxt.config.ts`](../../../apps/extension/wxt.config.ts) does not yet carry an explicit artifact-profile concept.
 
 ### CI
@@ -111,22 +113,46 @@ Resolution order:
 
 1. `TLDW_BUILD_PROFILE` environment override
 2. current git branch
-3. fallback to `production` if branch detection is unavailable
+3. fallback to `development` if branch detection is unavailable
 
 Branch rule:
 
 - `main` => `production`
 - any other branch => `development`
 
-The fallback to `production` is deliberate. If someone builds from a source export or a detached environment without usable git metadata, the safer default is the user-ready artifact rather than silently emitting a development artifact.
+The fallback to `development` is deliberate. If someone builds from a source export or a detached environment without usable git metadata, the safer default is the non-release artifact. Production automation should use explicit `build:prod` commands rather than depend on branch detection.
 
 ### 2. Add explicit and implicit build entrypoints
 
-Both the WebUI and extension packages should expose:
+The WebUI package should expose:
 
 - `build`
 - `build:prod`
 - `build:dev`
+- `compile`
+- `compile:prod`
+- `compile:dev`
+
+The extension package should expose the same top-level commands, plus profile-aware browser-specific and archive commands because those are the entrypoints developers and CI actually use today:
+
+- `build`
+- `build:prod`
+- `build:dev`
+- `build:chrome`
+- `build:chrome:prod`
+- `build:chrome:dev`
+- `build:firefox`
+- `build:firefox:prod`
+- `build:firefox:dev`
+- `build:edge`
+- `build:edge:prod`
+- `build:edge:dev`
+- `zip`
+- `zip:prod`
+- `zip:dev`
+- `zip:firefox`
+- `zip:firefox:prod`
+- `zip:firefox:dev`
 
 Behavior:
 
@@ -141,7 +167,7 @@ This hybrid model avoids two common failure modes:
 
 ### 3. WebUI profile mapping
 
-The WebUI should keep using `next build`; branch-aware behavior should only control the environment injected before the build runs.
+The WebUI should keep using `next build`; branch-aware behavior should only control the environment injected before the build runs. Any alternate artifact-producing WebUI entrypoint, including the existing webpack-based `compile` path, should use the same profile resolution and env shaping so it does not become a bypass around the branch policy.
 
 #### Production profile
 
@@ -202,11 +228,11 @@ Branch-aware behavior should not replace packaged builds with `wxt` live mode.
 
 #### Development profile
 
-`development` should still produce packaged artifacts, but those artifacts must be visibly distinguishable in filenames.
+`development` should still produce packaged artifacts, but those exported artifacts must be visibly distinguishable in filenames.
 
 Required naming behavior:
 
-- unpacked output directories include `-dev`
+- exported unpacked install directories include `-dev`
 - zipped artifact names include `-dev`
 
 Examples:
@@ -215,7 +241,15 @@ Examples:
 - `build/firefox-mv2-dev`
 - `tldw-assistant-chrome-dev.zip`
 
-The branding should stay at the packaging and output-path layer rather than by broadly renaming extension identity everywhere. That reduces compatibility risk for browser-specific behavior, extension IDs, and future store-related workflows.
+The branding should stay at the exported artifact layer rather than by broadly renaming extension identity everywhere. That reduces compatibility risk for browser-specific behavior, extension IDs, and future store-related workflows.
+
+Canonical internal build roots used by existing tooling should remain unchanged. In practice, the wrapper should:
+
+- build into the current canonical roots expected by WXT and existing helpers
+- run post-build verification against those canonical roots
+- then materialize suffixed exported install directories such as `build/chrome-mv3-dev`
+
+This preserves the user's requirement that developer-facing unpacked artifacts carry `-dev` while avoiding a broad internal path migration.
 
 #### Extension wrapper implementation
 
@@ -228,13 +262,14 @@ Responsibilities:
 - call the shared resolver
 - export a clear profile env such as `TLDW_BUILD_PROFILE` or `VITE_TLDW_ARTIFACT_PROFILE`
 - invoke the current browser-specific `wxt build` commands
-- rename or route output directories and archive names according to the resolved profile
+- preserve canonical internal output roots for tooling
+- create suffixed exported install directories and archive names according to the resolved profile
 
 The development suffix should apply consistently across:
 
-- Chrome unpacked artifacts
-- Firefox unpacked artifacts
-- Edge unpacked artifacts
+- exported Chrome unpacked artifacts
+- exported Firefox unpacked artifacts
+- exported Edge unpacked artifacts
 - zip packaging outputs
 
 ### 5. Keep CI deterministic
@@ -327,7 +362,8 @@ Add WebUI wrapper tests:
 Add extension wrapper tests:
 
 - `production` preserves standard output naming
-- `development` adds `-dev` to unpacked output directories
+- `development` preserves canonical internal output roots
+- `development` adds `-dev` to exported unpacked install directories
 - `development` adds `-dev` to zip artifact names
 
 ### Integration checks
@@ -340,7 +376,8 @@ WebUI:
 
 Extension:
 
-- run branch-aware `build:chrome` on a non-`main` branch and verify output path naming
+- run branch-aware `build:chrome` on a non-`main` branch and verify canonical internal roots still work
+- verify exported install directories carry the `-dev` suffix
 - run forced `build:prod` from a non-`main` branch and verify standard naming
 - run zip packaging in both profiles and verify suffix behavior
 
@@ -370,13 +407,14 @@ Mitigation:
 
 ### Risk: Extension tooling assumes fixed output paths
 
-Some Playwright or packaging utilities may assume current non-suffixed paths such as `build/chrome-mv3`.
+Some Playwright or packaging utilities assume current non-suffixed canonical paths such as `build/chrome-mv3` or `.output/chrome-mv3`.
 
 Mitigation:
 
-- update path-discovery utilities to understand both standard and `-dev` suffixed paths
-- keep production paths unchanged
-- add tests for new path resolution behavior
+- keep canonical internal build roots unchanged
+- add `-dev` only to exported install directories and archive names
+- update path-discovery utilities only where they need to discover exported developer-facing artifacts
+- add tests that prove existing tooling still works with canonical paths
 
 ## Rollout Plan
 
