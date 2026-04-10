@@ -1,6 +1,6 @@
 import React from 'react'
 import type { InputRef } from 'antd'
-import { Button } from 'antd'
+import { Button, Modal } from 'antd'
 import type { MessageInstance } from 'antd/es/message/interface'
 import type { QueryClient } from '@tanstack/react-query'
 import { useQuery } from '@tanstack/react-query'
@@ -426,15 +426,55 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
         await saveNoteRef.current({ showSuccessMessage: false })
         return true
       } catch {
-        // Save failed - fall through to confirmation dialog
+        // Save failed — show 3-button dialog: retry / discard / cancel
+        const retryResult = await new Promise<'saved' | 'discard' | 'cancel'>((resolve) => {
+          const modalRef = Modal.confirm({
+            title: t('option:notesSearch.unsavedChangesTitle', { defaultValue: 'Save changes?' }),
+            content: t('option:notesSearch.unsavedChangesContent', {
+              defaultValue: 'Auto-save could not reach the server. You can try saving again or discard your changes.'
+            }),
+            okText: t('option:notesSearch.retrySave', { defaultValue: 'Try saving again' }),
+            cancelText: t('common:cancel', { defaultValue: 'Cancel' }),
+            okButtonProps: { type: 'primary' },
+            onOk: async () => {
+              try {
+                if (saveNoteRef.current) {
+                  await saveNoteRef.current({ showSuccessMessage: true })
+                }
+                resolve('saved')
+              } catch {
+                // Save still failed — stay on current note
+                resolve('cancel')
+              }
+            },
+            onCancel: () => resolve('cancel'),
+            footer: (_, { OkBtn, CancelBtn }) => (
+              <>
+                <CancelBtn />
+                <Button
+                  danger
+                  onClick={() => {
+                    modalRef.destroy()
+                    resolve('discard')
+                  }}
+                >
+                  {t('option:notesSearch.discardChanges', { defaultValue: 'Discard changes' })}
+                </Button>
+                <OkBtn />
+              </>
+            ),
+          })
+        })
+        return retryResult === 'saved' || retryResult === 'discard'
       }
     }
+    // Fallback for edge cases (empty content or save in progress)
     const ok = await confirmDanger({
       title: t('option:notesSearch.unsavedChangesTitle', { defaultValue: 'Save changes?' }),
       content: t('option:notesSearch.unsavedChangesContent', {
         defaultValue: 'Your changes could not be saved automatically. What would you like to do?'
       }),
-      okText: t('option:notesSearch.discardChanges', { defaultValue: 'Discard' }),
+      okText: t('option:notesSearch.discardChanges', { defaultValue: 'Discard changes' }),
       cancelText: t('common:cancel', { defaultValue: 'Cancel' })
     })
     return ok
@@ -1072,7 +1112,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
         return {
           value: strategy,
           label: t('option:notesSearch.titleStrategyLlm', {
-            defaultValue: 'LLM (quality)'
+            defaultValue: 'AI-powered'
           })
         }
       }
@@ -1080,14 +1120,14 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
         return {
           value: strategy,
           label: t('option:notesSearch.titleStrategyLlmFallback', {
-            defaultValue: 'LLM fallback'
+            defaultValue: 'AI-powered with fallback'
           })
         }
       }
       return {
         value: strategy,
         label: t('option:notesSearch.titleStrategyHeuristic', {
-          defaultValue: 'Heuristic (fast)'
+          defaultValue: 'Quick (from content)'
         })
       }
     })
@@ -1587,7 +1627,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     }
     if (saveIndicator === 'error') {
       return t('option:notesSearch.autosaveFailed', {
-        defaultValue: 'Autosave failed. Press Save to retry.'
+        defaultValue: 'Could not save — check your connection and try again.'
       })
     }
     if (saveIndicator === 'saved' && !isDirty) {
@@ -1634,7 +1674,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   const provenanceSummaryText = React.useMemo(() => {
     if (editProvenance.mode === 'manual') {
       return t('option:notesSearch.provenanceManual', {
-        defaultValue: 'Edit source: Manual'
+        defaultValue: 'Origin: Typed manually'
       })
     }
     const actionLabel =
@@ -1645,7 +1685,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
           : t('option:notesSearch.assistSuggestKeywordsAction', { defaultValue: 'Suggest keywords' })
     const generatedAt = new Date(editProvenance.at).toLocaleTimeString()
     const generatedPrefix = t('option:notesSearch.provenanceGeneratedPrefix', {
-      defaultValue: 'Edit source: Generated'
+      defaultValue: 'Origin: AI-generated'
     })
     return `${generatedPrefix} (${actionLabel} at ${generatedAt})`
   }, [editProvenance, t])

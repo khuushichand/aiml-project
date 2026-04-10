@@ -74,6 +74,7 @@ import {
   TRASH_LOOKUP_PAGE_SIZE,
   TRASH_LOOKUP_MAX_PAGES,
   sortNotesByPinnedIds,
+  promptModal,
 } from './notes-manager-utils'
 
 const LazyNotesManagerOverlays = React.lazy(() => import("./NotesManagerOverlays"))
@@ -1119,10 +1120,13 @@ const NotesManagerPage: React.FC = () => {
     const okToLeave = await ed.confirmDiscardIfDirty()
     if (!okToLeave) return
     const suggested = kw.keywordTokens.join(', ')
-    const rawInput = window.prompt(
-      'Assign keywords to selected notes (comma-separated):',
-      suggested
-    )
+    const rawInput = await promptModal({
+      title: 'Assign tags to selected notes',
+      label: 'Enter tag names separated by commas.',
+      defaultValue: suggested,
+      placeholder: 'tag1, tag2, tag3',
+      okText: 'Assign',
+    })
     if (rawInput == null) return
     const keywords = rawInput.split(',').map((entry) => entry.trim()).filter(Boolean)
     if (keywords.length === 0) {
@@ -1206,10 +1210,25 @@ const NotesManagerPage: React.FC = () => {
         else if (action === 'heading') execute('formatBlock', '<h2>')
         else if (action === 'list') execute('insertUnorderedList')
         else if (action === 'link') {
-          const href = typeof window !== 'undefined' ? window.prompt('Link URL', 'https://') : 'https://'
-          const normalizedHref = String(href || '').trim()
-          if (!normalizedHref) return
-          execute('createLink', normalizedHref)
+          ;(async () => {
+            const href = await promptModal({
+              title: 'Insert link',
+              defaultValue: 'https://',
+              placeholder: 'https://example.com',
+              okText: 'Insert',
+            })
+            const normalizedHref = String(href || '').trim()
+            if (!normalizedHref) return
+            richEditor.focus()
+            execute('createLink', normalizedHref)
+            const nextHtml = richEditor.innerHTML
+            ed.setWysiwygHtml(nextHtml)
+            ed.setWysiwygSessionDirty(true)
+            const nextMarkdown = wysiwygHtmlToMarkdown(nextHtml)
+            ed.setContentDirty(nextMarkdown)
+            ed.setEditorCursorIndex(nextMarkdown.length)
+          })()
+          return
         } else if (action === 'code') execute('insertText', '`code`')
 
         const nextHtml = richEditor.innerHTML
