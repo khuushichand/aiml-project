@@ -7,19 +7,19 @@ Supersedes: `Docs/superpowers/specs/2026-04-06-sqlite-backend-log-noise-design.m
 
 ## Summary
 
-Reduce repeated `Creating sqlite backend` log noise by fixing the underlying churn instead of aggregating logs. The design makes SQLite backend reuse a first-class responsibility of the shared backend factory, so repeated requests for the same normalized SQLite target resolve to one shared backend instance. Wrapper objects remain disposable, but SQLite backend pools become process-scoped shared resources with centralized cleanup.
+Reduce repeated SQLite backend churn by fixing the underlying resource lifecycle instead of aggregating logs. The design makes SQLite backend reuse a first-class responsibility of the shared backend factory, so repeated requests for the same normalized SQLite target resolve to one shared backend instance. Wrapper objects remain disposable, but SQLite backend pools become process-scoped shared resources with centralized cleanup.
 
 ## Problem
 
 The current log noise is a symptom of repeated backend construction:
 
-- [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py) logs `Creating sqlite backend` on every `DatabaseBackendFactory.create_backend(...)` call.
+- [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py) still emits a `Creating sqlite backend` event for each `DatabaseBackendFactory.create_backend(...)` call, currently at `DEBUG` in this branch.
 - The media request path already has a higher-level cache in [DB_Deps.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py), but repeated SQLite backend creation still occurs when that cache is bypassed, reset, or duplicated by other call sites.
 - Multiple DB helpers, including [Collections_DB.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/Collections_DB.py) and [ChaChaNotes_DB.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py), call the shared factory directly and currently assume they own any SQLite backend they construct.
 
 This creates two linked issues:
 
-- low-value `INFO` noise from repeated backend creation
+- low-value repeated backend creation log events
 - unnecessary SQLite backend and pool churn for the same DB path/config
 
 ## Goals
@@ -132,7 +132,7 @@ The SQLite signature should include:
 - normalized SQLite target
 - effective SQLite settings that materially affect connection behavior
 
-For the current implementation, the planning assumption is:
+For this design, the implementation note is:
 
 - include `sqlite_wal_mode`
 - include `sqlite_foreign_keys`
@@ -153,6 +153,12 @@ Normalization should distinguish:
 
 It should preserve meaningful differences but collapse trivial textual ones such as equivalent absolute paths.
 
+Concrete normalization examples:
+
+- `/abs/path/db.sqlite` and `./db.sqlite` resolve to the same canonical file-backed target when they point to the same absolute path
+- raw `:memory:` is never merged with `file:sharedmem?mode=memory&cache=shared`
+- `file:sharedmem?mode=memory&cache=shared` and the same URI with reordered but equivalent query semantics must normalize to one identity only if the implementation can do so safely and deterministically; otherwise the planner should preserve exact URI identity for shared-cache memory URIs
+
 In-memory policy must be explicit:
 
 - raw `:memory:` remains per-construction and is excluded from shared reuse
@@ -169,10 +175,23 @@ That means:
 
 - helper constructors may still call `DatabaseBackendFactory.create_backend(...)`
 - wrapper `close()` methods should stop closing shared SQLite pools directly
-- wrapper teardown should instead release their local claim or become a no-op when the backend is factory-managed
+- wrapper teardown should still perform wrapper-local cleanup, but should release shared backend ownership instead of closing a shared pool
 - actual pool shutdown happens only through centralized reset and shutdown paths
 
 To support this cleanly, the factory should expose a release helper for managed backends so higher-level callers do not need to inspect private registry state.
+
+The cleanup boundary must be explicit:
+
+- wrapper-local cleanup remains the wrapper's responsibility
+- shared backend pool shutdown becomes the factory/reset responsibility
+
+Wrapper-local cleanup includes behavior such as:
+
+- clearing thread-local references
+- releasing request-local or persistent connections back to the pool
+- rollback, checkpoint, or other connection-level safety work already performed by the wrapper
+
+The implementation must preserve that local cleanup behavior even when the backend pool itself is shared.
 
 ### 4. Keep existing higher-level caches, but make them secondary
 
@@ -204,6 +223,12 @@ Responsible for:
 
 The new SQLite registry should coexist with the existing named backend cache in [factory.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py), not create a second competing ownership model. `get_backend(name, ...)` may still cache named handles, but when it resolves a SQLite backend it should land on the same canonical shared backend instance used by direct `create_backend(...)` callers.
 
+There must be one shutdown authority for factory-managed SQLite pools:
+
+- the shared SQLite registry is the source of truth for pool ownership
+- the named cache stores references to canonical shared backends but does not independently own them
+- centralized shutdown must close each canonical shared SQLite backend once, then clear both the registry and any named references that point at those backends
+
 ### Wrapper and helper classes
 
 Responsible for:
@@ -220,6 +245,13 @@ The first wave of ownership updates should be limited to the paths already confi
 - the `CharactersRAGDB` close and pool-shutdown path in [ChaChaNotes_DB.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/ChaChaNotes_DB.py)
 
 Other direct factory callers such as `Watchlists_DB`, `UserDatabase_v2`, and scheduler-adjacent wrappers remain in scope for compatibility review, but they do not need to be part of the first ownership-migration slice unless they are confirmed to close managed shared pools directly.
+
+For the first wave, the intended behavior is:
+
+- `MediaDbSession.release_context_connection()` continues to perform request-local cleanup and must not be reduced to a total no-op
+- `MediaDbFactory.close()` stops closing a shared SQLite pool directly and instead delegates to factory-managed release or centralized reset
+- `CollectionsDatabase.close()` stops calling `pool.close_all()` for factory-managed SQLite backends
+- `CharactersRAGDB` retains its connection-local rollback, checkpoint, and thread-local cleanup while avoiding direct shutdown of a factory-managed shared SQLite pool
 
 ### Reset and shutdown paths
 
@@ -271,7 +303,18 @@ Central reset paths such as:
 - [reset_media_db_cache()](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py)
 - [close_all_backends()](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py)
 
-should close each managed backend once and clear the registry. Existing wrapper instances after reset may become stale, which is acceptable because reset is already a lifecycle boundary used for tests or teardown.
+must support two reset modes:
+
+- graceful runtime reset for reconfiguration, where canonical shared SQLite backends are logically evicted from caches first and closed after a short grace period so in-flight users can finish. The intended caller class is runtime reconfiguration entry points such as [reset_content_backend()](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/DB_Manager.py).
+- hard reset for tests or final shutdown, where canonical shared SQLite backends may be closed immediately and all caches cleared. The intended caller class is test/reset or shutdown entry points such as [reset_media_db_cache()](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/api/v1/API_Deps/DB_Deps.py) and [close_all_backends()](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/backends/factory.py).
+
+This mirrors the current deferred-close pattern already used by the shared content backend in [content_backend.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/core/DB_Management/content_backend.py).
+
+The reset contract must also be explicit about cache ordering:
+
+- named backend cache entries are cleared as references
+- canonical shared SQLite backends are closed exactly once by the registry owner
+- no reset path should leave the named cache pointing at an evicted shared backend
 
 ## Testing
 
@@ -281,12 +324,15 @@ should close each managed backend once and clear the registry. Existing wrapper 
 - different SQLite targets return different backend instances
 - different effective SQLite policies that materially change connection behavior produce distinct instances
 - failed SQLite creation does not poison the registry
+- `get_backend(name, sqlite_config)` and direct `create_backend(sqlite_config)` resolve to the same canonical shared SQLite backend
+- centralized reset clears both the canonical registry and named cache references atomically
 
 ### Ownership and cleanup tests
 
 - helper `close()` paths no longer close shared SQLite pools directly
 - centralized reset closes shared pools exactly once
 - release of a shared backend does not break another active consumer using the same backend
+- wrapper-local cleanup behavior such as thread-local clearing and connection-level rollback or checkpoint still runs after ownership centralization
 
 ### Media DB regression tests
 
@@ -309,6 +355,8 @@ should close each managed backend once and clear the registry. Existing wrapper 
 - A too-broad signature could incorrectly merge backends that should stay distinct.
 - A too-narrow signature could reduce reuse and preserve some churn.
 - Missing one direct close path could allow one wrapper to shut down a shared pool unexpectedly.
+- Over-simplifying wrapper teardown into a no-op could remove required local cleanup even when shared-pool ownership is correct.
+- Resetting shared SQLite backends without a graceful eviction path could break in-flight requests during runtime reconfiguration.
 - Test helpers that assume per-instance teardown may need small updates to use centralized reset.
 
 ## Open Questions
