@@ -9,6 +9,10 @@ const mockMessageApi = {
   destroy: vi.fn()
 }
 
+const mockWorkspaceStorageGetItem = vi.fn(async () => "1")
+const mockWorkspaceStorageSetItem = vi.fn(async () => undefined)
+const mockWorkspaceStorageRemoveItem = vi.fn(async () => undefined)
+
 const testState = {
   isMobile: false,
   storeHydrated: true,
@@ -67,7 +71,12 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (
     selector: (state: typeof testState) => unknown
-  ) => selector(testState)
+  ) => selector(testState),
+  createWorkspaceStorage: () => ({
+    getItem: mockWorkspaceStorageGetItem,
+    setItem: mockWorkspaceStorageSetItem,
+    removeItem: mockWorkspaceStorageRemoveItem
+  })
 }))
 
 vi.mock("@/services/tldw/TldwApiClient", () => ({
@@ -146,7 +155,10 @@ describe("WorkspacePlayground Stage 2 drawer responsiveness", () => {
     testState.storeHydrated = true
     testState.leftPaneCollapsed = false
     testState.rightPaneCollapsed = false
+    testState.selectedSourceIds = []
+    testState.generatedArtifacts = []
     testState.setSourceStatusByMediaId = vi.fn()
+    mockWorkspaceStorageGetItem.mockResolvedValue("1")
   })
 
   it("uses non-masked tablet drawers so chat remains visible", () => {
