@@ -1617,17 +1617,54 @@ class MCPConnectionTestResponse(BaseModel):
 
 
 @router.get("/catalog")
-async def list_mcp_catalog(archetype_key: str | None = None):
+async def list_mcp_catalog(
+    archetype_key: str | None = None,
+    _guard: None = Depends(enforce_http_security),
+):
     """Return the curated external MCP server catalog."""
     from tldw_Server_API.app.core.MCP_unified.catalog_loader import list_catalog_entries
 
     return list_catalog_entries(archetype_key=archetype_key)
 
 
+def _is_private_ip(host: str) -> bool:
+    """Return True if *host* resolves to a private/reserved IP address."""
+    import ipaddress
+    import socket
+
+    try:
+        resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _type, _proto, _canonname, sockaddr in resolved:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return True
+    except (socket.gaierror, ValueError):
+        return True  # fail closed: unresolvable hosts are rejected
+    return False
+
+
 @router.post("/catalog/test-connection", response_model=MCPConnectionTestResponse)
-async def check_mcp_connection(req: MCPConnectionTestRequest):
+async def check_mcp_connection(
+    req: MCPConnectionTestRequest,
+    _guard: None = Depends(enforce_http_security),
+):
     """Test connectivity to an external MCP server URL."""
     import httpx
+    from urllib.parse import urlparse
+
+    # Validate URL scheme — only http/https allowed.
+    parsed = urlparse(req.url)
+    if parsed.scheme not in ("http", "https"):
+        return MCPConnectionTestResponse(
+            reachable=False, error="Only http and https URLs are allowed"
+        )
+
+    # SSRF protection: reject private/reserved IP ranges.
+    hostname = parsed.hostname or ""
+    if not hostname or _is_private_ip(hostname):
+        return MCPConnectionTestResponse(
+            reachable=False, error="Cannot connect to private or reserved addresses"
+        )
 
     headers: dict[str, str] = {}
     if req.auth_type == "bearer" and req.secret:
@@ -1637,8 +1674,8 @@ async def check_mcp_connection(req: MCPConnectionTestRequest):
             resp = await http.get(req.url, headers=headers)
             resp.raise_for_status()
             return MCPConnectionTestResponse(reachable=True)
-    except Exception as exc:
-        return MCPConnectionTestResponse(reachable=False, error=str(exc))
+    except Exception:
+        return MCPConnectionTestResponse(reachable=False, error="Connection failed")
 
 
 # OpenAPI documentation customization

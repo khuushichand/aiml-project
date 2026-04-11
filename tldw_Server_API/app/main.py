@@ -2521,11 +2521,14 @@ async def lifespan(app: FastAPI):
 
     # Load persona archetypes and MCP server catalog (lightweight YAML reads).
     try:
+        from pathlib import Path as _ArchPath
+
         from tldw_Server_API.app.core.Persona.archetype_loader import load_archetypes_from_directory
         from tldw_Server_API.app.core.MCP_unified.catalog_loader import load_mcp_catalog
 
-        load_archetypes_from_directory("tldw_Server_API/Config_Files/persona_archetypes")
-        load_mcp_catalog("tldw_Server_API/Config_Files/mcp_server_catalog.yaml")
+        _config_dir = _ArchPath(__file__).resolve().parent.parent / "Config_Files"
+        load_archetypes_from_directory(_config_dir / "persona_archetypes")
+        load_mcp_catalog(_config_dir / "mcp_server_catalog.yaml")
     except _STARTUP_GUARD_EXCEPTIONS as _archetype_err:
         logger.debug(f"Archetype/catalog loading skipped: {_archetype_err}")
 

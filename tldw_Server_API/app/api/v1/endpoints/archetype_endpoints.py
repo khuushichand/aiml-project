@@ -6,12 +6,13 @@ loaded from YAML configuration files.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
     ArchetypeSummary,
     ArchetypeTemplate,
 )
+from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.Persona.archetype_loader import (
     get_archetype,
     list_archetypes,
@@ -21,13 +22,13 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[ArchetypeSummary])
-async def list_persona_archetypes():
+async def list_persona_archetypes(_guard: None = Depends(enforce_http_security)):
     """Return summaries of all available archetypes."""
     return list_archetypes()
 
 
 @router.get("/{key}", response_model=ArchetypeTemplate)
-async def get_persona_archetype(key: str):
+async def get_persona_archetype(key: str, _guard: None = Depends(enforce_http_security)):
     """Return full template for an archetype. 404 if not found."""
     tmpl = get_archetype(key)
     if tmpl is None:
@@ -36,7 +37,7 @@ async def get_persona_archetype(key: str):
 
 
 @router.get("/{key}/preview")
-async def get_archetype_preview(key: str):
+async def get_archetype_preview(key: str, _guard: None = Depends(enforce_http_security)):
     """Return a pre-filled dict from archetype for seeding wizard state.
 
     Returns: { name, system_prompt, archetype_key, voice_defaults, setup }

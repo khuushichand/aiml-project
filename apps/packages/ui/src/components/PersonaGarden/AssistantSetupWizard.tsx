@@ -46,6 +46,7 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   onCreatePersona
 }) => {
   const [newPersonaName, setNewPersonaName] = React.useState("")
+  const [showArchetypeChangeWarning, setShowArchetypeChangeWarning] = React.useState(false)
 
   const prevStepRef = React.useRef<PersonaSetupStep>(currentStep)
   React.useEffect(() => {
@@ -57,14 +58,9 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
       previousStep !== "archetype" &&
       archetypeKey
     ) {
-      const confirmed = window.confirm(
-        "Changing your archetype will reset your customizations. Continue?"
-      )
-      if (!confirmed && onResetSetup) {
-        onResetSetup()
-      }
+      setShowArchetypeChangeWarning(true)
     }
-  }, [currentStep, archetypeKey, onResetSetup])
+  }, [currentStep, archetypeKey])
 
   const handleCreatePersona = React.useCallback(() => {
     const normalizedName = String(newPersonaName || "").trim()
@@ -142,10 +138,34 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
         </div>
       ) : null}
       {currentStep === "archetype" ? (
-        <ArchetypePickerStep
-          selectedKey={archetypeKey ?? null}
-          onSelect={(key) => onSelectArchetype?.(key)}
-        />
+        <>
+          {showArchetypeChangeWarning && (
+            <div className="mb-3 flex items-center justify-between rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn">
+              <span>Changing your archetype will reset your customizations.</span>
+              <div className="flex gap-2">
+                <button
+                  className="rounded px-2 py-1 text-xs font-medium hover:bg-warn/20"
+                  onClick={() => {
+                    setShowArchetypeChangeWarning(false)
+                    onResetSetup?.()
+                  }}
+                >
+                  Go back
+                </button>
+                <button
+                  className="rounded px-2 py-1 text-xs font-medium hover:bg-warn/20"
+                  onClick={() => setShowArchetypeChangeWarning(false)}
+                >
+                  Continue anyway
+                </button>
+              </div>
+            </div>
+          )}
+          <ArchetypePickerStep
+            selectedKey={archetypeKey ?? null}
+            onSelect={(key) => onSelectArchetype?.(key)}
+          />
+        </>
       ) : currentStep === "persona" ? (
         <div className="space-y-3">
           <div>
