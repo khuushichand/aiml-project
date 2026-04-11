@@ -84,6 +84,20 @@ _fair_share: FairShareScheduler | None = None
 _fair_share_limits: tuple[int, int] | None = None
 
 
+def _safe_increment_created_metric(*, domain: str, queue: str, job_type: str) -> None:
+    """Keep job creation non-fatal while surfacing metric update failures."""
+    try:
+        increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+    except _JOB_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Non-critical jobs created metric update failed for {}:{}:{}: {}",
+            domain,
+            queue,
+            job_type,
+            exc,
+        )
+
+
 def _fair_share_enabled() -> bool:
     """Return whether fair-share admission/priority logic is explicitly enabled."""
     return any(
@@ -1356,9 +1370,12 @@ class JobManager:
                                     trace_id,
                                 ),
                             )
-                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-                                if was_insert:
-                                    increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                            if was_insert:
+                                _safe_increment_created_metric(
+                                    domain=domain,
+                                    queue=queue,
+                                    job_type=job_type,
+                                )
                             # Emit event for in-process listeners when outbox is disabled
                             try:
                                 if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
@@ -1471,8 +1488,11 @@ class JobManager:
                                 d.get("trace_id"),
                             ),
                         )
-                        with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-                            increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                        _safe_increment_created_metric(
+                            domain=domain,
+                            queue=queue,
+                            job_type=job_type,
+                        )
                         # Emit event for in-process listeners when outbox is disabled
                         try:
                             if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
@@ -1588,9 +1608,12 @@ class JobManager:
                                             trace_id,
                                         ),
                                     )
-                                    with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-                                        if inserted:
-                                            increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                                    if inserted:
+                                        _safe_increment_created_metric(
+                                            domain=domain,
+                                            queue=queue,
+                                            job_type=job_type,
+                                        )
                                     outbox_enabled = JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", ""))
                                     if outbox_enabled:
                                         with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -1700,8 +1723,11 @@ class JobManager:
                                     trace_id,
                                 ),
                             )
-                            with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
-                                increment_created({"domain": domain, "queue": queue, "job_type": job_type})
+                            _safe_increment_created_metric(
+                                domain=domain,
+                                queue=queue,
+                                job_type=job_type,
+                            )
                             # Emit event for in-process listeners when outbox is disabled
                             try:
                                 if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):

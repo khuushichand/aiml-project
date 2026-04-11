@@ -185,6 +185,55 @@ def test_pg_create_job_idempotent_gates_created_metric(monkeypatch, tmp_path):
 
 
 @pytest.mark.unit
+def test_pg_create_job_logs_created_metric_failure_without_aborting(monkeypatch, tmp_path):
+    warnings: list[tuple] = []
+
+    class _LoggerStub:
+        def warning(self, *args, **kwargs):
+            warnings.append((args, kwargs))
+
+        def info(self, *args, **kwargs):
+            return None
+
+        def debug(self, *args, **kwargs):
+            return None
+
+        def error(self, *args, **kwargs):
+            return None
+
+    def _inc(_labels):
+        raise RuntimeError("metric backend offline")
+
+    monkeypatch.setenv("JOBS_DB_URL", "postgresql://fake")
+    jm = JobManager(db_path=tmp_path / "dummy.db")
+    jm.backend = "postgres"
+
+    import tldw_Server_API.app.core.Jobs.manager as mgr
+
+    monkeypatch.setattr(mgr, "increment_created", _inc)
+    monkeypatch.setattr(mgr, "logger", _LoggerStub())
+
+    jobs = {}
+    monkeypatch.setattr(jm, "_connect", lambda: FakePGConn())
+    monkeypatch.setattr(jm, "_pg_cursor", lambda conn: FakePGCursor(jobs))
+
+    row = jm.create_job(
+        domain="pg",
+        queue="default",
+        job_type="x",
+        payload={},
+        owner_user_id=None,
+        idempotency_key="K",
+    )
+
+    assert row and row.get("status") == "queued"
+    assert len(warnings) == 1
+    assert warnings[0][0][0] == "Non-critical jobs created metric update failed for {}:{}:{}: {}"
+    assert warnings[0][0][1:4] == ("pg", "default", "x")
+    assert str(warnings[0][0][4]) == "metric backend offline"
+
+
+@pytest.mark.unit
 def test_pg_idempotent_create_uses_current_request_context_for_job_created_event(monkeypatch, tmp_path):
     monkeypatch.setenv("JOBS_DB_URL", "postgresql://fake")
     jm = JobManager(db_path=tmp_path / "dummy.db")
