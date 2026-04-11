@@ -25793,10 +25793,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         deck_id_column: str = "f.deck_id",
     ) -> tuple[str, tuple[Any, ...], bool]:
         """Return the visibility predicate and whether a deck join is required."""
+        if workspace_id is not None:
+            if deck_id is not None:
+                return f"{deck_id_column} = ? AND {deck_alias}.workspace_id = ?", (deck_id, workspace_id), True
+            return f"{deck_alias}.workspace_id = ?", (workspace_id,), True
         if deck_id is not None:
             return f"{deck_id_column} = ?", (deck_id,), False
-        if workspace_id is not None:
-            return f"{deck_alias}.workspace_id = ?", (workspace_id,), True
         if not include_workspace_items:
             return f"{deck_alias}.workspace_id IS NULL", tuple(), True
         return "", tuple(), False
@@ -25872,7 +25874,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         where_sql = " AND ".join(where_clauses)
         query = """
-            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, d.workspace_id AS workspace_id, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.queue_state, f.step_index, f.suspended_reason,
@@ -26033,7 +26035,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         placeholders = ",".join(["?"] * len(uuids))
         deleted_clause = "f.deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "f.deleted = 0"
         query = """
-            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, d.workspace_id AS workspace_id, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.queue_state, f.step_index, f.suspended_reason,
@@ -26814,7 +26816,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_flashcard(self, card_uuid: str) -> dict[str, Any] | None:
         """Fetch a single flashcard by uuid (active only)."""
         query = """
-            SELECT f.uuid, f.deck_id, d.name AS deck_name, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
+            SELECT f.uuid, f.deck_id, d.name AS deck_name, d.workspace_id AS workspace_id, f.front, f.back, f.notes, f.extra, f.is_cloze, f.tags_json,
                    f.source_ref_type, f.source_ref_id, f.conversation_id, f.message_id,
                    f.ef, f.interval_days, f.repetitions, f.lapses, f.due_at, f.last_reviewed_at,
                    f.queue_state, f.step_index, f.suspended_reason, f.scheduler_state_json, d.scheduler_type,
