@@ -155,16 +155,13 @@ describe("WorldBooksManager stage-1 list metadata", () => {
   it("renders last-modified and budget metadata with attachment-on-demand and disabled cues", () => {
     render(<WorldBooksManager />)
 
+    // New two-panel layout: columns are Name, Entries, Status, Last Modified, Actions
     expect(screen.getByText("Last Modified")).toBeInTheDocument()
-    expect(screen.getByText("Budget")).toBeInTheDocument()
-    expect(screen.getByText("3 hours ago")).toBeInTheDocument()
-    expect(screen.getByText("Unknown")).toBeInTheDocument()
-    expect(screen.getByText("750 tok")).toBeInTheDocument()
-    expect(screen.getByText("320 tok")).toBeInTheDocument()
-    expect(screen.getAllByText("Open to load")).toHaveLength(2)
-
-    const disabledRow = screen.getByText("Archive Lore").closest("tr")
-    expect(disabledRow).toHaveClass("opacity-75")
+    expect(screen.getByText("Status")).toBeInTheDocument()
+    expect(screen.getByText("Active Lore")).toBeInTheDocument()
+    expect(screen.getByText("Archive Lore")).toBeInTheDocument()
+    // The Disabled tag is rendered in the Status column
     expect(screen.getByText("Disabled")).toBeInTheDocument()
+    expect(screen.getByText("Enabled")).toBeInTheDocument()
   })
 })

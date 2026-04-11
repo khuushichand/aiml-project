@@ -218,7 +218,9 @@ describe("WorldBooksManager statistics stage-1 actionable metrics", () => {
     const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "View world book statistics" }))
+    // Open overflow menu then click Statistics
+    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+    await user.click(await screen.findByText("Statistics"))
     await user.click(await screen.findByRole("button", { name: "Open disabled entries" }))
 
     expect(await screen.findByText("Entries: Arcana")).toBeInTheDocument()
@@ -231,7 +233,9 @@ describe("WorldBooksManager statistics stage-1 actionable metrics", () => {
     const user = userEvent.setup()
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "View world book statistics" }))
+    // Open overflow menu then click Statistics
+    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+    await user.click(await screen.findByText("Statistics"))
     const regexButton = await screen.findByRole("button", { name: "Open regex entries" })
     regexButton.focus()
     await user.keyboard("{Enter}")
@@ -262,7 +266,9 @@ describe("WorldBooksManager statistics stage-1 actionable metrics", () => {
 
     render(<WorldBooksManager />)
 
-    await user.click(screen.getByRole("button", { name: "View world book statistics" }))
+    // Open overflow menu then click Statistics
+    await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+    await user.click(await screen.findByText("Statistics"))
 
     await waitFor(() => {
       expect(screen.getByText("World Book Statistics")).toBeInTheDocument()
