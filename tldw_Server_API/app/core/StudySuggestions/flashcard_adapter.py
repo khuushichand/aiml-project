@@ -69,6 +69,8 @@ def _parse_tags(value: Any) -> list[str]:
             return _unique_preserve([stripped])
         if isinstance(decoded, list):
             return _unique_preserve(decoded)
+        if isinstance(decoded, str):
+            return _unique_preserve([decoded])
     return []
 
 
@@ -78,7 +80,7 @@ def _normalize_source_items(value: Any) -> list[Mapping[str, Any]]:
         if isinstance(nested_items, list):
             return [item for item in nested_items if isinstance(item, Mapping)]
         return [value]
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [item for item in value if isinstance(item, Mapping)]
     return []
 

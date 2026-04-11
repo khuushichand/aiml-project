@@ -10,9 +10,7 @@ from .topic_aliases import (
     NORMALIZATION_VERSION,
     clean_label_text,
     dedupe_reasons,
-    lookup_topic_alias,
-    normalize_semantic_label,
-    resolve_namespace,
+    resolve_topic_alias,
     topic_key_for,
 )
 from .types import NormalizedTopicLabel, RankedTopic, ResolvedTopicLabel, TopicCandidate
@@ -39,19 +37,12 @@ def _resolve_label(raw_label: object, evidence_class: str) -> ResolvedTopicLabel
     if cleaned is None:
         return None
 
-    semantic_label = normalize_semantic_label(cleaned)
-    if semantic_label is None:
+    namespace, semantic_basis = resolve_topic_alias(cleaned)
+    if not semantic_basis:
         return None
 
-    alias = lookup_topic_alias(cleaned) or lookup_topic_alias(semantic_label)
-    if alias is not None:
-        namespace, semantic_basis = alias
-    else:
-        namespace = resolve_namespace(semantic_label)
-        semantic_basis = semantic_label
-
-    canonical_slug = topic_key_for(namespace, semantic_basis).split(":", 1)[1]
-    topic_key = f"{namespace}:{canonical_slug}"
+    topic_key = topic_key_for(namespace, semantic_basis)
+    canonical_slug = topic_key.split(":", 1)[1]
     evidence_reason = _EVIDENCE_REASON_BY_CLASS.get(evidence_class, "derived_label")
     source_count = 1 if evidence_class == "grounded" else 0
 
@@ -76,7 +67,7 @@ def normalize_topic_labels(labels: Iterable[object]) -> list[NormalizedTopicLabe
             continue
         grouped.setdefault(resolved.topic_key, []).append(resolved)
 
-    normalized_group_rows: list[tuple[str, str, str, list[str]]] = []
+    normalized_group_rows: list[tuple[str, str, list[str]]] = []
     for grouped_topics in grouped.values():
         semantic_labels = [resolved.semantic_label for resolved in grouped_topics]
         semantic_canonical = min(semantic_labels, key=_canonical_label_preference)
@@ -87,14 +78,14 @@ def normalize_topic_labels(labels: Iterable[object]) -> list[NormalizedTopicLabe
                 if raw_label not in raw_labels:
                     raw_labels.append(raw_label)
 
-        normalized_group_rows.append((namespace, semantic_canonical, semantic_canonical, raw_labels))
+        normalized_group_rows.append((namespace, semantic_canonical, raw_labels))
 
     semantic_label_counts: dict[str, int] = {}
-    for _, semantic_canonical, _, _ in normalized_group_rows:
+    for _, semantic_canonical, _ in normalized_group_rows:
         semantic_label_counts[semantic_canonical] = semantic_label_counts.get(semantic_canonical, 0) + 1
 
     normalized_topics: list[NormalizedTopicLabel] = []
-    for namespace, semantic_canonical, representative_canonical, raw_labels in normalized_group_rows:
+    for namespace, semantic_canonical, raw_labels in normalized_group_rows:
         canonical_label = semantic_canonical
         if semantic_label_counts.get(semantic_canonical, 0) > 1:
             canonical_label = semantic_canonical

@@ -57,14 +57,21 @@ def _fallback_topic_item(
 
 
 def _find_quiz_topic_source(
-    canonical_label: str,
+    topic_labels: Iterable[str],
     source_bundle: list[dict[str, str]],
     *,
     allow_fallback: bool = True,
 ) -> dict[str, str] | None:
+    """Return the source bundle item whose label matches any known topic label."""
+
+    matchable_labels = {
+        label.casefold()
+        for label in topic_labels
+        if isinstance(label, str) and label.strip()
+    }
     for source in source_bundle:
         source_label = _safe_text(source.get("label"))
-        if source_label and source_label.casefold() == canonical_label.casefold():
+        if source_label and source_label.casefold() in matchable_labels:
             return source
     if allow_fallback and source_bundle:
         return source_bundle[0]
@@ -113,7 +120,7 @@ def _build_quiz_snapshot_payload(note_db: CharactersRAGDB, anchor_id: int) -> tu
     topics: list[dict[str, Any]] = []
     for index, topic in enumerate(ranked_topics[:6], start=1):
         source = _find_quiz_topic_source(
-            topic.canonical_label,
+            [*topic.raw_labels, topic.canonical_label, topic.semantic_label],
             context.source_bundle,
             allow_fallback=False,
         )
@@ -152,26 +159,6 @@ def _build_quiz_snapshot_payload(note_db: CharactersRAGDB, anchor_id: int) -> tu
     return context.service, context.activity_type, payload
 
 
-def _load_flashcard_reviewed_cards(note_db: CharactersRAGDB, session_id: int) -> list[dict[str, Any]]:
-    cursor = note_db.execute_query(
-        """
-        SELECT f.uuid,
-               MAX(f.tags_json) AS tags_json,
-               MAX(f.source_ref_type) AS source_ref_type,
-               MAX(f.source_ref_id) AS source_ref_id,
-               MAX(d.name) AS deck_name
-          FROM flashcard_reviews fr
-          JOIN flashcards f ON f.id = fr.card_id
-          LEFT JOIN decks d ON d.id = f.deck_id
-         WHERE fr.review_session_id = ?
-         GROUP BY f.uuid
-         ORDER BY MIN(fr.id)
-        """,
-        (int(session_id),),
-    )
-    return [dict(row) for row in cursor.fetchall()]
-
-
 def _build_flashcard_snapshot_payload(note_db: CharactersRAGDB, anchor_id: int) -> tuple[str, str, dict[str, Any]]:
     session_rollup = note_db.get_flashcard_review_session_rollup(int(anchor_id))
     if not session_rollup:
@@ -189,7 +176,7 @@ def _build_flashcard_snapshot_payload(note_db: CharactersRAGDB, anchor_id: int) 
         deck = note_db.get_deck(int(session_rollup["deck_id"]))
         if deck and deck.get("name"):
             provenance["deck_name"] = str(deck["name"])
-    reviewed_cards = _load_flashcard_reviewed_cards(note_db, int(anchor_id))
+    reviewed_cards = note_db.get_flashcard_reviewed_cards(int(anchor_id))
     if reviewed_cards:
         provenance["reviewed_cards"] = reviewed_cards
 
@@ -216,7 +203,7 @@ def _build_flashcard_snapshot_payload(note_db: CharactersRAGDB, anchor_id: int) 
     topics: list[dict[str, Any]] = []
     for index, topic in enumerate(ranked_topics[:4], start=1):
         source = _find_quiz_topic_source(
-            topic.canonical_label,
+            [*topic.raw_labels, topic.canonical_label, topic.semantic_label],
             evidence["source_bundle"],
             allow_fallback=False,
         )

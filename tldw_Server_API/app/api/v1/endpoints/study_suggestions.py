@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +93,8 @@ def _serialize_job(job: dict[str, object]) -> dict[str, object]:
 
 
 def _is_generation_link_target_live(note_db: CharactersRAGDB, generation_link: dict[str, Any]) -> bool:
+    """Return whether a persisted generation link still points at a launchable target."""
+
     target_service = str(generation_link.get("target_service") or "").strip().lower()
     target_type = str(generation_link.get("target_type") or "").strip().lower()
     target_id = str(generation_link.get("target_id") or "").strip()
@@ -117,7 +119,9 @@ def _is_generation_link_target_live(note_db: CharactersRAGDB, generation_link: d
 def _iter_refreshed_ancestor_snapshots(
     note_db: CharactersRAGDB,
     snapshot_row: dict[str, Any],
-):
+) -> Iterator[dict[str, Any]]:
+    """Yield refreshed ancestor snapshots from newest parent to oldest reachable ancestor."""
+
     seen_ids: set[int] = set()
     parent_id = snapshot_row.get("refreshed_from_snapshot_id")
     while parent_id is not None:
@@ -145,6 +149,8 @@ def _find_live_generation_link_in_refreshed_lineage(
     action_kind: str,
     generator_version: str | None,
 ) -> dict[str, Any] | None:
+    """Find a reusable live generation link in refreshed ancestor snapshots."""
+
     if not requested_identity_groups:
         return None
 
@@ -189,6 +195,8 @@ def _build_selection_fingerprint_variants(
     generator_version: str | None,
     normalization_version: str,
 ) -> tuple[str, str | None]:
+    """Build current and legacy-compatible selection fingerprints for one action."""
+
     selection_fingerprint = build_selection_fingerprint(
         snapshot_id=snapshot_id,
         target_service=target_service,
@@ -222,6 +230,8 @@ def _list_generation_link_candidates(
     selection_fingerprint: str,
     legacy_selection_fingerprint: str | None,
 ) -> list[tuple[dict[str, Any], str]]:
+    """Return matching generation links for current and legacy fingerprints."""
+
     candidates: list[tuple[dict[str, Any], str]] = []
     seen_fingerprints: set[str] = set()
     for fingerprint in (selection_fingerprint, legacy_selection_fingerprint):
@@ -495,20 +505,23 @@ def refresh_suggestion_snapshot(
     if not snapshot_row:
         raise HTTPException(status_code=404, detail="Suggestion snapshot not found")
 
-    job = jm.create_job(
-        domain=STUDY_SUGGESTIONS_DOMAIN,
-        queue=study_suggestions_jobs_queue(),
-        job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
-        payload=build_study_suggestions_job_payload(
+    try:
+        job = jm.create_job(
+            domain=STUDY_SUGGESTIONS_DOMAIN,
+            queue=study_suggestions_jobs_queue(),
             job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
-            anchor_type=str(snapshot_row["anchor_type"]),
-            anchor_id=int(snapshot_row["anchor_id"]),
-            snapshot_id=int(snapshot_row["id"]),
-        ),
-        owner_user_id=str(current_user.id),
-        priority=5,
-        max_retries=1,
-    )
+            payload=build_study_suggestions_job_payload(
+                job_type=STUDY_SUGGESTIONS_REFRESH_JOB_TYPE,
+                anchor_type=str(snapshot_row["anchor_type"]),
+                anchor_id=int(snapshot_row["anchor_id"]),
+                snapshot_id=int(snapshot_row["id"]),
+            ),
+            owner_user_id=str(current_user.id),
+            priority=5,
+            max_retries=1,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SuggestionJobAcceptedResponse.model_validate({"job": _serialize_job(job)})
 
 
@@ -635,16 +648,23 @@ def _prepare_action(
                     "target_id": str(ancestor_link["target_id"]),
                 }
             )
-        )
+    )
 
     if not payload.force_regenerate:
         for _existing_link, matched_existing_fingerprint in stale_existing:
-            with contextlib.suppress(Exception):
+            try:
                 db.soft_delete_suggestion_generation_link(
                     snapshot_id=snapshot_id,
                     target_service=action_contract["target_service"],
                     target_type=action_contract["target_type"],
                     selection_fingerprint=matched_existing_fingerprint,
+                )
+            except Exception as exc:  # pragma: no cover - defensive cleanup path
+                logger.warning(
+                    "Failed to retire stale study suggestion generation link for snapshot_id={} fingerprint={}: {}",
+                    snapshot_id,
+                    matched_existing_fingerprint,
+                    exc,
                 )
         try:
             reserve_generation_link(

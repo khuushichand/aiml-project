@@ -1,5 +1,6 @@
 from tldw_Server_API.app.core.StudySuggestions.topic_aliases import (
     NORMALIZATION_VERSION,
+    resolve_topic_alias,
 )
 from tldw_Server_API.app.core.StudySuggestions.topic_pipeline import (
     normalize_topic_labels,
@@ -81,6 +82,13 @@ def test_normalize_topic_labels_uses_semantic_canonical_label_for_explicit_alias
     assert len(normalized) == 1  # nosec B101
     assert normalized[0].canonical_label == "renal physiology"  # nosec B101
     assert normalized[0].raw_labels == ["Kidney physiology"]  # nosec B101
+
+
+def test_resolve_topic_alias_normalizes_raw_input_before_lookup():
+    assert resolve_topic_alias("Kidney_Physiology") == (  # nosec B101
+        "renal",
+        "renal physiology",
+    )
 
 
 def test_normalize_topic_labels_collapses_mixed_raw_forms_stably():

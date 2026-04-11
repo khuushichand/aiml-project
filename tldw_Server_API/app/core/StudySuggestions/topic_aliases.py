@@ -46,7 +46,7 @@ def clean_label_text(label: object) -> str | None:
     text = str(label or "").strip().lower()
     if not text:
         return None
-    text = text.replace("/", " ").replace("_", " ").replace("-", " ")
+    text = re.sub(r"[-/_]", " ", text)
     text = _WHITESPACE_RE.sub(" ", text)
     return text.strip() or None
 
@@ -75,10 +75,14 @@ def lookup_topic_alias(label: str) -> tuple[str, str] | None:
 
 
 def resolve_topic_alias(label: str) -> tuple[str, str]:
-    alias = lookup_topic_alias(label)
+    cleaned = clean_label_text(label)
+    if cleaned is None:
+        return DEFAULT_NAMESPACE, ""
+    semantic = normalize_semantic_label(cleaned) or cleaned
+    alias = lookup_topic_alias(cleaned) or lookup_topic_alias(semantic)
     if alias is not None:
         return alias
-    return resolve_namespace(label), label
+    return resolve_namespace(semantic), semantic
 
 
 def canonical_slug(label: str) -> str:

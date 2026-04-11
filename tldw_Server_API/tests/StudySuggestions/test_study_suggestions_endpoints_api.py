@@ -258,13 +258,30 @@ def test_refresh_enqueues_job_for_existing_snapshot(
 
     assert refresh.status_code == 202  # nosec B101
     assert refresh.json()["job"]["status"] == "queued"  # nosec B101
-
     job = _jobs_manager(jobs_db_path).get_job(int(refresh.json()["job"]["id"]))
     assert job is not None  # nosec B101
     assert job["domain"] == jobs_mod.STUDY_SUGGESTIONS_DOMAIN  # nosec B101
     assert job["job_type"] == jobs_mod.STUDY_SUGGESTIONS_REFRESH_JOB_TYPE  # nosec B101
     assert int(job["payload"]["snapshot_id"]) == snapshot_id  # nosec B101
     assert int(job["payload"]["anchor_id"]) == 101  # nosec B101
+
+
+def test_refresh_maps_job_manager_validation_errors_to_http_400(
+    client: TestClient,
+    db: CharactersRAGDB,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    snapshot_id = _create_snapshot(db)
+
+    def fail_create_job(self, *args, **kwargs):  # noqa: ANN001, ARG001
+        raise ValueError("invalid refresh request")
+
+    monkeypatch.setattr(JobManager, "create_job", fail_create_job)
+
+    refresh = client.post(f"/api/v1/study-suggestions/snapshots/{snapshot_id}/refresh", json={})
+
+    assert refresh.status_code == 400  # nosec B101
+    assert refresh.json()["detail"] == "invalid refresh request"  # nosec B101
 
 
 def test_live_evidence_permission_failures_degrade_to_source_unavailable(

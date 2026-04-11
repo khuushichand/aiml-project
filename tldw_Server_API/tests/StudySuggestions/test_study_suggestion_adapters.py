@@ -177,6 +177,32 @@ def test_flashcard_evidence_extraction_uses_study_pack_and_reviewed_card_provena
     )
 
 
+def test_flashcard_evidence_extraction_accepts_json_encoded_string_tags():
+    evidence = extract_flashcard_suggestion_evidence(
+        {
+            "id": 19,
+            "deck_id": 5,
+            "review_mode": "due",
+            "cards_reviewed": 1,
+            "correct_count": 1,
+            "source_bundle": [],
+        },
+        provenance={
+            "reviewed_cards": [
+                {
+                    "uuid": "card-1",
+                    "tags_json": '"Renal focus"',
+                    "source_ref_type": "note",
+                    "source_ref_id": "note-9",
+                }
+            ],
+        },
+    )
+
+    assert evidence["tag_labels"] == ["Renal focus"]  # nosec B101
+    assert "Renal focus" in evidence["adjacent_labels"]  # nosec B101
+
+
 def _create_flashcard_session_for_audit_case(
     db: CharactersRAGDB,
     case: dict[str, object],

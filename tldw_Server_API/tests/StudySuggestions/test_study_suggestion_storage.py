@@ -331,6 +331,46 @@ def test_flashcard_review_session_rollup_unwraps_study_pack_bundle_items_shape(d
     ]
 
 
+def test_get_flashcard_reviewed_cards_returns_ordered_card_metadata(db: CharactersRAGDB):
+    deck_id = db.add_deck("Reviewed Cards Deck", "desc")
+    session = db.get_or_create_flashcard_review_session(
+        deck_id=deck_id,
+        review_mode="due",
+        tag_filter=None,
+        scope_key=f"due:deck:{deck_id}",
+    )
+    first_card = db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Front 1",
+            "back": "Back 1",
+            "tags": ["Renal basics"],
+            "source_ref_type": "note",
+            "source_ref_id": "note-7",
+        }
+    )
+    second_card = db.add_flashcard(
+        {
+            "deck_id": deck_id,
+            "front": "Front 2",
+            "back": "Back 2",
+            "tags": ["Electrolytes"],
+            "source_ref_type": "note",
+            "source_ref_id": "note-8",
+        }
+    )
+
+    db.review_flashcard(first_card, rating=4, answer_time_ms=500, review_session_id=int(session["id"]))
+    db.review_flashcard(second_card, rating=2, answer_time_ms=650, review_session_id=int(session["id"]))
+
+    reviewed_cards = db.get_flashcard_reviewed_cards(int(session["id"]))
+
+    assert [card["uuid"] for card in reviewed_cards] == [first_card, second_card]  # nosec B101
+    assert reviewed_cards[0]["deck_name"] == "Reviewed Cards Deck"  # nosec B101
+    assert reviewed_cards[0]["source_ref_id"] == "note-7"  # nosec B101
+    assert reviewed_cards[1]["source_ref_id"] == "note-8"  # nosec B101
+
+
 def test_refresh_snapshot_serializes_quiz_v2_topic_fields(db: CharactersRAGDB):
     quiz_id = db.create_quiz(
         name="Renal Quiz",
@@ -415,6 +455,7 @@ def test_refresh_snapshot_serializes_semantic_canonical_label_for_alias_source_t
     assert topic["topic_key"] == "renal:renal-physiology"  # nosec B101
     assert topic["canonical_label"] == "renal physiology"  # nosec B101
     assert topic["display_label"] == "Kidney Physiology"  # nosec B101
+    assert topic["source_id"] == "note-8"  # nosec B101
 
 
 def test_quiz_snapshot_assigns_source_refs_only_to_matching_topics(db: CharactersRAGDB):
@@ -528,6 +569,45 @@ def test_suggestion_generation_link_duplicate_identity_ignores_target_id_for_act
             target_id="quiz-99",
             selection_fingerprint="sel-1",
         )
+
+
+def test_replace_suggestion_generation_link_returns_retained_link_id_when_updating_existing_row(
+    db: CharactersRAGDB,
+):
+    snapshot_id = db.create_suggestion_snapshot(
+        service="quiz",
+        activity_type="quiz_attempt",
+        anchor_type="quiz_attempt",
+        anchor_id=101,
+        suggestion_type="study_suggestions",
+        payload_json={"topics": [{"display_label": "Renal basics"}]},
+    )
+    original_link_id = db.create_suggestion_generation_link(
+        snapshot_id=snapshot_id,
+        target_service="quiz",
+        target_type="quiz",
+        target_id="quiz-55",
+        selection_fingerprint="sel-1",
+    )
+
+    updated_link_id = db.replace_suggestion_generation_link(
+        snapshot_id=snapshot_id,
+        target_service="quiz",
+        target_type="quiz",
+        target_id="quiz-99",
+        selection_fingerprint="sel-1",
+    )
+    row = db.find_suggestion_generation_link(
+        snapshot_id=snapshot_id,
+        target_service="quiz",
+        target_type="quiz",
+        target_id="quiz-99",
+        selection_fingerprint="sel-1",
+    )
+
+    assert updated_link_id == original_link_id  # nosec B101
+    assert row is not None  # nosec B101
+    assert int(row["id"]) == original_link_id  # nosec B101
 
 
 def test_suggestion_generation_link_schema_dedupes_legacy_active_duplicates_before_unique_index(
