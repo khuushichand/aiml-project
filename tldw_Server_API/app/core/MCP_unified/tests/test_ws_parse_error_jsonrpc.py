@@ -8,7 +8,7 @@ def test_mcp_ws_invalid_json_returns_jsonrpc_parse_error(mcp_ws_client):
     srv.config.ws_auth_required = False
     try:
         srv.config.debug_mode = True
-    except Exception:
+    except AttributeError:
         _ = None
     srv.config.allowed_client_ips = []
 
@@ -22,5 +22,5 @@ def test_mcp_ws_invalid_json_returns_jsonrpc_parse_error(mcp_ws_client):
             assert isinstance(msg.get("error"), dict)  # nosec B101
             assert msg["error"].get("code") == -32700  # nosec B101
             assert "Parse error" in (msg["error"].get("message") or "")  # nosec B101
-    except Exception:
+    except (ConnectionRefusedError, OSError, RuntimeError):
         pytest.skip("MCP WebSocket endpoint not available in this build")

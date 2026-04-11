@@ -10,10 +10,12 @@ from tldw_Server_API.app.core.MCP_unified.external_servers.config_schema import 
 )
 from tldw_Server_API.app.core.MCP_unified.external_servers.manager import ExternalServerManager
 from tldw_Server_API.app.core.MCP_unified.external_servers.transports.base import (
+    BrokeredExternalCredential,
     ExternalMCPTransportAdapter,
     ExternalToolCallResult,
     ExternalToolDefinition,
     adapter_supports_runtime_auth,
+    call_tool_with_ephemeral_adapter,
 )
 from tldw_Server_API.app.core.MCP_unified.external_servers import manager as manager_mod
 
@@ -118,6 +120,71 @@ def test_adapter_runtime_auth_compatibility_helper_handles_legacy_signature() ->
     _ensure(
         adapter_supports_runtime_auth(adapter) is False,
         "legacy adapter signature should not be treated as runtime-auth aware",
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_adapter_omits_runtime_auth_metadata_when_runtime_auth_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _FakeAdapter(
+        server_id="docs",
+        tools=[ExternalToolDefinition(name="docs.search", description="Search")],
+    )
+    _patch_loader_and_adapter(
+        monkeypatch,
+        payload=_registry_payload(policy={"allow_tool_patterns": ["docs.*"]}),
+        adapter=adapter,
+    )
+
+    async def _broker(**_kwargs) -> BrokeredExternalCredential:
+        return BrokeredExternalCredential(
+            headers={"Authorization": "Bearer ephemeral-token"},
+            metadata={
+                "credential_mode": "brokered_ephemeral",
+                "credential_source": "mcp_hub_managed_binding",
+            },
+        )
+
+    manager = ExternalServerManager().with_credential_broker(_broker)
+    try:
+        await manager.initialize()
+        result = await manager.execute_virtual_tool(
+            "ext.docs.docs.search",
+            {"q": "runtime"},
+            context={"request_id": "r-legacy"},
+        )
+    finally:
+        await manager.shutdown()
+
+    _ensure(
+        result["metadata"] == {"adapter": "fake"},
+        f"Legacy adapter metadata should not expose runtime auth internals: {result!r}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_adapter_helper_skips_runtime_auth_for_legacy_adapter_signature() -> None:
+    cfg = parse_external_server_registry(_registry_payload()).servers[0]
+    created_adapters: list[_FakeAdapter] = []
+
+    def _adapter_factory(server_cfg) -> _FakeAdapter:
+        adapter = _FakeAdapter(server_id=server_cfg.id, tools=[])
+        created_adapters.append(adapter)
+        return adapter
+
+    result = await call_tool_with_ephemeral_adapter(
+        server_config=cfg,
+        adapter_factory=_adapter_factory,
+        prepare_config=lambda _cfg: None,
+        tool_name="docs.search",
+        arguments={"q": "hello"},
+    )
+
+    _ensure(result.is_error is False, f"Unexpected ephemeral adapter result: {result!r}")
+    _ensure(
+        created_adapters[0].calls == [("docs.search", {"q": "hello"})],
+        f"Legacy adapter did not receive the expected upstream call: {created_adapters[0].calls!r}",
     )
 
 

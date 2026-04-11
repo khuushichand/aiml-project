@@ -309,6 +309,41 @@ async def test_direct_characters_and_prompts_tools_honor_persona_scope():
         await prompts.execute_tool("prompts.get", {"prompt_id_or_name": "1"}, context=ctx)
 
 
+@pytest.mark.asyncio
+async def test_prompts_search_filters_out_of_scope_results():
+    from tldw_Server_API.app.core.MCP_unified.modules.base import ModuleConfig
+    from tldw_Server_API.app.core.MCP_unified.modules.implementations.prompts_module import PromptsModule
+
+    class _PromptsDbForScopeSearchTests:
+        def search_prompts(self, search_query, search_fields=None, page=1, results_per_page=10, include_deleted=False):
+            rows = [
+                {"id": 1, "name": "p1", "details": "desc 1", "version": 1},
+                {"id": 2, "name": "p2", "details": "desc 2", "version": 1},
+            ]
+            return rows, len(rows)
+
+        def close_connection(self):
+            return None
+
+    ctx = RequestContext(
+        request_id="persona-prompts-search",
+        user_id="1",
+        metadata={
+            "persona_scope": {
+                "scope_snapshot_id": "snap-1",
+                "materialized_scope": {"explicit_ids": {"prompt_id": ["2"]}},
+            }
+        },
+    )
+
+    prompts = PromptsModule(ModuleConfig(name="prompts"))
+    prompts._open_db = lambda _ctx: _PromptsDbForScopeSearchTests()  # type: ignore[attr-defined]
+
+    result = await prompts.execute_tool("prompts.search", {"query": "p"}, context=ctx)
+
+    assert [row["id"] for row in result["results"]] == [2]  # nosec B101
+
+
 class _ScopeBypassNotesModule(BaseModule):
     last_args: dict[str, Any] | None = None
 

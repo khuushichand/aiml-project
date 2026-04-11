@@ -110,10 +110,9 @@ async def call_tool_with_ephemeral_adapter(
     ephemeral_adapter = adapter_factory(ephemeral_config)
     try:
         await ephemeral_adapter.connect()
-        return await ephemeral_adapter.call_tool(
-            tool_name,
-            arguments,
-            runtime_auth=None,
-        )
+        call_kwargs: dict[str, Any] = {}
+        if adapter_supports_runtime_auth(ephemeral_adapter):
+            call_kwargs["runtime_auth"] = None
+        return await ephemeral_adapter.call_tool(tool_name, arguments, **call_kwargs)
     finally:
         await ephemeral_adapter.close()

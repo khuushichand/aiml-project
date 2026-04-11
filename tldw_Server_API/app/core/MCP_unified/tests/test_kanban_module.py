@@ -1255,3 +1255,12 @@ async def test_kanban_workflow_policy_schema_allows_boolean_like_inputs():
             variant_types == {"boolean", "integer", "string"},
             f"Unexpected schema variants for {field_name}: {variants!r}",
         )
+        string_variant = next(variant for variant in variants if variant["type"] == "string")
+        _ensure(
+            {"0", "1", "false", "n", "no", "off", "on", "true", "y", "yes"}.issubset(set(string_variant["enum"])),
+            f"Unexpected boolean-like token allowlist for {field_name}: {string_variant!r}",
+        )
+        _ensure(
+            {"TRUE", "False", "YES", "NO", "ON", "OFF"}.issubset(set(string_variant["enum"])),
+            f"Schema should include case variants accepted by runtime parsing for {field_name}: {string_variant!r}",
+        )

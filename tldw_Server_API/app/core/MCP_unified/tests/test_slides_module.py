@@ -273,7 +273,7 @@ async def test_slides_reorder_requires_exact_permutation():
         context=ctx,
     )
 
-    with pytest.raises(ValueError, match="slide_order must be a permutation of 0..1"):
+    with pytest.raises(ValueError, match=r"slide_order must be a permutation of 0\.\.1"):
         await mod.execute_tool(
             "slides.presentations.reorder",
             {"presentation_id": created["presentation_id"], "slide_order": [0, 0], "expected_version": 1},
@@ -294,7 +294,7 @@ async def test_slides_reorder_rejects_boolean_indices():
         context=ctx,
     )
 
-    with pytest.raises(ValueError, match="slide_order must be a permutation of 0..1"):
+    with pytest.raises(ValueError, match=r"slide_order must be a permutation of 0\.\.1"):
         await mod.execute_tool(
             "slides.presentations.reorder",
             {"presentation_id": created["presentation_id"], "slide_order": [False, True], "expected_version": 1},

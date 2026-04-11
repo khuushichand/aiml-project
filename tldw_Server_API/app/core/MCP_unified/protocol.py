@@ -1344,13 +1344,13 @@ class MCPProtocol:
                     span.set_attribute("mcp.status", "failure")
                     span.set_attribute("mcp.error_type", sanitized.__class__.__name__)
                     span.set_attribute("mcp.error_message", str(sanitized)[:200])
-                    raise sanitized from None
+                    raise
                 except Exception as _span_e:
                     sanitized = self._sanitize_exception_for_telemetry(_span_e)
                     span.set_attribute("mcp.status", "failure")
                     span.set_attribute("mcp.error_type", sanitized.__class__.__name__)
                     span.set_attribute("mcp.error_message", str(sanitized)[:200])
-                    raise sanitized from None
+                    raise
                 finally:
                     span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - start_exec) * 1000.0))
 
@@ -1496,9 +1496,13 @@ class MCPProtocol:
             setattr(sanitized, "_mcp_masked_secret", True)
         if hasattr(sanitized, "__dict__") and hasattr(exc, "__dict__"):
             with contextlib.suppress(Exception):
-                sanitized.__dict__.update(exc.__dict__)
+                for attr in ("errno", "code", "name", "lineno"):
+                    if hasattr(exc, attr):
+                        setattr(sanitized, attr, getattr(exc, attr))
         with contextlib.suppress(Exception):
             sanitized.args = (masked,)
+        with contextlib.suppress(Exception):
+            setattr(sanitized, "_mcp_masked_secret", True)
         return sanitized
 
     def _error_response(

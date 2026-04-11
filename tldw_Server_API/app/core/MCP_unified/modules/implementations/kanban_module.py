@@ -45,6 +45,27 @@ def _parse_bool_like(value: Any, field: str) -> bool:
     raise ValueError(f"{field} must be a boolean-like value")
 
 
+def _bool_like_case_variants(token: str) -> set[str]:
+    variants = {""}
+    for char in token:
+        if char.isalpha():
+            variants = {prefix + variant for prefix in variants for variant in (char.lower(), char.upper())}
+        else:
+            variants = {prefix + char for prefix in variants}
+    return variants
+
+
+_BOOL_LIKE_STRING_TOKENS = tuple(
+    sorted(
+        {
+            variant
+            for token in ("1", "true", "yes", "y", "on", "0", "false", "no", "n", "off")
+            for variant in _bool_like_case_variants(token)
+        }
+    )
+)
+
+
 class KanbanModule(BaseModule):
     """Kanban MCP module exposing boards, lists, and cards."""
 
@@ -54,7 +75,7 @@ class KanbanModule(BaseModule):
             "oneOf": [
                 {"type": "boolean"},
                 {"type": "integer", "enum": [0, 1]},
-                {"type": "string"},
+                {"type": "string", "enum": list(_BOOL_LIKE_STRING_TOKENS)},
             ],
         }
         if description:

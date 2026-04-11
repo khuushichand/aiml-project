@@ -461,6 +461,12 @@ class FlashcardsModule(BaseModule):
         if str(card.get("workspace_id") or "").strip() != workspace_id:
             raise PermissionError("Flashcard access denied for workspace")
 
+    def _assert_deck_workspace(self, deck: dict[str, Any] | None, workspace_id: str | None) -> None:
+        if workspace_id is None or deck is None:
+            return
+        if str(deck.get("workspace_id") or "").strip() != workspace_id:
+            raise PermissionError("Flashcard access denied for workspace")
+
     # Decks
 
     async def _list_decks(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -474,7 +480,14 @@ class FlashcardsModule(BaseModule):
     ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
-            decks = db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
+            workspace_id = self._workspace_id_from_context(context)
+            decks = db.list_decks(
+                limit=limit,
+                offset=offset,
+                include_deleted=include_deleted,
+                workspace_id=workspace_id,
+                include_workspace_items=True,
+            )
             return {
                 "decks": decks,
                 "total": len(decks),
@@ -494,7 +507,9 @@ class FlashcardsModule(BaseModule):
     def _get_deck_sync(self, context: Any, deck_id: int) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             deck = db.get_deck(deck_id)
+            self._assert_deck_workspace(deck, workspace_id)
             if not deck:
                 raise ValueError(f"Deck not found: {deck_id}")
             return {"deck": deck}
@@ -510,9 +525,11 @@ class FlashcardsModule(BaseModule):
     def _create_deck_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             deck_id = db.add_deck(
                 name=args.get("name"),
                 description=args.get("description"),
+                workspace_id=workspace_id,
             )
             deck = db.get_deck(deck_id)
             return {"deck_id": deck_id, "success": True, "deck": deck}
@@ -592,12 +609,18 @@ class FlashcardsModule(BaseModule):
     def _create_card_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             model_type = args.get("model_type", "basic")
             is_cloze = model_type == "cloze"
+            deck_id = args.get("deck_id")
+            deck = db.get_deck(deck_id)
+            if deck is None:
+                raise ValueError(f"Deck not found: {deck_id}")
+            self._assert_deck_workspace(deck, workspace_id)
             card_data = {
                 "front": args.get("front"),
                 "back": args.get("back"),
-                "deck_id": args.get("deck_id"),
+                "deck_id": deck_id,
                 "notes": args.get("notes"),
                 "extra": args.get("extra"),
                 "is_cloze": is_cloze,
@@ -623,15 +646,21 @@ class FlashcardsModule(BaseModule):
     def _create_cards_bulk_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
+            workspace_id = self._workspace_id_from_context(context)
             cards_input = args.get("cards", [])
             cards_data = []
             for card_args in cards_input:
                 model_type = card_args.get("model_type", "basic")
                 is_cloze = model_type == "cloze"
+                deck_id = card_args.get("deck_id")
+                deck = db.get_deck(deck_id)
+                if deck is None:
+                    raise ValueError(f"Deck not found: {deck_id}")
+                self._assert_deck_workspace(deck, workspace_id)
                 card_data = {
                     "front": card_args.get("front"),
                     "back": card_args.get("back"),
-                    "deck_id": card_args.get("deck_id"),
+                    "deck_id": deck_id,
                     "notes": card_args.get("notes"),
                     "extra": card_args.get("extra"),
                     "is_cloze": is_cloze,
@@ -673,8 +702,9 @@ class FlashcardsModule(BaseModule):
 
             if "deck_id" in updates and workspace_id is not None:
                 destination_deck = db.get_deck(updates["deck_id"])
-                if destination_deck is None or str(destination_deck.get("workspace_id") or "").strip() != workspace_id:
-                    raise PermissionError("Flashcard access denied for workspace")
+                if destination_deck is None:
+                    raise ValueError(f"Deck not found: {updates['deck_id']}")
+                self._assert_deck_workspace(destination_deck, workspace_id)
 
             # Handle model_type changes
             if "model_type" in updates:

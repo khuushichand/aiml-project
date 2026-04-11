@@ -388,7 +388,7 @@ class ModuleRegistry:
         if tasks:
             results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
-            for module_id, result in zip(tasks.keys(), results):
+            for module_id, result in zip(tasks.keys(), results, strict=True):
                 async with self._lock:
                     registration = self._modules.get(module_id)
                 if registration is None:
@@ -451,7 +451,7 @@ class ModuleRegistry:
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for (module_id, _task), result in zip(shutdown_work, results):
+            for (module_id, _task), result in zip(shutdown_work, results, strict=True):
                 if isinstance(result, Exception):
                     logger.error(f"Error shutting down module {module_id}: {result}")
 

@@ -297,6 +297,22 @@ async def test_quizzes_update_rejects_invalid_metadata(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_quizzes_create_rejects_boolean_time_limit_seconds(tmp_path: Path):
+    mod = QuizzesModule(ModuleConfig(name="quizzes"))
+    fake_db = FakeQuizzesDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
+
+    ctx = SimpleNamespace(db_paths={"media": str(tmp_path / "media.db"), "chacha": str(tmp_path / "chacha.db")}, client_id="test")
+
+    with pytest.raises(ValueError, match="time_limit_seconds must be a non-negative integer"):
+        await mod.execute_tool(
+            "quizzes.create",
+            {"name": "Quiz 1", "time_limit_seconds": True},
+            context=ctx,
+        )
+
+
+@pytest.mark.asyncio
 async def test_quizzes_update_partial_payload_uses_existing_name(tmp_path: Path):
     mod = QuizzesModule(ModuleConfig(name="quizzes"))
     fake_db = FakeQuizzesDB()
@@ -441,3 +457,41 @@ async def test_quizzes_generate_fails_when_no_generated_questions_persist(tmp_pa
         )
 
     _ensure(fake_db.quizzes == {}, f"Generated quiz cleanup should remove empty quiz records: {fake_db.quizzes!r}")
+
+
+@pytest.mark.asyncio
+async def test_quizzes_generate_cleans_up_quiz_after_unexpected_question_persistence_error(tmp_path: Path):
+    mod = QuizzesModule(ModuleConfig(name="quizzes"))
+
+    class UnexpectedQuestionPersistenceError(Exception):
+        pass
+
+    class UnexpectedFailureDB(FakeQuizzesDB):
+        def create_question(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+            raise UnexpectedQuestionPersistenceError("unexpected persistence failure")
+
+    fake_db = UnexpectedFailureDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
+
+    ctx = SimpleNamespace(db_paths={"media": str(tmp_path / "media.db"), "chacha": str(tmp_path / "chacha.db")}, client_id="test")
+
+    mod._get_media_content = lambda *_args, **_kwargs: "Content"  # type: ignore[attr-defined]
+
+    async def _fake_llm(_prompt: str, *, provider: str, model: str | None):
+        return json.dumps([
+            {"question_type": "multiple_choice", "question_text": "Q?", "options": ["A", "B"], "correct_answer": 0}
+        ])
+
+    mod._call_llm = _fake_llm  # type: ignore[attr-defined]
+
+    with pytest.raises(UnexpectedQuestionPersistenceError, match="unexpected persistence failure"):
+        await mod.execute_tool(
+            "quizzes.generate",
+            {"media_id": 1, "num_questions": 1},
+            context=ctx,
+        )
+
+    _ensure(
+        fake_db.quizzes == {},
+        f"Unexpected question persistence failures should not leave orphan quizzes behind: {fake_db.quizzes!r}",
+    )

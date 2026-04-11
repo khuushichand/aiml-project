@@ -438,14 +438,15 @@ class ExternalServerManager:
         started_at = time.perf_counter()
         try:
             call_kwargs: dict[str, Any] = {"context": context}
-            if adapter_supports_runtime_auth(adapter):
+            supports_runtime_auth = adapter_supports_runtime_auth(adapter)
+            if supports_runtime_auth:
                 call_kwargs["runtime_auth"] = runtime_auth
             result = await adapter.call_tool(
                 upstream_tool_name,
                 call_args,
                 **call_kwargs,
             )
-            if runtime_auth is not None:
+            if runtime_auth is not None and supports_runtime_auth:
                 metadata = dict(result.metadata or {})
                 metadata.update(self._public_runtime_auth_metadata(runtime_auth))
                 metadata["credential_injection"] = self._summarize_runtime_auth(runtime_auth)

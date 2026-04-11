@@ -104,7 +104,8 @@ async def test_prometheus_exports_validation_counters(client):
     )
     assert r1.status_code == 200  # nosec B101
     body1 = r1.json()
-    assert isinstance(body1, dict) and body1.get("error") is not None  # nosec B101
+    assert isinstance(body1, dict)  # nosec B101
+    assert body1.get("error") is not None  # nosec B101
 
     # Scrape Prometheus metrics with auth
     r2 = client.get(
@@ -187,7 +188,8 @@ async def test_prometheus_validator_missing_counter(client):
     )
     assert r1.status_code == 200  # nosec B101
     body1 = r1.json()
-    assert isinstance(body1, dict) and body1.get("error") is not None  # nosec B101
+    assert isinstance(body1, dict)  # nosec B101
+    assert body1.get("error") is not None  # nosec B101
 
     # Scrape metrics and assert validator-missing counter appears
     r2 = client.get(

@@ -20,7 +20,7 @@ def test_mcp_ws_top_level_exception_closes_1011(monkeypatch, mcp_ws_client):
     srv.config.ws_auth_required = False
     try:
         srv.config.debug_mode = True
-    except Exception:
+    except AttributeError:
         _ = None
     srv.config.allowed_client_ips = []
 
@@ -32,7 +32,7 @@ def test_mcp_ws_top_level_exception_closes_1011(monkeypatch, mcp_ws_client):
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_text()
             assert getattr(exc.value, "code", None) == 1011  # nosec B101
-    except Exception:
+    except (OSError, RuntimeError):
         pytest.skip("MCP WebSocket endpoint not available in this build")
 
     # Restore original to avoid side effects (pytest monkeypatch auto-reverts, but explicit is fine)

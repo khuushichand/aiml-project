@@ -31,7 +31,7 @@ SAFE_DEFAULT_ENV_VARS = (
     "MCP_API_KEY_SALT",
 )
 
-ACCESS_TOKEN_TYPE = "".join(("a", "ccess"))
+ACCESS_TOKEN_TYPE = "access"  # nosec B105 - JWT token type literal, not a credential
 
 
 def clear_mcp_singleton_state() -> None:

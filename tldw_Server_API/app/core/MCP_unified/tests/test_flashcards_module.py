@@ -30,8 +30,12 @@ class FakeFlashcardsDB:
         }
         return deck_id
 
-    def list_decks(self, limit=100, offset=0, include_deleted=False):
+    def list_decks(self, limit=100, offset=0, include_deleted=False, workspace_id=None, include_workspace_items=False):
         decks = list(self.decks.values())
+        if workspace_id is not None:
+            decks = [deck for deck in decks if deck.get("workspace_id") == workspace_id]
+        elif not include_workspace_items:
+            decks = [deck for deck in decks if deck.get("workspace_id") is None]
         return decks[offset: offset + limit]
 
     def get_deck(self, deck_id: int):
@@ -485,3 +489,99 @@ async def test_flashcards_direct_access_denied_across_workspace(monkeypatch, tmp
 
     with pytest.raises(PermissionError, match="Flashcard access denied for workspace"):
         await mod.execute_tool(tool_name, arguments, context=ctx)
+
+
+@pytest.mark.asyncio
+async def test_flashcards_decks_list_and_get_honor_workspace_scope(monkeypatch, tmp_path):
+    mod = FlashcardsModule(ModuleConfig(name="flashcards"))
+    fake_db = FakeFlashcardsDB()
+    own_deck_id = fake_db.add_deck("Own Deck", workspace_id="ws-1")
+    foreign_deck_id = fake_db.add_deck("Foreign Deck", workspace_id="ws-2")
+    monkeypatch.setattr(mod, "_open_db", lambda ctx: fake_db)
+
+    ctx = SimpleNamespace(
+        db_paths={"chacha": str(tmp_path / "chacha.db")},
+        metadata={"workspace_id": "ws-1"},
+        client_id="cli",
+    )
+
+    listed = await mod.execute_tool("flashcards.decks.list", {}, context=ctx)
+
+    assert [deck["id"] for deck in listed["decks"]] == [own_deck_id]  # nosec B101
+    assert listed["total"] == 1  # nosec B101
+
+    with pytest.raises(PermissionError, match="Flashcard access denied for workspace"):
+        await mod.execute_tool("flashcards.decks.get", {"deck_id": foreign_deck_id}, context=ctx)
+
+
+@pytest.mark.asyncio
+async def test_flashcards_create_deck_uses_workspace_context(monkeypatch, tmp_path):
+    mod = FlashcardsModule(ModuleConfig(name="flashcards"))
+    fake_db = FakeFlashcardsDB()
+    monkeypatch.setattr(mod, "_open_db", lambda ctx: fake_db)
+
+    ctx = SimpleNamespace(
+        db_paths={"chacha": str(tmp_path / "chacha.db")},
+        metadata={"workspace_id": "ws-1"},
+        client_id="cli",
+    )
+
+    created = await mod.execute_tool(
+        "flashcards.decks.create",
+        {"name": "Scoped Deck"},
+        context=ctx,
+    )
+
+    assert created["deck"]["workspace_id"] == "ws-1"  # nosec B101
+
+
+@pytest.mark.asyncio
+async def test_flashcards_create_rejects_foreign_workspace_deck(monkeypatch, tmp_path):
+    mod = FlashcardsModule(ModuleConfig(name="flashcards"))
+    fake_db = FakeFlashcardsDB()
+    foreign_deck_id = fake_db.add_deck("Foreign Deck", workspace_id="ws-2")
+    monkeypatch.setattr(mod, "_open_db", lambda ctx: fake_db)
+
+    ctx = SimpleNamespace(
+        db_paths={"chacha": str(tmp_path / "chacha.db")},
+        metadata={"workspace_id": "ws-1"},
+        client_id="cli",
+    )
+
+    with pytest.raises(PermissionError, match="Flashcard access denied for workspace"):
+        await mod.execute_tool(
+            "flashcards.create",
+            {"deck_id": foreign_deck_id, "front": "Q", "back": "A", "model_type": "basic"},
+            context=ctx,
+        )
+
+    assert fake_db.cards == {}  # nosec B101
+
+
+@pytest.mark.asyncio
+async def test_flashcards_bulk_create_rejects_any_foreign_workspace_deck(monkeypatch, tmp_path):
+    mod = FlashcardsModule(ModuleConfig(name="flashcards"))
+    fake_db = FakeFlashcardsDB()
+    own_deck_id = fake_db.add_deck("Own Deck", workspace_id="ws-1")
+    foreign_deck_id = fake_db.add_deck("Foreign Deck", workspace_id="ws-2")
+    monkeypatch.setattr(mod, "_open_db", lambda ctx: fake_db)
+
+    ctx = SimpleNamespace(
+        db_paths={"chacha": str(tmp_path / "chacha.db")},
+        metadata={"workspace_id": "ws-1"},
+        client_id="cli",
+    )
+
+    with pytest.raises(PermissionError, match="Flashcard access denied for workspace"):
+        await mod.execute_tool(
+            "flashcards.create_bulk",
+            {
+                "cards": [
+                    {"deck_id": own_deck_id, "front": "Q1", "back": "A1"},
+                    {"deck_id": foreign_deck_id, "front": "Q2", "back": "A2"},
+                ]
+            },
+            context=ctx,
+        )
+
+    assert fake_db.cards == {}  # nosec B101

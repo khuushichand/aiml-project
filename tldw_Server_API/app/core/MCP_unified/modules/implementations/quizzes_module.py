@@ -410,7 +410,11 @@ class QuizzesModule(BaseModule):
             raise ValueError("workspace_tag must be <= 64 chars")
 
         time_limit_seconds = quiz.get("time_limit_seconds")
-        if time_limit_seconds is not None and (not isinstance(time_limit_seconds, int) or time_limit_seconds < 0):
+        if time_limit_seconds is not None and (
+            isinstance(time_limit_seconds, bool)
+            or not isinstance(time_limit_seconds, int)
+            or time_limit_seconds < 0
+        ):
             raise ValueError("time_limit_seconds must be a non-negative integer")
 
         passing_score = quiz.get("passing_score")
@@ -470,6 +474,14 @@ class QuizzesModule(BaseModule):
         order_index = question.get("order_index")
         if order_index is not None and (not isinstance(order_index, int) or order_index < 0):
             raise ValueError("order_index must be a non-negative integer")
+
+    def _cleanup_generated_quiz(self, db: CharactersRAGDB, quiz_id: int, *, reason: str) -> None:
+        try:
+            deleted = db.delete_quiz(quiz_id, hard_delete=True)
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
+            raise RuntimeError(f"Failed to clean up generated quiz after {reason}") from exc
+        if not deleted:
+            raise RuntimeError(f"Failed to clean up generated quiz after {reason}")
 
     async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         args = self.sanitize_input(arguments)
@@ -1093,30 +1105,40 @@ Return ONLY the JSON array, no other text."""
             )
 
             created_questions = []
-            for i, q in enumerate(valid_questions):
+            try:
+                for i, q in enumerate(valid_questions):
+                    try:
+                        qid = db.create_question(
+                            quiz_id=quiz_id,
+                            question_type=q.get("question_type", "multiple_choice"),
+                            question_text=q.get("question_text"),
+                            correct_answer=q.get("correct_answer"),
+                            options=q.get("options"),
+                            explanation=q.get("explanation"),
+                            points=q.get("points", 1),
+                            order_index=i,
+                            client_id=client_id,
+                        )
+                        created_questions.append(qid)
+                    except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"Failed to create question {i}: {e}")
+            except Exception:
                 try:
-                    qid = db.create_question(
-                        quiz_id=quiz_id,
-                        question_type=q.get("question_type", "multiple_choice"),
-                        question_text=q.get("question_text"),
-                        correct_answer=q.get("correct_answer"),
-                        options=q.get("options"),
-                        explanation=q.get("explanation"),
-                        points=q.get("points", 1),
-                        order_index=i,
-                        client_id=client_id,
+                    self._cleanup_generated_quiz(
+                        db,
+                        quiz_id,
+                        reason="unexpected question persistence failure",
                     )
-                    created_questions.append(qid)
-                except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"Failed to create question {i}: {e}")
+                except RuntimeError as cleanup_exc:
+                    logger.warning(f"Failed to clean up generated quiz {quiz_id} after unexpected error: {cleanup_exc}")
+                raise
 
             if not created_questions:
-                try:
-                    deleted = db.delete_quiz(quiz_id, hard_delete=True)
-                except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
-                    raise RuntimeError("Failed to clean up empty generated quiz after question persistence failure") from exc
-                if not deleted:
-                    raise RuntimeError("Failed to clean up empty generated quiz after question persistence failure")
+                self._cleanup_generated_quiz(
+                    db,
+                    quiz_id,
+                    reason="question persistence failure",
+                )
                 raise ValueError("Failed to generate quiz: no valid questions were created")
 
             quiz = db.get_quiz(quiz_id)

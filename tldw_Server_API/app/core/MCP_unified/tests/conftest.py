@@ -28,7 +28,7 @@ def mcp_ws_client(monkeypatch):
         server.config.blocked_client_ips = []
         try:
             server.config.debug_mode = True
-        except Exception:
+        except AttributeError:
             _ = None
         yield client
 

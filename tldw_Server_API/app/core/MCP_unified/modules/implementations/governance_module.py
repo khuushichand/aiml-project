@@ -255,11 +255,7 @@ class GovernanceModule(BaseModule):
 
     @staticmethod
     def _overlay_scope(metadata: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
-        merged = dict(metadata)
-        for key, value in scope.items():
-            if value is not None:
-                merged[key] = value
-        return merged
+        return {**metadata, **{key: value for key, value in scope.items() if value is not None}}
 
     @classmethod
     def _to_jsonable(cls, value: Any) -> Any:

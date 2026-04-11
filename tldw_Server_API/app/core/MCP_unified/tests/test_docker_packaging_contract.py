@@ -18,7 +18,7 @@ def test_mcp_dockerfile_copies_real_entrypoint_and_boots_main_app() -> None:
         "Dockerfile does not copy the repo-local MCP entrypoint into the image",
     )
     _ensure(
-        'CMD ["uvicorn", "tldw_Server_API.app.main:app", "--host", "0.0.0.0", "--port", "8000"]' in text,
+        'CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]' in text,
         "Dockerfile does not boot the real FastAPI app target",
     )
 
