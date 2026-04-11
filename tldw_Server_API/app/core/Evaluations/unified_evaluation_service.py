@@ -457,15 +457,26 @@ class UnifiedEvaluationService:
             if not evaluation:
                 raise ValueError(f"Evaluation {eval_id} not found")
 
-            # Create run record
+            run_id = f"run_{uuid.uuid4().hex[:12]}"
+
+            # Unified audit (mandatory)
+            await log_run_started_async(
+                user_id=created_by,
+                run_id=run_id,
+                eval_id=eval_id,
+                target_model=target_model,
+            )
+
+            # Create run record after mandatory audit persistence succeeds
             run_id = self.db.create_run(
                 eval_id=eval_id,
                 target_model=target_model,
                 config=config or {},
-                webhook_url=webhook_url
+                webhook_url=webhook_url,
+                run_id=run_id,
             )
 
-            # Send webhook for run started
+            # Send webhook for run started after the durable run row exists
             if webhook_url and self.enable_webhooks and self.webhook_manager:
                 effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 await self.webhook_manager.send_webhook(
@@ -490,7 +501,7 @@ class UnifiedEvaluationService:
                 "created_by": created_by,
             }
 
-            # Start async evaluation
+            # Start async evaluation only after the mandatory audit and row persistence succeed
             asyncio.create_task(
                 self._run_evaluation_async(
                     run_id=run_id,
@@ -500,9 +511,6 @@ class UnifiedEvaluationService:
                     webhook_user_id=webhook_user_id,
                 )
             )
-
-            # Unified audit (mandatory)
-            await log_run_started_async(user_id=created_by, run_id=run_id, eval_id=eval_id, target_model=target_model)
 
             # Return run info
             run = self.db.get_run(run_id)
