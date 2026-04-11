@@ -181,7 +181,9 @@ async def test_policy_resolver_merges_default_group_and_persona_targets() -> Non
     assert policy["denied_tools"] == ["external.tools.refresh"]
     assert policy["capabilities"] == ["filesystem.read", "network.external"]
     assert policy["approval_mode"] == "ask_every_time"
-    assert policy["authored_policy_document"] == policy["policy_document"]
+    # resolved_policy_document gains setdefault keys (tool_tier_overrides, conditions)
+    for key in policy["authored_policy_document"]:
+        assert policy["authored_policy_document"][key] == policy["policy_document"][key]
     assert policy["resolved_policy_document"] == policy["policy_document"]
     assert policy["policy_document"]["path_scope_mode"] == "cwd_descendants"
     assert policy["policy_document"]["path_scope_enforcement"] == "approval_required_when_unenforceable"
@@ -501,7 +503,11 @@ async def test_policy_resolver_keeps_unresolved_capabilities_visible_without_gra
 
     assert policy["allowed_tools"] == []
     assert policy["authored_policy_document"] == {"capabilities": ["tool.invoke.unmapped"]}
-    assert policy["resolved_policy_document"] == {"capabilities": ["tool.invoke.unmapped"]}
+    assert policy["resolved_policy_document"] == {
+        "capabilities": ["tool.invoke.unmapped"],
+        "tool_tier_overrides": {},
+        "conditions": {},
+    }
     assert policy["resolved_capabilities"] == []
     assert policy["unresolved_capabilities"] == ["tool.invoke.unmapped"]
     assert policy["capability_warnings"] == [

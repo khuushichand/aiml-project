@@ -100,6 +100,23 @@ class GovernanceFilter:
         if not doc or not isinstance(doc, dict):
             return None
 
+        # 0. Evaluate policy conditions -- if they fail the policy doesn't apply
+        from tldw_Server_API.app.core.Agent_Client_Protocol.policy_conditions import (
+            PolicyConditions,
+            evaluate_conditions,
+        )
+
+        conditions = PolicyConditions.from_dict(doc.get("conditions"))
+        if not conditions.is_empty():
+            resource_labels = self._session_metadata.get("labels", {})
+            ancestry_chain = self._session_metadata.get("ancestry_chain", [])
+            if not evaluate_conditions(
+                conditions,
+                resource_labels=resource_labels,
+                ancestry_chain=ancestry_chain,
+            ):
+                return None  # Conditions failed, policy doesn't apply
+
         # 1. Check denied_tools (highest priority)
         for pattern in doc.get("denied_tools", []):
             if fnmatch.fnmatch(tool_name, pattern):
