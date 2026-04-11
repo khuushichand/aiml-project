@@ -805,13 +805,22 @@ async function* bgStreamDirect<
         })
       : null
   const hostedMode = transport?.mode === "hosted"
+  const advancedTransportOrigin =
+    transport?.mode === "advanced" ? parseHttpOrigin(transport?.url) : null
   if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
     throw new Error(ABSOLUTE_URL_BLOCK_ERROR)
   }
-  if (!cfg?.serverUrl && !isAbsolute && transport?.mode === "advanced") {
+  if (
+    !cfg?.serverUrl &&
+    !isAbsolute &&
+    transport?.mode === "advanced" &&
+    !advancedTransportOrigin
+  ) {
     throw new Error("tldw server not configured")
   }
-  const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
+  const baseUrl =
+    advancedTransportOrigin ||
+    (cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : "")
   const url = isAbsolute
     ? absolutePath
     : transport?.url ||
@@ -911,10 +920,17 @@ async function* bgStreamDirect<
       if (refreshResp.ok) {
         const tokens = await refreshResp.json().catch(() => null)
         if (tokens?.access_token) {
+          const latestCfg =
+            (await storage
+              .get<Record<string, unknown>>("tldwConfig")
+              .catch(() => null)) || null
           const updated = {
-            ...(cfg || {}),
+            ...(latestCfg || cfg || {}),
             accessToken: tokens.access_token,
-            refreshToken: tokens?.refresh_token || cfg?.refreshToken
+            refreshToken:
+              tokens?.refresh_token ||
+              latestCfg?.refreshToken ||
+              cfg?.refreshToken
           }
           await storage.set("tldwConfig", updated)
           resolvedHeaders["Authorization"] = `Bearer ${tokens.access_token}`

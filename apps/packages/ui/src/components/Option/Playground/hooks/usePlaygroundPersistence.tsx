@@ -75,23 +75,17 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
 
   React.useEffect(() => {
     historyRef.current = history
-  }, [history])
-
-  React.useEffect(() => {
     selectedCharacterRef.current = selectedCharacter
-  }, [selectedCharacter])
-
-  React.useEffect(() => {
     serverChatStateRef.current = serverChatState
-  }, [serverChatState])
-
-  React.useEffect(() => {
     serverChatSourceRef.current = serverChatSource
-  }, [serverChatSource])
-
-  React.useEffect(() => {
     serverPersistenceHintSeenRef.current = serverPersistenceHintSeen
-  }, [serverPersistenceHintSeen])
+  }, [
+    history,
+    selectedCharacter,
+    serverChatState,
+    serverChatSource,
+    serverPersistenceHintSeen
+  ])
 
   const {
     persistenceTooltip,
@@ -203,17 +197,16 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
     if (serverSaveInFlightRef.current) return
     serverSaveInFlightRef.current = true
     try {
+      const snapshot = [...historyRef.current]
       if (
         !isConnectionReady ||
         temporaryChat ||
         serverChatId ||
-        history.length === 0
+        snapshot.length === 0
       ) {
         return
       }
       await tldwClient.initialize()
-
-      const snapshot = [...historyRef.current]
       const firstUser = snapshot.find((m) => m.role === "user")
       const fallbackTitle = t(
         "playground:composer.persistence.serverDefaultTitle",

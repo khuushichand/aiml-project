@@ -117,4 +117,37 @@ describe("usePlaygroundPersistence", () => {
       expect(notificationApi.error).toHaveBeenCalledTimes(1)
     })
   })
+
+  it("uses current history when the first message arrives after mount", async () => {
+    const notificationApi = {
+      error: vi.fn(),
+      warning: vi.fn(),
+      info: vi.fn(),
+      success: vi.fn()
+    }
+    const stableDeps = buildDeps({
+      notificationApi,
+      history: []
+    })
+
+    const { rerender } = renderHook(
+      (deps: ReturnType<typeof buildDeps>) => usePlaygroundPersistence(deps),
+      {
+        initialProps: stableDeps
+      }
+    )
+
+    expect(mocks.initialize).not.toHaveBeenCalled()
+    expect(notificationApi.error).not.toHaveBeenCalled()
+
+    rerender({
+      ...stableDeps,
+      history: [{ role: "user", content: "First message" }]
+    })
+
+    await waitFor(() => {
+      expect(mocks.initialize).toHaveBeenCalledTimes(1)
+      expect(notificationApi.error).toHaveBeenCalledTimes(1)
+    })
+  })
 })
