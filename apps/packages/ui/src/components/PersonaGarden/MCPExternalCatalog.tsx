@@ -2,20 +2,14 @@ import React from "react"
 
 import { useMCPConnectionTest } from "@/hooks/useMCPConnectionTest"
 import { useMCPServerCatalog } from "@/hooks/useMCPServerCatalog"
+import type { MCPConnectionDraft } from "@/types/archetype"
 
 import { MCPServerCatalogCard } from "./MCPServerCatalogCard"
-
-type ConnectionDraft = {
-  name: string
-  baseUrl: string
-  authType: string
-  secret: string
-}
 
 type MCPExternalCatalogProps = {
   suggestedServers: string[]
   connectedServers: string[]
-  onConnect: (draft: ConnectionDraft) => void
+  onConnect: (draft: MCPConnectionDraft) => void
 }
 
 export const MCPExternalCatalog: React.FC<MCPExternalCatalogProps> = ({

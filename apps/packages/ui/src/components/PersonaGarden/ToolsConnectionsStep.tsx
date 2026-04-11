@@ -1,6 +1,6 @@
 import React from "react"
 
-import type { ArchetypeTemplate } from "@/types/archetype"
+import type { ArchetypeTemplate, MCPConnectionDraft } from "@/types/archetype"
 
 import { MCPAccessControlTier } from "./MCPAccessControlTier"
 import { MCPExternalCatalog } from "./MCPExternalCatalog"
@@ -8,17 +8,10 @@ import { MCPModuleToggleGrid } from "./MCPModuleToggleGrid"
 
 type ConfirmationMode = "always" | "destructive_only" | "never"
 
-type ConnectionDraft = {
-  name: string
-  baseUrl: string
-  authType: string
-  secret: string
-}
-
 type ToolsConnectionsStepPayload = {
   enabledModules: string[]
   confirmationMode: string
-  connections: ConnectionDraft[]
+  connections: MCPConnectionDraft[]
 }
 
 type ToolsConnectionsStepProps = {
@@ -40,7 +33,7 @@ export const ToolsConnectionsStep: React.FC<ToolsConnectionsStepProps> = ({
   )
 
   // Section B -- external connections
-  const [connections, setConnections] = React.useState<ConnectionDraft[]>([])
+  const [connections, setConnections] = React.useState<MCPConnectionDraft[]>([])
   const connectedServerKeys = React.useMemo(
     () => connections.map((c) => c.name),
     [connections]
@@ -65,7 +58,7 @@ export const ToolsConnectionsStep: React.FC<ToolsConnectionsStepProps> = ({
     []
   )
 
-  const handleAddConnection = React.useCallback((draft: ConnectionDraft) => {
+  const handleAddConnection = React.useCallback((draft: MCPConnectionDraft) => {
     setConnections((prev) => [...prev, draft])
   }, [])
 

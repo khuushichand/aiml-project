@@ -10,10 +10,8 @@ from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import (
     list_mcp_catalog,
     check_mcp_connection,
 )
-from tldw_Server_API.app.core.MCP_unified.catalog_loader import (
-    _CATALOG_CACHE,
-    load_mcp_catalog,
-)
+import tldw_Server_API.app.core.MCP_unified.catalog_loader as _catalog_mod
+from tldw_Server_API.app.core.MCP_unified.catalog_loader import load_mcp_catalog
 
 pytestmark = pytest.mark.unit
 
@@ -28,10 +26,10 @@ _CATALOG_YAML = (
 @pytest.fixture(autouse=True)
 def _load_real_catalog():
     """Load the real catalog YAML before each test and clear after."""
-    _CATALOG_CACHE.clear()
+    _catalog_mod._CATALOG_CACHE = []
     load_mcp_catalog(_CATALOG_YAML)
     yield
-    _CATALOG_CACHE.clear()
+    _catalog_mod._CATALOG_CACHE = []
 
 
 # -- list_mcp_catalog --------------------------------------------------------

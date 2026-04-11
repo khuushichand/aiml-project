@@ -1,17 +1,12 @@
 import React from "react"
 
-import type { MCPCatalogEntry, MCPConnectionTestResult } from "@/types/archetype"
+import type { MCPCatalogEntry, MCPConnectionDraft, MCPConnectionTestResult } from "@/types/archetype"
 
 export type MCPServerCatalogCardProps = {
   entry: MCPCatalogEntry
   isRecommended: boolean
   isConnected: boolean
-  onConnect: (draft: {
-    name: string
-    baseUrl: string
-    authType: string
-    secret: string
-  }) => void
+  onConnect: (draft: MCPConnectionDraft) => void
   onTestConnection: (url: string) => void
   testResult?: MCPConnectionTestResult | null
   testLoading?: boolean

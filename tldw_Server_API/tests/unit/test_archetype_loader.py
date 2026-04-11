@@ -10,8 +10,8 @@ from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
     ArchetypeSummary,
     ArchetypeTemplate,
 )
+import tldw_Server_API.app.core.Persona.archetype_loader as _loader_mod
 from tldw_Server_API.app.core.Persona.archetype_loader import (
-    _CACHE,
     get_archetype,
     list_archetypes,
     load_archetypes_from_directory,
@@ -50,9 +50,9 @@ _VALID_YAML_2 = textwrap.dedent("""\
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """Ensure the module-level cache is empty before and after each test."""
-    _CACHE.clear()
+    _loader_mod._CACHE = {}
     yield
-    _CACHE.clear()
+    _loader_mod._CACHE = {}
 
 
 # -- Tests -------------------------------------------------------------------
@@ -123,12 +123,12 @@ class TestLoadArchetypesFromDirectory:
     def test_cache_is_cleared_on_reload(self, tmp_path: Path):
         (tmp_path / "researcher.yaml").write_text(_VALID_YAML, encoding="utf-8")
         load_archetypes_from_directory(tmp_path)
-        assert len(_CACHE) == 1
+        assert len(_loader_mod._CACHE) == 1
 
         # Remove the file and reload -- cache should now be empty.
         (tmp_path / "researcher.yaml").unlink()
         load_archetypes_from_directory(tmp_path)
-        assert len(_CACHE) == 0
+        assert len(_loader_mod._CACHE) == 0
 
     def test_non_yaml_files_ignored(self, tmp_path: Path):
         (tmp_path / "notes.txt").write_text("not yaml", encoding="utf-8")

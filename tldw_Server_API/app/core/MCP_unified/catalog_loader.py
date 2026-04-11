@@ -27,8 +27,9 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
     and skipped so that one bad entry does not prevent the rest from
     loading.
 
-    The module-level ``_CATALOG_CACHE`` is cleared before populating so
-    that repeated calls always reflect the current file contents.
+    The cache is replaced atomically so that concurrent readers never see
+    a partially-populated state.  This function is intended to be called
+    once at startup; it is **not** designed for concurrent hot-reload.
 
     Parameters
     ----------
@@ -40,11 +41,12 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
     list[MCPCatalogEntry]
         The validated (and now cached) catalog entries.
     """
-    _CATALOG_CACHE.clear()
+    global _CATALOG_CACHE
 
     file_path = Path(path)
     if not file_path.is_file():
         logger.warning("MCP catalog file does not exist: {}", file_path)
+        _CATALOG_CACHE = []
         return _CATALOG_CACHE
 
     try:
@@ -54,12 +56,14 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
         logger.opt(exception=True).warning(
             "Failed to read/parse MCP catalog file: {}", file_path
         )
+        _CATALOG_CACHE = []
         return _CATALOG_CACHE
 
     if not isinstance(data, dict) or "catalog" not in data:
         logger.warning(
             "Skipping {}: missing top-level 'catalog' key", file_path.name
         )
+        _CATALOG_CACHE = []
         return _CATALOG_CACHE
 
     entries = data["catalog"]
@@ -67,18 +71,22 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
         logger.warning(
             "Skipping {}: 'catalog' value is not a list", file_path.name
         )
+        _CATALOG_CACHE = []
         return _CATALOG_CACHE
 
+    new_cache: list[MCPCatalogEntry] = []
     for idx, entry_data in enumerate(entries):
         try:
             entry = MCPCatalogEntry(**entry_data)
-            _CATALOG_CACHE.append(entry)
+            new_cache.append(entry)
             logger.debug("Loaded MCP catalog entry '{}'", entry.key)
         except Exception:
             logger.opt(exception=True).warning(
                 "Skipping malformed MCP catalog entry at index {}", idx
             )
 
+    # Atomic replacement — readers never see a half-populated cache.
+    _CATALOG_CACHE = new_cache
     logger.info(
         "Loaded {} MCP catalog entry/entries from {}", len(_CATALOG_CACHE), file_path
     )

@@ -1648,7 +1648,12 @@ async def check_mcp_connection(
     req: MCPConnectionTestRequest,
     _guard: None = Depends(enforce_http_security),
 ):
-    """Test connectivity to an external MCP server URL."""
+    """Test connectivity to an external MCP server URL.
+
+    Currently validates reachability only. The ``tools_discovered`` field
+    is reserved for a future enhancement that will parse the MCP server's
+    tool listing response.
+    """
     import httpx
     from urllib.parse import urlparse
 

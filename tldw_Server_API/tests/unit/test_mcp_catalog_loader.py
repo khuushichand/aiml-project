@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from tldw_Server_API.app.api.v1.schemas.archetype_schemas import MCPCatalogEntry
+import tldw_Server_API.app.core.MCP_unified.catalog_loader as _catalog_mod
 from tldw_Server_API.app.core.MCP_unified.catalog_loader import (
-    _CATALOG_CACHE,
     get_catalog_entry,
     list_catalog_entries,
     load_mcp_catalog,
@@ -63,9 +63,9 @@ _ONE_GOOD_ONE_BAD_YAML = textwrap.dedent("""\
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """Ensure the module-level cache is empty before and after each test."""
-    _CATALOG_CACHE.clear()
+    _catalog_mod._CATALOG_CACHE = []
     yield
-    _CATALOG_CACHE.clear()
+    _catalog_mod._CATALOG_CACHE = []
 
 
 @pytest.fixture()
@@ -91,11 +91,11 @@ class TestLoadMcpCatalog:
     def test_cache_is_populated(self, catalog_file: Path):
         load_mcp_catalog(catalog_file)
 
-        assert len(_CATALOG_CACHE) == 2
+        assert len(_catalog_mod._CATALOG_CACHE) == 2
 
     def test_cache_is_cleared_on_reload(self, catalog_file: Path):
         load_mcp_catalog(catalog_file)
-        assert len(_CATALOG_CACHE) == 2
+        assert len(_catalog_mod._CATALOG_CACHE) == 2
 
         # Overwrite with a single-entry file and reload.
         catalog_file.write_text(
@@ -111,7 +111,7 @@ class TestLoadMcpCatalog:
             encoding="utf-8",
         )
         load_mcp_catalog(catalog_file)
-        assert len(_CATALOG_CACHE) == 1
+        assert len(_catalog_mod._CATALOG_CACHE) == 1
 
 
 class TestListCatalogEntries:

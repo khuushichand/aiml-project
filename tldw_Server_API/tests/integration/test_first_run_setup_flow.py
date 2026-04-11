@@ -5,15 +5,15 @@ import pathlib
 
 import pytest
 
+import tldw_Server_API.app.core.Persona.archetype_loader as _loader_mod
+import tldw_Server_API.app.core.MCP_unified.catalog_loader as _catalog_mod
 from tldw_Server_API.app.core.Persona.archetype_loader import (
     load_archetypes_from_directory,
     get_archetype,
-    _CACHE,
 )
 from tldw_Server_API.app.core.MCP_unified.catalog_loader import (
     load_mcp_catalog,
     list_catalog_entries,
-    _CATALOG_CACHE,
 )
 from tldw_Server_API.app.api.v1.endpoints.archetype_endpoints import (
     list_persona_archetypes,
@@ -33,13 +33,13 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def _load_data():
-    _CACHE.clear()
-    _CATALOG_CACHE.clear()
+    _loader_mod._CACHE = {}
+    _catalog_mod._CATALOG_CACHE = []
     load_archetypes_from_directory(ARCHETYPES_DIR)
     load_mcp_catalog(CATALOG_PATH)
     yield
-    _CACHE.clear()
-    _CATALOG_CACHE.clear()
+    _loader_mod._CACHE = {}
+    _catalog_mod._CATALOG_CACHE = []
 
 
 @pytest.mark.asyncio

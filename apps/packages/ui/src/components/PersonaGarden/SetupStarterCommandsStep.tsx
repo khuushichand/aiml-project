@@ -96,6 +96,7 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
               ].join(" ")}
               disabled={saving}
               onClick={() => {
+                const wasChecked = checkedKeys.has(template.key)
                 setCheckedKeys((prev) => {
                   const next = new Set(prev)
                   if (next.has(template.key)) {
@@ -105,7 +106,9 @@ export const SetupStarterCommandsStep: React.FC<SetupStarterCommandsStepProps> =
                   }
                   return next
                 })
-                onCreateFromTemplate(template.key)
+                if (!wasChecked) {
+                  onCreateFromTemplate(template.key)
+                }
               }}
             >
               <div>

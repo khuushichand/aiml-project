@@ -70,3 +70,10 @@ export type MCPConnectionTestResult = {
   tools_discovered: string[]
   error: string | null
 }
+
+export type MCPConnectionDraft = {
+  name: string
+  baseUrl: string
+  authType: string
+  secret: string
+}

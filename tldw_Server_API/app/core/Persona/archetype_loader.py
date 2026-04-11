@@ -29,8 +29,9 @@ def load_archetypes_from_directory(
     file does not prevent the rest from loading.  The glob results are
     sorted to guarantee deterministic ordering across platforms.
 
-    The module-level ``_CACHE`` is cleared before populating so that
-    repeated calls always reflect the current directory contents.
+    The cache is replaced atomically so that concurrent readers never see
+    a partially-populated state.  This function is intended to be called
+    once at startup; it is **not** designed for concurrent hot-reload.
 
     Parameters
     ----------
@@ -42,13 +43,15 @@ def load_archetypes_from_directory(
     dict[str, ArchetypeTemplate]
         Mapping of archetype *key* to its validated template.
     """
-    _CACHE.clear()
+    global _CACHE
 
     dir_path = Path(directory)
     if not dir_path.is_dir():
         logger.warning("Archetype directory does not exist: {}", dir_path)
+        _CACHE = {}
         return _CACHE
 
+    new_cache: dict[str, ArchetypeTemplate] = {}
     yaml_files = sorted(dir_path.glob("*.yaml"))
     for yaml_file in yaml_files:
         try:
@@ -60,13 +63,15 @@ def load_archetypes_from_directory(
                 )
                 continue
             template = ArchetypeTemplate(**data["archetype"])
-            _CACHE[template.key] = template
+            new_cache[template.key] = template
             logger.debug("Loaded archetype '{}' from {}", template.key, yaml_file.name)
         except Exception:
             logger.opt(exception=True).warning(
                 "Skipping malformed archetype file: {}", yaml_file.name
             )
 
+    # Atomic replacement — readers never see a half-populated cache.
+    _CACHE = new_cache
     logger.info("Loaded {} archetype(s) from {}", len(_CACHE), dir_path)
     return _CACHE
 
