@@ -245,7 +245,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
 
   it("renders query-only summary with accessible live-region metadata", async () => {
     renderPage()
-    fireEvent.change(screen.getByPlaceholderText("Search titles & content..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search notes... (use quotes for exact match)"), {
       target: { value: "ML" }
     })
 
@@ -280,7 +280,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
 
   it("renders combined query + keyword summary and preserves clear action labeling", async () => {
     renderPage()
-    fireEvent.change(screen.getByPlaceholderText("Search titles & content..."), {
+    fireEvent.change(screen.getByPlaceholderText("Search notes... (use quotes for exact match)"), {
       target: { value: "ML" }
     })
     await waitFor(() => {

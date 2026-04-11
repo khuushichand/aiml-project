@@ -1363,7 +1363,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     const handler = (event: KeyboardEvent) => {
       const lowered = event.key.toLowerCase()
       const hasModifier = event.ctrlKey || event.metaKey
-      if (!hasModifier || lowered !== 's' || event.altKey) return
+      if (!hasModifier || lowered !== 's' || event.altKey || event.shiftKey) return
       if (!isEditorSaveShortcutContext(event.target)) return
       event.preventDefault()
       if (editorDisabled) return

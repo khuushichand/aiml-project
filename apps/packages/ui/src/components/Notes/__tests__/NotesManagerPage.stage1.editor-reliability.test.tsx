@@ -243,7 +243,7 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
       }
     )
 
-    const searchInput = screen.getByPlaceholderText("Search titles & content...")
+    const searchInput = screen.getByPlaceholderText("Search notes... (use quotes for exact match)")
     fireEvent.focus(searchInput)
     fireEvent.keyDown(searchInput, { key: "s", ctrlKey: true })
     fireEvent.keyDown(searchInput, { key: "s", metaKey: true })

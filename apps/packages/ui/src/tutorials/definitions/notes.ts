@@ -41,7 +41,7 @@ const notesBasics: TutorialDefinition = {
       titleFallback: "Sort and Filter",
       contentKey: "tutorials:notes.basics.filtersContent",
       contentFallback:
-        "Sort by date/title and use notebook/keyword filters to narrow your working set.",
+        "Sort by date/title and use saved filter or tag filters to narrow your working set.",
       placement: "bottom"
     },
     {
