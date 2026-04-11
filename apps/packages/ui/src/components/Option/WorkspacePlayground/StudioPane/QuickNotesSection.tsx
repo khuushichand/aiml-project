@@ -308,27 +308,38 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
   const titleInputRef = useRef<InputRef | null>(null)
   const contentInputRef = useRef<TextAreaRef | null>(null)
 
-  const clearSavedIndicator = useCallback(() => {
+  const clearSavedIndicatorTimer = useCallback(() => {
     if (savedIndicatorTimerRef.current) {
       clearTimeout(savedIndicatorTimerRef.current)
       savedIndicatorTimerRef.current = null
     }
-    setShowSavedIndicator(false)
   }, [])
 
-  const showSavedConfirmation = useCallback(() => {
-    clearSavedIndicator()
+  const hideSavedIndicator = useCallback(() => {
+    clearSavedIndicatorTimer()
+    setShowSavedIndicator(false)
+  }, [clearSavedIndicatorTimer])
+
+  const showSavedIndicatorTemporarily = useCallback(() => {
+    hideSavedIndicator()
     setShowSavedIndicator(true)
     savedIndicatorTimerRef.current = setTimeout(() => {
       setShowSavedIndicator(false)
       savedIndicatorTimerRef.current = null
     }, 2000)
-  }, [clearSavedIndicator])
+  }, [hideSavedIndicator])
 
   // Clean up saved indicator timer on unmount
   useEffect(() => {
-    return clearSavedIndicator
-  }, [clearSavedIndicator])
+    return () => {
+      clearSavedIndicatorTimer()
+    }
+  }, [clearSavedIndicatorTimer])
+
+  useEffect(() => {
+    if (!currentNote.isDirty) return
+    hideSavedIndicator()
+  }, [currentNote.isDirty, hideSavedIndicator])
 
   // Parse keywords from input
   const parseKeywords = (input: string): string[] =>
@@ -353,14 +364,14 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
 
   // Handle keywords input change
   const handleKeywordsChange = (value: string) => {
-    clearSavedIndicator()
+    hideSavedIndicator()
     setKeywordsInput(value)
     updateNoteKeywords(parseKeywords(value))
     updateKeywordSuggestions(value)
   }
 
   const handleKeywordSelect = (selectedKeyword: string) => {
-    clearSavedIndicator()
+    hideSavedIndicator()
     const segments = keywordsInput.split(",")
     if (segments.length === 0) {
       segments.push(selectedKeyword)
@@ -388,9 +399,9 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         setKeywordsInput("")
       }
       setKeywordSuggestions([])
-      clearSavedIndicator()
+      hideSavedIndicator()
     }
-  }, [clearSavedIndicator, currentNote.id, currentNote.keywords])
+  }, [currentNote.id, currentNote.keywords, hideSavedIndicator])
 
   useEffect(() => {
     if (!noteFocusTarget) return
@@ -561,7 +572,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         path: `/api/v1/notes/${note.id}` as AllowedPath,
         method: "GET"
       })
-      clearSavedIndicator()
+      hideSavedIndicator()
       loadNote(serializeNoteForEditor(fullNote))
       setIsLoadModalOpen(false)
       messageApi.success(
@@ -572,7 +583,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         t("playground:studio.loadNoteError", "Failed to load note")
       )
     }
-  }, [loadNote, messageApi, serializeNoteForEditor, t])
+  }, [hideSavedIndicator, loadNote, messageApi, serializeNoteForEditor, t])
 
   const handleReloadLatestAfterConflict = useCallback(async () => {
     if (!currentNote.id) return
@@ -613,7 +624,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
           : draftBlock
         : latestForEditor.content
 
-      clearSavedIndicator()
+      hideSavedIndicator()
       setCurrentNote({
         id: latestForEditor.id,
         title: titleChanged ? localDraft.title : latestForEditor.title,
@@ -637,7 +648,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         )
       )
     }
-  }, [clearSavedIndicator, currentNote, messageApi, serializeNoteForEditor, setCurrentNote, t])
+  }, [currentNote, hideSavedIndicator, messageApi, serializeNoteForEditor, setCurrentNote, t])
 
   // Save note (create or update)
   const handleSave = async () => {
@@ -689,7 +700,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         messageApi.success(
           t("playground:studio.noteUpdated", "Note updated")
         )
-        showSavedConfirmation()
+        showSavedIndicatorTemporarily()
       } else {
         // Create new note
         const created = await bgRequest<NoteListItem>({
@@ -709,7 +720,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         messageApi.success(
           t("playground:studio.noteSaved", "Note saved")
         )
-        showSavedConfirmation()
+        showSavedIndicatorTemporarily()
       }
     } catch (error: any) {
       // Handle version conflict
@@ -758,9 +769,9 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
       keywords: [...currentNote.keywords]
     }
     const previousKeywordsInput = keywordsInput
-    const undoHandle = scheduleWorkspaceUndoAction({
+      const undoHandle = scheduleWorkspaceUndoAction({
       apply: () => {
-        clearSavedIndicator()
+        hideSavedIndicator()
         clearCurrentNote()
         setKeywordsInput("")
       },
@@ -957,11 +968,11 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
       )}
 
       {/* Title input */}
-      <Input
+          <Input
         ref={titleInputRef}
         value={currentNote.title}
         onChange={(e) => {
-          clearSavedIndicator()
+          hideSavedIndicator()
           updateNoteTitle(e.target.value)
         }}
         placeholder={t("playground:studio.noteTitlePlaceholder", "Note title...")}
@@ -1003,7 +1014,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
               key={idx}
               closable
               onClose={() => {
-                clearSavedIndicator()
+                hideSavedIndicator()
                 const newKeywords = currentNote.keywords.filter((_, i) => i !== idx)
                 updateNoteKeywords(newKeywords)
                 setKeywordsInput(newKeywords.join(", "))
@@ -1044,7 +1055,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
             ref={contentInputRef}
             value={currentNote.content}
             onChange={(e) => {
-              clearSavedIndicator()
+              hideSavedIndicator()
               updateNoteContent(e.target.value)
             }}
             placeholder={t(
@@ -1078,7 +1089,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
         <div className="mt-2 flex shrink-0 items-center justify-between">
           <div className="flex items-center gap-2">
             {currentNote.isDirty && !showSavedIndicator && (
-              <span className="flex items-center gap-1 text-xs text-warn">
+              <span className="flex items-center gap-1 text-xs text-warning">
                 <AlertCircle className="h-3 w-3" />
                 {t("playground:studio.unsaved", "Unsaved")}
               </span>

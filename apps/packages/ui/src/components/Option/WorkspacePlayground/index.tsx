@@ -2,18 +2,16 @@ import React, { Suspense, useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { Drawer, Tabs, Modal, Input, Empty, Skeleton, Button, message } from "antd"
 import type { InputRef } from "antd"
-import { browser } from "wxt/browser"
 import {
   AlertTriangle,
   FileText,
-  Keyboard,
   MessageSquare,
   Sparkles,
   Search,
   Command,
   Loader2
 } from "lucide-react"
-import { useWorkspaceStore } from "@/store/workspace"
+import { createWorkspaceStorage, useWorkspaceStore } from "@/store/workspace"
 import { useTutorialStore } from "@/store/tutorials"
 import {
   WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS,
@@ -35,13 +33,13 @@ import {
 } from "@/utils/workspace-playground-prefill"
 import { FEATURE_FLAGS, useFeatureFlag } from "@/hooks/useFeatureFlags"
 import { trackWorkspacePlaygroundTelemetry } from "@/utils/workspace-playground-telemetry"
-import { isMac } from "@/hooks/useKeyboardShortcuts"
 import { WorkspaceHeader } from "./WorkspaceHeader"
 import { WorkspaceBanner } from "./WorkspaceBanner"
 import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
 import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { ChatPane } from "./ChatPane"
+import { WorkspaceShortcutsModal } from "./WorkspaceShortcutsModal"
 import {
   TransferSourcesModal,
   type TransferSourcesModalLaunchRequest
@@ -1231,14 +1229,17 @@ const WorkspacePlaygroundBody: React.FC = () => {
     setTransferSourcesRequest(null)
   }, [])
 
-  const dismissOnboardingOverlay = React.useCallback(async () => {
-    try {
-      await browser.storage.local.set({
-        [WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY]: "1"
-      })
-    } catch {
+  const dismissOnboardingOverlay = React.useCallback(() => {
+    if (typeof window === "undefined") return
+
+    void Promise.resolve(
+      createWorkspaceStorage().setItem(
+        WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY,
+        "1"
+      )
+    ).catch(() => {
       // Ignore storage errors.
-    }
+    })
   }, [])
 
   useEffect(() => {
@@ -1694,26 +1695,25 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
     onboardingInitializedRef.current = true
 
-    let cancelled = false
+    if (typeof window === "undefined") return
+    let isActive = true
 
-    void (async () => {
-      try {
-        const stored = await browser.storage.local.get(
-          WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
-        )
-        if (
-          !cancelled &&
-          stored[WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY] !== "1"
-        ) {
+    void Promise.resolve(
+      createWorkspaceStorage().getItem(
+        WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
+      )
+    )
+      .then((dismissed) => {
+        if (isActive && dismissed !== "1") {
           setShowTutorialPrompt(true)
         }
-      } catch {
-        // Ignore storage errors
-      }
-    })()
+      })
+      .catch(() => {
+        // Ignore storage errors.
+      })
 
     return () => {
-      cancelled = true
+      isActive = false
     }
   }, [isStoreHydrated, workspaceId])
 
@@ -2709,42 +2709,11 @@ const WorkspacePlaygroundBody: React.FC = () => {
         onCancel={closeTransferSourcesModal}
       />
 
-      {/* Workspace keyboard shortcuts legend */}
-      <Modal
+      <WorkspaceShortcutsModal
         open={showShortcutsModal}
-        onCancel={() => setShowShortcutsModal(false)}
-        title={
-          <span className="flex items-center gap-2">
-            <Keyboard className="h-4 w-4 text-text-muted" />
-            {t("playground:workspace.shortcutsTitle", "Keyboard Shortcuts")}
-          </span>
-        }
-        footer={null}
-        centered
-        destroyOnClose
-      >
-        <div className="space-y-2 py-2 text-sm">
-          {(
-            [
-              [t("playground:workspace.shortcutFocusSources", "Focus sources pane"), isMac ? "\u2318 1" : "Ctrl + 1"],
-              [t("playground:workspace.shortcutFocusChat", "Focus chat pane"), isMac ? "\u2318 2" : "Ctrl + 2"],
-              [t("playground:workspace.shortcutFocusStudio", "Focus studio pane"), isMac ? "\u2318 3" : "Ctrl + 3"],
-              [t("playground:workspace.shortcutGlobalSearch", "Global search"), isMac ? "\u2318 K" : "Ctrl + K"],
-              [t("playground:workspace.shortcutNewNote", "New note"), isMac ? "\u2318 N" : "Ctrl + N"],
-              [t("playground:workspace.shortcutNewWorkspace", "New workspace"), isMac ? "\u21E7 \u2318 N" : "Ctrl + Shift + N"],
-              [t("playground:workspace.shortcutUndo", "Undo"), isMac ? "\u2318 Z" : "Ctrl + Z"],
-              [t("playground:workspace.shortcutShowShortcuts", "Show shortcuts"), "?"]
-            ] as const
-          ).map(([label, keys]) => (
-            <div key={label} className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-surface2">
-              <span className="text-text">{label}</span>
-              <kbd className="ml-4 rounded border border-border bg-surface2 px-1.5 py-0.5 text-xs font-mono text-text-muted">
-                {keys}
-              </kbd>
-            </div>
-          ))}
-        </div>
-      </Modal>
+        onClose={() => setShowShortcutsModal(false)}
+        includeShowShortcutsShortcut
+      />
 
       {showWorkspaceTransitionCue && (
         <div

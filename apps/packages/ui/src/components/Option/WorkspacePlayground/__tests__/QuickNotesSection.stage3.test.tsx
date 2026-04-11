@@ -243,28 +243,31 @@ describe("QuickNotesSection Stage 3 authoring and conflict recovery", () => {
     expect(merged.content).toContain("Local unsaved paragraph")
   })
 
-  it("clears the transient saved badge as soon as the draft changes again", async () => {
+  it("hides the saved indicator as soon as the note becomes dirty again", async () => {
     workspaceStoreState.currentNote = {
-      id: undefined,
-      title: "Draft note",
-      content: "Initial content",
+      id: 7,
+      title: "Saved Note",
+      content: "Stable content",
       keywords: [],
-      version: undefined,
-      isDirty: true
+      version: 1,
+      isDirty: false
     }
+    workspaceStoreState.loadNote = vi.fn((nextNote) => {
+      workspaceStoreState.currentNote = nextNote
+    })
 
     mockBgRequest.mockImplementation(async (request: { path: string; method?: string }) => {
       const path = String(request.path)
       if (path.includes("/api/v1/notes/search/") && path.includes("limit=8")) {
         return []
       }
-      if (path === "/api/v1/notes/" && String(request.method || "POST").toUpperCase() === "POST") {
+      if (path.includes("/api/v1/notes/7?expected_version=1")) {
         return {
-          id: 99,
-          title: "Draft note",
-          content: "Initial content",
-          keywords: [],
-          version: 1
+          id: 7,
+          title: "Saved Note",
+          content: "Stable content",
+          keywords: [{ keyword: "workspace:test" }],
+          version: 2
         }
       }
       if (path.includes("/api/v1/notes/?")) {
@@ -273,18 +276,24 @@ describe("QuickNotesSection Stage 3 authoring and conflict recovery", () => {
       return { notes: [] }
     })
 
-    render(<QuickNotesSection />)
+    const { rerender } = render(<QuickNotesSection />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    fireEvent.click(screen.getByRole("button", { name: "Update" }))
 
     expect(await screen.findByTestId("quick-notes-saved-indicator")).toBeInTheDocument()
+    expect(screen.queryByText("Unsaved")).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByPlaceholderText("Note title..."), {
-      target: { value: "Draft note updated" }
-    })
+    workspaceStoreState.currentNote = {
+      ...workspaceStoreState.currentNote,
+      content: "Stable content with draft changes",
+      isDirty: true
+    }
+    rerender(<QuickNotesSection />)
 
     await waitFor(() => {
       expect(screen.queryByTestId("quick-notes-saved-indicator")).not.toBeInTheDocument()
     })
+    expect(screen.getByText("Unsaved")).toBeInTheDocument()
   })
+
 })

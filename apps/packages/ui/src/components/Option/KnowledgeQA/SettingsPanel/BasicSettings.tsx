@@ -8,6 +8,7 @@ import { HelpCircle } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { cn } from "@/libs/utils"
+import { getRagSourceOptions } from "@/services/rag/sourceMetadata"
 
 export function BasicSettings() {
   const { settings, updateSetting, preset } = useKnowledgeQA()
@@ -54,7 +55,7 @@ export function BasicSettings() {
         </p>
         {settings.top_k > 30 && preset === "thorough" && (
           <p className="text-xs text-warn">
-            High source count with thorough preset may cause slow responses.
+            High source count with Deep preset may cause slow responses.
           </p>
         )}
       </div>
@@ -63,13 +64,7 @@ export function BasicSettings() {
       <div className="space-y-2">
         <label className="text-sm font-medium">Search Sources</label>
         <div className="space-y-2">
-          {[
-            { value: "media_db", label: "Your Documents" },
-            { value: "notes", label: "Your Notes" },
-            { value: "characters", label: "Characters & Profiles" },
-            { value: "chats", label: "Conversations" },
-            { value: "kanban", label: "Boards" },
-          ].map((source) => (
+          {getRagSourceOptions().map((source) => (
             <label key={source.value} className="flex items-center gap-2">
               <input
                 type="checkbox"

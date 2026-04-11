@@ -2,18 +2,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { WorkspacePlayground } from "../index"
 
+const ONBOARDING_KEY = "tldw:workspace-playground:onboarding-dismissed:v1"
 const {
   onboardingStorageState,
-  mockBrowserStorageGet,
-  mockBrowserStorageSet,
+  mockWorkspaceStorageGetItem,
+  mockWorkspaceStorageSetItem,
 } = vi.hoisted(() => ({
   onboardingStorageState: {
     value: undefined as string | undefined,
   },
-  mockBrowserStorageGet: vi.fn(async (key: string) => ({
-    [key]: undefined as string | undefined,
-  })),
-  mockBrowserStorageSet: vi.fn(async (_payload: Record<string, string>) => undefined),
+  mockWorkspaceStorageGetItem: vi.fn(async (_key: string) => null as string | null),
+  mockWorkspaceStorageSetItem: vi.fn(async (_key: string, _value: string) => undefined),
 }))
 
 const testState = {
@@ -80,6 +79,21 @@ vi.mock("@/hooks/useMediaQuery", () => ({
 vi.mock("@/store/workspace", () => ({
   useWorkspaceStore: (selector: (state: typeof testState) => unknown) =>
     selector(testState),
+  createWorkspaceStorage: () => ({
+    getItem: (key: string) => {
+      mockWorkspaceStorageGetItem.mockImplementationOnce(async (requestedKey: string) =>
+        requestedKey === ONBOARDING_KEY ? onboardingStorageState.value ?? null : null
+      )
+      return mockWorkspaceStorageGetItem(key)
+    },
+    setItem: (key: string, value: string) => {
+      if (key === ONBOARDING_KEY) {
+        onboardingStorageState.value = value
+      }
+      return mockWorkspaceStorageSetItem(key, value)
+    },
+    removeItem: vi.fn(),
+  }),
 }))
 
 vi.mock("@/store/tutorials", () => ({
@@ -122,34 +136,13 @@ vi.mock("../WorkspaceStatusBar", () => ({
   WorkspaceStatusBar: () => <div data-testid="workspace-status-bar" />,
 }))
 
-vi.mock("wxt/browser", () => ({
-  browser: {
-    storage: {
-      local: {
-        get: (key: string) => {
-          mockBrowserStorageGet.mockImplementationOnce(async (requestedKey: string) => ({
-            [requestedKey]: onboardingStorageState.value,
-          }))
-          return mockBrowserStorageGet(key)
-        },
-        set: (payload: Record<string, string>) => {
-          onboardingStorageState.value = payload[ONBOARDING_KEY]
-          return mockBrowserStorageSet(payload)
-        },
-      },
-    },
-  },
-}))
-
-if (!(globalThis as any).ResizeObserver) {
-  ;(globalThis as any).ResizeObserver = class ResizeObserver {
+if (!(globalThis as { ResizeObserver?: unknown }).ResizeObserver) {
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class ResizeObserver {
     observe() {}
     unobserve() {}
     disconnect() {}
   }
 }
-
-const ONBOARDING_KEY = "tldw:workspace-playground:onboarding-dismissed:v1"
 
 describe("WorkspacePlayground keyboard shortcuts modal", () => {
   beforeEach(() => {
@@ -184,7 +177,7 @@ describe("WorkspacePlayground keyboard shortcuts modal", () => {
     })
   })
 
-  it("does NOT open the modal when '?' is pressed while an input is focused", () => {
+  it("does not open the modal when '?' is pressed while an input is focused", () => {
     render(
       <>
         <input data-testid="external-input" />
@@ -199,7 +192,7 @@ describe("WorkspacePlayground keyboard shortcuts modal", () => {
     expect(screen.queryByText("Keyboard Shortcuts")).not.toBeInTheDocument()
   })
 
-  it("does NOT open the modal when '?' is pressed while a textarea is focused", () => {
+  it("does not open the modal when '?' is pressed while a textarea is focused", () => {
     render(
       <>
         <textarea data-testid="external-textarea" />
@@ -223,17 +216,17 @@ describe("WorkspacePlayground keyboard shortcuts modal", () => {
       expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument()
     })
 
+    expect(screen.getByText("Search workspace")).toBeInTheDocument()
     expect(screen.getByText("Focus sources pane")).toBeInTheDocument()
     expect(screen.getByText("Focus chat pane")).toBeInTheDocument()
     expect(screen.getByText("Focus studio pane")).toBeInTheDocument()
-    expect(screen.getByText("Global search")).toBeInTheDocument()
     expect(screen.getByText("New note")).toBeInTheDocument()
     expect(screen.getByText("New workspace")).toBeInTheDocument()
     expect(screen.getByText("Undo")).toBeInTheDocument()
     expect(screen.getByText("Show shortcuts")).toBeInTheDocument()
   })
 
-  it("closes the modal when Escape is pressed", async () => {
+  it("closes the modal when the close button is used", async () => {
     render(<WorkspacePlayground />)
 
     fireEvent.keyDown(window, { key: "?" })
