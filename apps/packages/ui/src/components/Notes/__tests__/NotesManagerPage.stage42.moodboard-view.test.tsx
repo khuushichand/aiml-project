@@ -231,7 +231,7 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
         const nextId = seededMoodboards.reduce((max, item) => Math.max(max, item.id), 0) + 1
         const created = {
           id: nextId,
-          name: String(body.name || "").trim() || `Moodboard ${nextId}`,
+          name: String(body.name || "").trim() || `Collection ${nextId}`,
           description: null,
           version: 1
         }
@@ -330,6 +330,12 @@ describe("NotesManagerPage stage 42 moodboard view", () => {
 
     allowMoodboardFetch = true
     fireEvent.click(screen.getByTestId("notes-view-mode-moodboard"))
+
+    // Open the nested Organize section (collapsed by default)
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-section-organize-toggle")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId("notes-section-organize-toggle"))
 
     await waitFor(() => {
       expect(screen.getByTestId("notes-moodboard-controls")).toBeInTheDocument()

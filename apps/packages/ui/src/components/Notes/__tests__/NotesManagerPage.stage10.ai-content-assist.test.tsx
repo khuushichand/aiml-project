@@ -194,14 +194,14 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
       ).toContain("Summary:")
     })
     expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent(
-      "Edit source: Generated (Summarize"
+      "Origin: AI-generated (Summarize"
     )
 
     fireEvent.change(screen.getByPlaceholderText("Write your note here... (Markdown supported)"), {
       target: { value: "manual update after summary" }
     })
     await waitFor(() => {
-      expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Edit source: Manual")
+      expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Origin: Typed manually")
     })
   })
 
@@ -221,7 +221,7 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
       expect(mockConfirmDanger).toHaveBeenCalled()
     })
     expect(textarea.value).toBe("Keep this draft exactly as typed.")
-    expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Edit source: Manual")
+    expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Origin: Typed manually")
   })
 
   it("suggests keywords with explicit selection and marks generated provenance after apply", async () => {
@@ -244,10 +244,10 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply selected" }))
 
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith("Applied suggested keywords.")
+      expect(mockMessageSuccess).toHaveBeenCalledWith("Applied suggested tags.")
     })
     expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent(
-      "Edit source: Generated (Suggest keywords"
+      "Origin: AI-generated (Suggest tags"
     )
     const editorKeywordsControl = screen.getByTestId("notes-keywords-editor")
     expect(within(editorKeywordsControl).getByText("quantum")).toBeInTheDocument()
@@ -269,7 +269,7 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
 
     await waitFor(() => {
-      expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Edit source: Manual")
+      expect(screen.getByTestId("notes-editor-provenance")).toHaveTextContent("Origin: Typed manually")
     })
     const editorKeywordsControl = screen.getByTestId("notes-keywords-editor")
     expect(within(editorKeywordsControl).queryByText("quantum")).not.toBeInTheDocument()

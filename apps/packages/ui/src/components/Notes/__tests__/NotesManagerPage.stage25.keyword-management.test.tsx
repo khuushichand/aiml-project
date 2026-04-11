@@ -268,7 +268,7 @@ describe("NotesManagerPage stage 25 keyword management", () => {
   it("opens keyword manager from the browse-keywords modal", async () => {
     renderPage()
 
-    fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
+    fireEvent.click(screen.getByRole("button", { name: "Browse tags" }))
     const managerButton = await screen.findByTestId("notes-keyword-picker-open-manager")
     fireEvent.click(managerButton)
 
@@ -282,7 +282,7 @@ describe("NotesManagerPage stage 25 keyword management", () => {
   it("supports rename, merge, and delete workflows from keyword manager", async () => {
     renderPage()
 
-    fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
+    fireEvent.click(screen.getByRole("button", { name: "Browse tags" }))
     fireEvent.click(await screen.findByTestId("notes-keyword-picker-open-manager"))
 
     await waitFor(() => {
@@ -297,7 +297,7 @@ describe("NotesManagerPage stage 25 keyword management", () => {
     fireEvent.click(renameButtons[renameButtons.length - 1])
 
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith('Renamed keyword to "alpha-renamed"')
+      expect(mockMessageSuccess).toHaveBeenCalledWith('Renamed tag to "alpha-renamed"')
     })
 
     fireEvent.click(screen.getByTestId("notes-keyword-manager-merge-2"))
@@ -320,7 +320,7 @@ describe("NotesManagerPage stage 25 keyword management", () => {
 
     fireEvent.click(screen.getByTestId("notes-keyword-manager-delete-1"))
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith('Deleted keyword "alpha-renamed"')
+      expect(mockMessageSuccess).toHaveBeenCalledWith('Deleted tag "alpha-renamed"')
     })
 
     const requestCalls = mockBgRequest.mock.calls.map((call) => call[0])

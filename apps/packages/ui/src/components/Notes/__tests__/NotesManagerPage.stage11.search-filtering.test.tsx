@@ -179,7 +179,7 @@ describe("NotesManagerPage stage 11 search filtering", () => {
 
   it("shows search input", () => {
     renderPage()
-    expect(screen.getByPlaceholderText("Search titles & content...")).toBeInTheDocument()
+    expect(screen.getByPlaceholderText("Search notes... (use quotes for exact match)")).toBeInTheDocument()
   })
 
   it("opens search tips popover with phrase and AND guidance", async () => {
@@ -192,7 +192,7 @@ describe("NotesManagerPage stage 11 search filtering", () => {
       ).toBeInTheDocument()
     })
     expect(
-      screen.getByText("Text query + selected keywords are combined with AND.")
+      screen.getByText("Text query + selected tags are combined with AND.")
     ).toBeInTheDocument()
   })
 
@@ -215,7 +215,7 @@ describe("NotesManagerPage stage 11 search filtering", () => {
 
   it("debounces rapid typing and issues only one final search request", async () => {
     renderPage()
-    const input = screen.getByPlaceholderText("Search titles & content...")
+    const input = screen.getByPlaceholderText("Search notes... (use quotes for exact match)")
 
     fireEvent.change(input, { target: { value: "a" } })
     fireEvent.change(input, { target: { value: "al" } })
@@ -250,7 +250,7 @@ describe("NotesManagerPage stage 11 search filtering", () => {
 
   it("sends search requests for search queries", async () => {
     renderPage()
-    const input = screen.getByPlaceholderText("Search titles & content...")
+    const input = screen.getByPlaceholderText("Search notes... (use quotes for exact match)")
 
     fireEvent.change(input, { target: { value: "alpha" } })
     await waitFor(

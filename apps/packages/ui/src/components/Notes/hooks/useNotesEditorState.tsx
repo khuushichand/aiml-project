@@ -164,6 +164,11 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   const markdownBeforeWysiwygRef = React.useRef<string | null>(null)
   const graphModalReturnFocusRef = React.useRef<HTMLElement | null>(null)
 
+  // ---- AI assist undo ----
+  const contentBeforeAssistRef = React.useRef<string | null>(null)
+  const assistUndoTimerRef = React.useRef<number | null>(null)
+  const [canUndoAssist, setCanUndoAssist] = React.useState(false)
+
   const pinnedNoteIdSet = React.useMemo(() => new Set(pinnedNoteIds), [pinnedNoteIds])
 
   const clearAutosaveTimeout = React.useCallback(() => {
@@ -642,7 +647,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
       const keywordSuffix =
         warning.failedKeywords.length > 0 ? ` (${warning.failedKeywords.join(', ')})` : ''
       message.warning(
-        `Note ${action}, but ${warning.failedCount} keyword${
+        `Note ${action}, but ${warning.failedCount} tag${
           warning.failedCount === 1 ? '' : 's'
         } failed to attach${keywordSuffix}.`
       )
@@ -1218,7 +1223,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
           if (suggestedKeywords.length === 0) {
             message.warning(
               t('option:notesSearch.assistKeywordsNoResult', {
-                defaultValue: 'No additional keyword suggestions were found.'
+                defaultValue: 'No additional tag suggestions were found.'
               })
             )
             return
@@ -1261,6 +1266,15 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
           })
         })
         if (!apply) return
+        // Store content before replacement so the user can undo the AI change
+        contentBeforeAssistRef.current = sourceContent
+        setCanUndoAssist(true)
+        if (assistUndoTimerRef.current != null) window.clearTimeout(assistUndoTimerRef.current)
+        assistUndoTimerRef.current = window.setTimeout(() => {
+          contentBeforeAssistRef.current = null
+          setCanUndoAssist(false)
+          assistUndoTimerRef.current = null
+        }, 30_000)
         setContentDirty(generatedContent, { provenance: action })
         message.success(
           action === 'summarize'
@@ -1291,6 +1305,29 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
       t
     ]
   )
+
+  const undoAssist = React.useCallback(() => {
+    if (contentBeforeAssistRef.current == null) return
+    setContentDirty(contentBeforeAssistRef.current, { provenance: undefined })
+    contentBeforeAssistRef.current = null
+    setCanUndoAssist(false)
+    if (assistUndoTimerRef.current != null) {
+      window.clearTimeout(assistUndoTimerRef.current)
+      assistUndoTimerRef.current = null
+    }
+    message.info(
+      t('option:notesSearch.undoAssistApplied', {
+        defaultValue: 'Reverted AI change.'
+      })
+    )
+  }, [setContentDirty, message, t])
+
+  // Clean up assist undo timer on unmount
+  React.useEffect(() => {
+    return () => {
+      if (assistUndoTimerRef.current != null) window.clearTimeout(assistUndoTimerRef.current)
+    }
+  }, [])
 
   // ---- pinned notes ----
   const selectedNotePinned =
@@ -1682,7 +1719,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
         ? t('option:notesSearch.assistSummarizeAction', { defaultValue: 'Summarize' })
         : editProvenance.action === 'expand_outline'
           ? t('option:notesSearch.assistExpandOutlineAction', { defaultValue: 'Expand outline' })
-          : t('option:notesSearch.assistSuggestKeywordsAction', { defaultValue: 'Suggest keywords' })
+          : t('option:notesSearch.assistSuggestKeywordsAction', { defaultValue: 'Suggest tags' })
     const generatedAt = new Date(editProvenance.at).toLocaleTimeString()
     const generatedPrefix = t('option:notesSearch.provenanceGeneratedPrefix', {
       defaultValue: 'Origin: AI-generated'
@@ -1724,6 +1761,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     editorCursorIndex, setEditorCursorIndex,
     titleSuggestionLoading,
     assistLoadingAction,
+    canUndoAssist,
     editProvenance,
     monitoringNotice, setMonitoringNotice,
     recentNotes,
@@ -1774,6 +1812,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     reloadNotes,
     suggestTitle,
     runAssistAction,
+    undoAssist,
     toggleNotePinned,
     isVersionConflictError,
     handleVersionConflict,

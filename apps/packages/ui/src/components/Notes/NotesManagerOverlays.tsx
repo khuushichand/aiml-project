@@ -134,7 +134,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
         cancelText={t("common:cancel", { defaultValue: "Cancel" })}
         destroyOnHidden
         title={t("option:notesSearch.assistKeywordsReviewTitle", {
-          defaultValue: "Review suggested keywords",
+          defaultValue: "Review suggested tags",
         })}
       >
         <div
@@ -146,7 +146,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             className="block text-xs text-text-muted"
           >
             {t("option:notesSearch.assistKeywordsReviewHelp", {
-              defaultValue: "Select which suggested keywords to add to this note.",
+              defaultValue: "Select which suggested tags to add to this note.",
             })}
           </Typography.Text>
           <div className="flex items-center gap-2">
@@ -224,7 +224,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
         open={kw.keywordManagerOpen}
         onCancel={kw.closeKeywordManager}
         title={t("option:notesSearch.keywordManagerTitle", {
-          defaultValue: "Manage keywords",
+          defaultValue: "Manage tags",
         })}
         destroyOnHidden
         footer={[
@@ -239,7 +239,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             className="block text-xs text-text-muted"
           >
             {t("option:notesSearch.keywordManagerHelp", {
-              defaultValue: "Rename, merge, or delete keywords from one place.",
+              defaultValue: "Rename, merge, or delete tags from one place.",
             })}
           </Typography.Text>
           <Input
@@ -247,7 +247,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             value={kw.keywordManagerQuery}
             onChange={(event) => kw.setKeywordManagerQuery(event.target.value)}
             placeholder={t("option:notesSearch.keywordManagerSearchPlaceholder", {
-              defaultValue: "Filter keywords",
+              defaultValue: "Filter tags",
             })}
             data-testid="notes-keyword-manager-search"
           />
@@ -255,13 +255,13 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             {kw.keywordManagerLoading ? (
               <Typography.Text type="secondary" className="text-xs text-text-muted">
                 {t("option:notesSearch.keywordManagerLoading", {
-                  defaultValue: "Loading keywords...",
+                  defaultValue: "Loading tags...",
                 })}
               </Typography.Text>
             ) : kw.keywordManagerVisibleItems.length === 0 ? (
               <Typography.Text type="secondary" className="text-xs text-text-muted">
                 {t("option:notesSearch.keywordManagerEmpty", {
-                  defaultValue: "No keywords found.",
+                  defaultValue: "No tags found.",
                 })}
               </Typography.Text>
             ) : (
@@ -351,7 +351,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
         confirmLoading={kw.keywordManagerActionLoading}
         destroyOnHidden
         title={t("option:notesSearch.keywordManagerRenameTitle", {
-          defaultValue: "Rename keyword",
+          defaultValue: "Rename tag",
         })}
       >
         <div className="space-y-2">
@@ -360,7 +360,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             className="block text-xs text-text-muted"
           >
             {t("option:notesSearch.keywordManagerRenameHelp", {
-              defaultValue: "Choose a new name for this keyword.",
+              defaultValue: "Choose a new name for this tag.",
             })}
           </Typography.Text>
           <Input
@@ -395,7 +395,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
         okButtonProps={{ danger: true }}
         destroyOnHidden
         title={t("option:notesSearch.keywordManagerMergeTitle", {
-          defaultValue: "Merge keyword",
+          defaultValue: "Merge tag",
         })}
       >
         <div className="space-y-2">
@@ -405,7 +405,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
           >
             {t("option:notesSearch.keywordManagerMergeHelp", {
               defaultValue:
-                "Move all links from the source keyword to the selected target keyword.",
+                "Move all links from the source tag to the selected target tag.",
             })}
           </Typography.Text>
           <Typography.Text
@@ -415,7 +415,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
           >
             {t("option:notesSearch.keywordManagerMergeWarning", {
               defaultValue:
-                "This will permanently combine these keywords. The source keyword will be deleted. This cannot be undone.",
+                "This will permanently combine these tags. The source tag will be deleted. This cannot be undone.",
             })}
           </Typography.Text>
           <div className="text-xs text-text-muted">
@@ -433,7 +433,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             allowClear
             optionFilterProp="label"
             placeholder={t("option:notesSearch.keywordManagerMergeTargetPlaceholder", {
-              defaultValue: "Select target keyword",
+              defaultValue: "Select target tag",
             })}
             value={kw.keywordMergeDraft?.targetKeywordId ?? undefined}
             onChange={(value: number | undefined) => {
@@ -589,6 +589,9 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
             </div>
             <div className="space-y-1">
               <div><strong>Ctrl/Cmd + S</strong>: {t("option:notesSearch.shortcutSaveDescription", { defaultValue: "Save the current note." })}</div>
+              <div><strong>Alt + N</strong>: {t("option:notesSearch.shortcutNewNoteDescription", { defaultValue: "Create a new note." })}</div>
+              <div><strong>Ctrl/Cmd + K</strong>: {t("option:notesSearch.shortcutFocusSearchDescription", { defaultValue: "Focus the search input." })}</div>
+              <div><strong>Ctrl/Cmd + Shift + E/S/P</strong>: {t("option:notesSearch.shortcutEditorModesDescription", { defaultValue: "Switch editor mode (Edit / Split / Preview)." })}</div>
               <div><strong>?</strong>: {t("option:notesSearch.shortcutOpenHelpDescription", { defaultValue: "Open keyboard shortcut help." })}</div>
               <div><strong>Esc</strong>: {t("option:notesSearch.shortcutCloseDialogDescription", { defaultValue: "Close the current dialog." })}</div>
             </div>

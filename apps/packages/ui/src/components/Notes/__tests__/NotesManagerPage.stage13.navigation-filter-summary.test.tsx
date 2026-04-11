@@ -263,7 +263,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
 
   it("renders keyword-only summary after applying keyword picker selection", async () => {
     renderPage()
-    fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
+    fireEvent.click(screen.getByRole("button", { name: "Browse tags" }))
     await screen.findByText("Apply filters")
     fireEvent.click(screen.getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
@@ -274,7 +274,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
       )
     })
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Keywords: research"
+      "Tags: research"
     )
   })
 
@@ -289,7 +289,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
       )
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
+    fireEvent.click(screen.getByRole("button", { name: "Browse tags" }))
     await screen.findByText("Apply filters")
     fireEvent.click(screen.getByText(/^research\b/i))
     fireEvent.click(screen.getByRole("button", { name: "Apply filters" }))
@@ -300,7 +300,7 @@ describe("NotesManagerPage stage 13 navigation filter summary", () => {
       )
     })
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      'Query: "ML" + Keywords: research'
+      'Query: "ML" + Tags: research'
     )
     expect(screen.getByLabelText("Clear active note filters")).toBeInTheDocument()
   }, 12000)

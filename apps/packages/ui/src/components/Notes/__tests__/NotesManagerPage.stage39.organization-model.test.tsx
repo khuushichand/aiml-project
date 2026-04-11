@@ -292,6 +292,12 @@ describe("NotesManagerPage stage 39 organization model", () => {
     seededServerNotebooks = [{ id: 11, name: "Research", keywords: ["research", "ml"] }]
     renderPage()
 
+    // Open the nested Organize section (collapsed by default)
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-section-organize-toggle")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId("notes-section-organize-toggle"))
+
     await waitFor(() => {
       expect(screen.getByTestId("notes-notebook-select")).toBeInTheDocument()
     })
@@ -319,7 +325,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
 
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Smart collection: Research"
+      "Saved filter: Research"
     )
   })
 
@@ -327,7 +333,13 @@ describe("NotesManagerPage stage 39 organization model", () => {
     mockPromptModal.mockResolvedValue("Research Notebook")
     renderPage()
 
-    fireEvent.click(screen.getByRole("button", { name: "Browse keywords" }))
+    // Open the nested Organize section (collapsed by default)
+    await waitFor(() => {
+      expect(screen.getByTestId("notes-section-organize-toggle")).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByTestId("notes-section-organize-toggle"))
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse tags" }))
     const modalBody = await screen.findByTestId("notes-keyword-picker-modal")
     const pickerDialog =
       (modalBody.closest(".ant-modal") as HTMLElement | null) ??
@@ -341,7 +353,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     fireEvent.click(screen.getByTestId("notes-save-notebook"))
 
     await waitFor(() => {
-      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved smart collection "Research Notebook"')
+      expect(mockMessageSuccess).toHaveBeenCalledWith('Saved filter "Research Notebook"')
     })
 
     expect(mockBgRequest).toHaveBeenCalledWith(
@@ -360,7 +372,7 @@ describe("NotesManagerPage stage 39 organization model", () => {
     })
     expect(notebookPersistCall).toBeTruthy()
     expect(screen.getByTestId("notes-active-filter-summary-details")).toHaveTextContent(
-      "Smart collection: Research Notebook"
+      "Saved filter: Research Notebook"
     )
 
   }, 10000)

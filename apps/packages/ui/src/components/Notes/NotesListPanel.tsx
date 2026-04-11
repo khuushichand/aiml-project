@@ -429,7 +429,7 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
                                   {hasKeywords && (
                                     <Tooltip
                                       title={t('option:notesSearch.badgeHasKeywords', {
-                                        defaultValue: 'Has keywords'
+                                        defaultValue: 'Has tags'
                                       })}
                                     >
                                       <TagIcon className="h-3.5 w-3.5" aria-hidden="true" />

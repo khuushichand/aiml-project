@@ -11,9 +11,11 @@ import {
   Code2 as CodeIcon,
   Paperclip as PaperclipIcon
 } from 'lucide-react'
+import { QuestionCircleOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import NotesEditorHeader from '@/components/Notes/NotesEditorHeader'
 import NotesStudioView from '@/components/Notes/NotesStudioView'
+import CollapsibleSection from '@/components/Notes/CollapsibleSection'
 import type { ActiveWikilinkQuery, WikilinkCandidate } from '@/components/Notes/wikilinks'
 import type {
   SaveIndicatorState,
@@ -130,6 +132,8 @@ export interface NotesEditorPaneProps {
 
   // Assist
   assistLoadingAction: NotesAssistAction | null
+  canUndoAssist: boolean
+  undoAssist: () => void
 
   // TOC
   shouldShowToc: boolean
@@ -268,6 +272,8 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   manualLinkOptions,
   manualLinkDeletingEdgeId,
   assistLoadingAction,
+  canUndoAssist,
+  undoAssist,
   shouldShowToc,
   tocEntries,
   previewContent,
@@ -444,6 +450,36 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         studioBadgeLabel={studioBadgeLabel}
       />
       <div className="flex-1 flex flex-col px-4 py-3 overflow-auto">
+        {selectedId == null && !loadingDetail && (
+          <div className="flex flex-col items-center justify-center gap-4 px-8 py-12 text-center" data-testid="notes-editor-empty-state">
+            <div className="text-lg font-medium text-text">
+              {t('option:notesSearch.editorEmptyTitle', {
+                defaultValue: 'Select or create a note'
+              })}
+            </div>
+            <div className="max-w-sm text-sm text-text-muted">
+              {t('option:notesSearch.editorEmptyDescription', {
+                defaultValue: 'Choose a note from the list to start editing, or create a new one.'
+              })}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="primary"
+                onClick={() => void handleNewNote()}
+                data-testid="notes-editor-empty-create"
+              >
+                {t('option:notesSearch.editorEmptyCreateAction', {
+                  defaultValue: 'Create note'
+                })}
+              </Button>
+            </div>
+            <div className="mt-2 text-xs text-text-muted">
+              {t('option:notesSearch.editorEmptyHint', {
+                defaultValue: 'Tip: Type [[ in a note to link to another note.'
+              })}
+            </div>
+          </div>
+        )}
         {showStudioMarkdownOnlyNotice ? (
           <div className="mb-3 flex items-center justify-between gap-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
             <span>
@@ -579,7 +615,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             mode="tags"
             allowClear
             placeholder={t('option:notesSearch.keywordsEditorPlaceholder', {
-              defaultValue: 'Keywords (tags)'
+              defaultValue: 'Tags'
             })}
             data-testid="notes-keywords-editor"
             className="w-full"
@@ -661,10 +697,41 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               <div className="mt-1">{monitoringNotice.guidance}</div>
             </div>
           )}
+          {canUndoAssist && (
+            <div className="mt-2">
+              <Button
+                size="small"
+                onClick={undoAssist}
+                className="text-xs"
+                data-testid="notes-undo-assist"
+              >
+                {t('option:notesSearch.undoAssistAction', {
+                  defaultValue: 'Undo AI change'
+                })}
+              </Button>
+            </div>
+          )}
         </div>
         {selectedId != null && (
+          <CollapsibleSection
+            title={
+              <span className="inline-flex items-center gap-1">
+                {t('option:notesSearch.connectionsSectionTitle', {
+                  defaultValue: 'Connections'
+                })}
+                <Tooltip title={t('option:notesSearch.connectionsHelpTooltip', {
+                  defaultValue: 'Links between this note and others — created by you, by [[ ]] note links, or automatically.'
+                })}>
+                  <QuestionCircleOutlined className="text-text-muted text-[11px]" />
+                </Tooltip>
+              </span>
+            }
+            defaultOpen
+            storageKey="connections"
+            testId="notes-section-connections"
+          >
           <div
-            className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2"
+            className="grid grid-cols-1 gap-3 xl:grid-cols-2"
             data-testid="notes-graph-relation-panels"
           >
             <div className="rounded-lg border border-border bg-surface2 p-3">
@@ -893,6 +960,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
               )}
             </div>
           </div>
+          </CollapsibleSection>
         )}
         {editorMode !== 'preview' && (
           <div className="mt-3 flex items-center flex-wrap gap-1 rounded-lg border border-border bg-surface2 p-2">
@@ -1065,7 +1133,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             </Tooltip>
             <Tooltip
               title={t('option:notesSearch.assistSuggestKeywordsTooltip', {
-                defaultValue: 'Suggest keywords from note content'
+                defaultValue: 'Suggest tags from note content'
               })}
             >
               <Button
@@ -1080,7 +1148,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
                 data-testid="notes-assist-suggest-keywords"
               >
                 {t('option:notesSearch.assistSuggestKeywordsAction', {
-                  defaultValue: 'Suggest keywords'
+                  defaultValue: 'Suggest tags'
                 })}
               </Button>
             </Tooltip>

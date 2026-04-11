@@ -1130,13 +1130,13 @@ const NotesManagerPage: React.FC = () => {
     if (rawInput == null) return
     const keywords = rawInput.split(',').map((entry) => entry.trim()).filter(Boolean)
     if (keywords.length === 0) {
-      message.warning('Enter at least one keyword to assign')
+      message.warning('Enter at least one tag to assign')
       return
     }
     const confirmed = await confirmDanger({
-      title: 'Apply keywords to selected notes?',
+      title: 'Apply tags to selected notes?',
       content: `Apply ${keywords.join(', ')} to ${list.selectedBulkNotes.length} selected notes?`,
-      okText: 'Apply keywords',
+      okText: 'Apply tags',
       cancelText: 'Cancel'
     })
     if (!confirmed) return
@@ -1164,14 +1164,14 @@ const NotesManagerPage: React.FC = () => {
     }
 
     if (updated > 0) {
-      message.success(`Updated keywords on ${updated} selected note${updated === 1 ? '' : 's'}`)
+      message.success(`Updated tags on ${updated} selected note${updated === 1 ? '' : 's'}`)
       await list.refetch()
       if (ed.selectedId != null && list.selectedBulkNotes.some((note) => String(note.id) === String(ed.selectedId))) {
         await ed.loadDetail(ed.selectedId)
       }
     }
     if (failed > 0) {
-      message.warning(`${failed} selected note${failed === 1 ? '' : 's'} failed keyword update`)
+      message.warning(`${failed} selected note${failed === 1 ? '' : 's'} failed tag update`)
     }
   }, [confirmDanger, ed, kw.keywordTokens, list, message])
 
@@ -1755,8 +1755,8 @@ const NotesManagerPage: React.FC = () => {
     const effectiveQuery = list.query.trim() || list.queryInput.trim()
     const details: string[] = []
     if (effectiveQuery) details.push(`${t('option:notesSearch.summaryQueryLabel', { defaultValue: 'Query' })}: "${effectiveQuery}"`)
-    if (list.selectedNotebook != null) details.push(`${t('option:notesSearch.summaryNotebookLabel', { defaultValue: 'Smart collection' })}: ${list.selectedNotebook.name}`)
-    if (kw.keywordTokens.length > 0) details.push(`${t('option:notesSearch.summaryKeywordsLabel', { defaultValue: 'Keywords' })}: ${kw.keywordTokens.join(', ')}`)
+    if (list.selectedNotebook != null) details.push(`${t('option:notesSearch.summaryNotebookLabel', { defaultValue: 'Saved filter' })}: ${list.selectedNotebook.name}`)
+    if (kw.keywordTokens.length > 0) details.push(`${t('option:notesSearch.summaryKeywordsLabel', { defaultValue: 'Tags' })}: ${kw.keywordTokens.join(', ')}`)
     const countText = `${t('option:notesSearch.summaryShowing', { defaultValue: 'Showing' })} ${filteredCount} ${t('option:notesSearch.summaryOf', { defaultValue: 'of' })} ${list.total} ${t('option:notesSearch.summaryNotes', { defaultValue: 'notes' })}`
     return { countText, detailsText: details.join(' + ') }
   }, [kw.keywordTokens, list, t])
@@ -1802,7 +1802,7 @@ const NotesManagerPage: React.FC = () => {
   const searchableTips = React.useMemo(() => [
     { id: 'phrase', text: t('option:notesSearch.searchTipPhrase', { defaultValue: 'Use quotes for phrases, e.g. "project roadmap".' }) },
     { id: 'prefix', text: t('option:notesSearch.searchTipPrefix', { defaultValue: 'Use prefix terms (like analy*) for broader matches.' }) },
-    { id: 'and', text: t('option:notesSearch.searchTipAnd', { defaultValue: 'Text query + selected keywords are combined with AND.' }) },
+    { id: 'and', text: t('option:notesSearch.searchTipAnd', { defaultValue: 'Text query + selected tags are combined with AND.' }) },
     { id: 'in-note', text: t('option:notesSearch.searchTipInNote', { defaultValue: 'To find text inside the open note, use browser Ctrl/Cmd+F.' }) }
   ], [t])
 
@@ -1871,17 +1871,65 @@ const NotesManagerPage: React.FC = () => {
     setSidebarCollapsed(desktopSidebarCollapsedRef.current)
   }, [isMobileViewport])
 
-  // Shortcut help
+  // Global keyboard shortcuts
   React.useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.key !== '?' || event.metaKey || event.ctrlKey || event.altKey) return
-      if (shouldIgnoreGlobalShortcut(event.target)) return
-      event.preventDefault()
-      setShortcutHelpOpen(true)
+      if (event.defaultPrevented) return
+
+      // ? — open shortcut help (only when not typing in an input)
+      if (event.key === '?' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (shouldIgnoreGlobalShortcut(event.target)) return
+        event.preventDefault()
+        setShortcutHelpOpen(true)
+        return
+      }
+
+      // Alt+N — create new note
+      if (event.altKey && (event.key === 'n' || event.key === 'N') && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        event.preventDefault()
+        void handleNewNote()
+        return
+      }
+
+      // Ctrl/Cmd+K — focus search
+      if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !event.shiftKey && !event.altKey) {
+        event.preventDefault()
+        const searchInput = document.querySelector<HTMLInputElement>('[data-testid="notes-list-region"] input[type="search"], [data-testid="notes-list-region"] input')
+        searchInput?.focus()
+        return
+      }
+
+      // / — focus search (only when not typing in an input)
+      if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        if (shouldIgnoreGlobalShortcut(event.target)) return
+        event.preventDefault()
+        const searchInput = document.querySelector<HTMLInputElement>('[data-testid="notes-list-region"] input[type="search"], [data-testid="notes-list-region"] input')
+        searchInput?.focus()
+        return
+      }
+
+      // Ctrl/Cmd+Shift+E/S/P — switch editor mode
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey) {
+        if (event.key === 'E' || event.key === 'e') {
+          event.preventDefault()
+          ed.setEditorMode('edit')
+          return
+        }
+        if (event.key === 'S' || event.key === 's') {
+          event.preventDefault()
+          ed.setEditorMode('split')
+          return
+        }
+        if (event.key === 'P' || event.key === 'p') {
+          event.preventDefault()
+          ed.setEditorMode('preview')
+          return
+        }
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [handleNewNote, ed])
 
   // Cleanup
   React.useEffect(() => {
@@ -2089,6 +2137,8 @@ const NotesManagerPage: React.FC = () => {
         manualLinkOptions={manualLinkOptions}
         manualLinkDeletingEdgeId={ed.manualLinkDeletingEdgeId}
         assistLoadingAction={ed.assistLoadingAction}
+        canUndoAssist={ed.canUndoAssist}
+        undoAssist={ed.undoAssist}
         shouldShowToc={wl.shouldShowToc}
         tocEntries={wl.tocEntries}
         previewContent={wl.previewContent}

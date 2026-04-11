@@ -302,7 +302,7 @@ describe("NotesManagerPage stage 16 bulk actions", () => {
     )
     expect(patchCall?.[0]?.body?.keywords).toEqual(["research", "summary"])
     expect(mockConfirmDanger).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Apply keywords to selected notes?" })
+      expect.objectContaining({ title: "Apply tags to selected notes?" })
     )
   })
 })
