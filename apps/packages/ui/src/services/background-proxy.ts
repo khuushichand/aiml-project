@@ -2,7 +2,10 @@ import { browser } from "wxt/browser"
 import { Storage } from "@plasmohq/storage"
 import { createSafeStorage } from "@/utils/safe-storage"
 import { formatErrorMessage } from "@/utils/format-error-message"
-import { tldwRequest } from "@/services/tldw/request-core"
+import {
+  resolveBrowserRequestTransport,
+  tldwRequest
+} from "@/services/tldw/request-core"
 import {
   BACKEND_UNREACHABLE_EVENT,
   type BackendUnreachableDetail
@@ -791,18 +794,37 @@ async function* bgStreamDirect<
 ): AsyncGenerator<string> {
   const storage = createSafeStorage()
   const cfg = (await storage.get<Record<string, unknown>>("tldwConfig").catch(() => null)) || null
-  const isAbsolute = typeof path === "string" && /^https?:/i.test(path)
-  const absolutePath = isAbsolute ? String(path) : ""
+  const normalizedPath = normalizeKnownPathQuirks(path)
+  const isAbsolute = typeof normalizedPath === "string" && /^https?:/i.test(normalizedPath)
+  const absolutePath = isAbsolute ? String(normalizedPath) : ""
+  const transport =
+    !isAbsolute && typeof normalizedPath === "string"
+      ? resolveBrowserRequestTransport({
+          config: cfg,
+          path: String(normalizedPath)
+        })
+      : null
+  const hostedMode = transport?.mode === "hosted"
+  const advancedTransportOrigin =
+    transport?.mode === "advanced" ? parseHttpOrigin(transport?.url) : null
   if (isAbsolute && !isAbsoluteUrlAllowlisted(absolutePath, cfg)) {
     throw new Error(ABSOLUTE_URL_BLOCK_ERROR)
   }
-  if (!cfg?.serverUrl && !isAbsolute) {
+  if (
+    !cfg?.serverUrl &&
+    !isAbsolute &&
+    transport?.mode === "advanced" &&
+    !advancedTransportOrigin
+  ) {
     throw new Error("tldw server not configured")
   }
-  const baseUrl = cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : ""
+  const baseUrl =
+    advancedTransportOrigin ||
+    (cfg?.serverUrl ? String(cfg.serverUrl).replace(/\/$/, "") : "")
   const url = isAbsolute
     ? absolutePath
-    : `${baseUrl}${String(path).startsWith("/") ? "" : "/"}${String(path)}`
+    : transport?.url ||
+      `${baseUrl}${String(normalizedPath).startsWith("/") ? "" : "/"}${String(normalizedPath)}`
   const sameOriginAbsolute = isAbsolute
     ? isSameOriginAbsoluteUrlForConfiguredServer(absolutePath, cfg)
     : false
@@ -813,7 +835,7 @@ async function* bgStreamDirect<
     if (kl === "x-api-key" || kl === "authorization") delete resolvedHeaders[k]
   }
 
-  if (!shouldSkipAuth && cfg?.authMode === "single-user") {
+  if (!shouldSkipAuth && !hostedMode && cfg?.authMode === "single-user") {
     const key = String(cfg?.apiKey || "").trim()
     if (!key) {
       throw new Error(
@@ -821,7 +843,7 @@ async function* bgStreamDirect<
       )
     }
     resolvedHeaders["X-API-KEY"] = key
-  } else if (!shouldSkipAuth && cfg?.authMode === "multi-user") {
+  } else if (!shouldSkipAuth && !hostedMode && cfg?.authMode === "multi-user") {
     const token = String(cfg?.accessToken || "").trim()
     if (token) {
       resolvedHeaders["Authorization"] = `Bearer ${token}`
@@ -840,7 +862,11 @@ async function* bgStreamDirect<
     resolvedHeaders["Connection"] || "keep-alive"
 
   const controller = new AbortController()
-  const idleMs = deriveStreamIdleTimeout(cfg, path as string, Number(streamIdleTimeoutMs))
+  const idleMs = deriveStreamIdleTimeout(
+    cfg,
+    normalizedPath as string,
+    Number(streamIdleTimeoutMs)
+  )
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let idleError: Error | null = null
   const resetIdle = () => {
@@ -880,6 +906,7 @@ async function* bgStreamDirect<
   let resp = await fetchStream()
   if (
     !shouldSkipAuth &&
+    !hostedMode &&
     resp.status === 401 &&
     cfg?.authMode === "multi-user" &&
     cfg?.refreshToken
@@ -893,7 +920,18 @@ async function* bgStreamDirect<
       if (refreshResp.ok) {
         const tokens = await refreshResp.json().catch(() => null)
         if (tokens?.access_token) {
-          const updated = { ...(cfg || {}), accessToken: tokens.access_token }
+          const latestCfg =
+            (await storage
+              .get<Record<string, unknown>>("tldwConfig")
+              .catch(() => null)) || null
+          const updated = {
+            ...(latestCfg || cfg || {}),
+            accessToken: tokens.access_token,
+            refreshToken:
+              tokens?.refresh_token ||
+              latestCfg?.refreshToken ||
+              cfg?.refreshToken
+          }
           await storage.set("tldwConfig", updated)
           resolvedHeaders["Authorization"] = `Bearer ${tokens.access_token}`
           resp = await fetchStream()

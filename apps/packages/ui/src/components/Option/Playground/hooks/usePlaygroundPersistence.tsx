@@ -67,6 +67,25 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
   const [showServerPersistenceHint, setShowServerPersistenceHint] =
     React.useState(false)
   const serverSaveInFlightRef = React.useRef(false)
+  const historyRef = React.useRef(history)
+  const selectedCharacterRef = React.useRef(selectedCharacter)
+  const serverChatStateRef = React.useRef(serverChatState)
+  const serverChatSourceRef = React.useRef(serverChatSource)
+  const serverPersistenceHintSeenRef = React.useRef(serverPersistenceHintSeen)
+
+  React.useEffect(() => {
+    historyRef.current = history
+    selectedCharacterRef.current = selectedCharacter
+    serverChatStateRef.current = serverChatState
+    serverChatSourceRef.current = serverChatSource
+    serverPersistenceHintSeenRef.current = serverPersistenceHintSeen
+  }, [
+    history,
+    selectedCharacter,
+    serverChatState,
+    serverChatSource,
+    serverPersistenceHintSeen
+  ])
 
   const {
     persistenceTooltip,
@@ -178,17 +197,16 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
     if (serverSaveInFlightRef.current) return
     serverSaveInFlightRef.current = true
     try {
+      const snapshot = [...historyRef.current]
       if (
         !isConnectionReady ||
         temporaryChat ||
         serverChatId ||
-        history.length === 0
+        snapshot.length === 0
       ) {
         return
       }
       await tldwClient.initialize()
-
-      const snapshot = [...history]
       const firstUser = snapshot.find((m) => m.role === "user")
       const fallbackTitle = t(
         "playground:composer.persistence.serverDefaultTitle",
@@ -203,7 +221,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
         titleSource.length > 80 ? `${titleSource.slice(0, 77)}…` : titleSource
 
       let characterId: string | number | null =
-        (selectedCharacter as any)?.id ?? null
+        (selectedCharacterRef.current as any)?.id ?? null
 
       if (!characterId) {
         const DEFAULT_NAME = "Helpful AI Assistant"
@@ -252,6 +270,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
 
       if (characterId == null) {
         notificationApi.error({
+          key: "playground-server-character-required",
           message: t("error"),
           description: t(
             "playground:composer.persistence.serverCharacterRequired",
@@ -282,10 +301,11 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
       const created = await tldwClient.createChat({
         title,
         character_id: characterId,
-        state: serverChatState || "in-progress",
+        state: serverChatStateRef.current || "in-progress",
         source:
-          serverChatSource && serverChatSource.trim().length > 0
-            ? serverChatSource.trim()
+          serverChatSourceRef.current &&
+          serverChatSourceRef.current.trim().length > 0
+            ? serverChatSourceRef.current.trim()
             : undefined
       })
       const rawId = (created as any)?.id ?? (created as any)?.chat_id ?? created
@@ -297,10 +317,12 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
       setServerChatState(
         (created as any)?.state ??
           (created as any)?.conversation_state ??
-          serverChatState ??
+          serverChatStateRef.current ??
           "in-progress"
       )
-      setServerChatSource((created as any)?.source ?? serverChatSource ?? null)
+      setServerChatSource(
+        (created as any)?.source ?? serverChatSourceRef.current ?? null
+      )
       setServerChatVersion((created as any)?.version ?? null)
       invalidateServerChatHistory()
 
@@ -319,7 +341,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
         })
       }
 
-      if (!serverPersistenceHintSeen) {
+      if (!serverPersistenceHintSeenRef.current) {
         notificationApi.success({
           message: t(
             "playground:composer.persistence.serverSavedTitle",
@@ -336,6 +358,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
               "This keeps a durable record in server history so you can reopen the conversation later, access it from other browsers, and run server-side analytics over your chats."
             )
         })
+        serverPersistenceHintSeenRef.current = true
         setServerPersistenceHintSeen(true)
         setShowServerPersistenceHint(true)
       }
@@ -348,20 +371,15 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
       serverSaveInFlightRef.current = false
     }
   }, [
-    history,
     invalidateServerChatHistory,
     isConnectionReady,
     notificationApi,
-    selectedCharacter,
     temporaryChat,
     serverChatId,
     setServerChatId,
     navigate,
-    serverPersistenceHintSeen,
     setServerPersistenceHintSeen,
     t,
-    serverChatState,
-    serverChatSource,
     setServerChatState,
     setServerChatSource,
     setServerChatVersion
@@ -382,6 +400,7 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
     handleSaveChatToServer,
     history.length,
     isConnectionReady,
+    selectedCharacter?.id,
     serverChatId,
     temporaryChat
   ])

@@ -20,10 +20,16 @@ vi.mock("wxt/browser", () => ({
   }
 }))
 
-vi.mock("@/services/tldw/request-core", () => ({
-  tldwRequest: (...args: unknown[]) =>
-    (mocks.tldwRequest as (...args: unknown[]) => unknown)(...args)
-}))
+vi.mock("@/services/tldw/request-core", async () => {
+  const actual = await vi.importActual<typeof import("@/services/tldw/request-core")>(
+    "@/services/tldw/request-core"
+  )
+  return {
+    ...actual,
+    tldwRequest: (...args: unknown[]) =>
+      (mocks.tldwRequest as (...args: unknown[]) => unknown)(...args)
+  }
+})
 
 vi.mock("@/utils/safe-storage", () => ({
   createSafeStorage: () => ({
@@ -614,6 +620,164 @@ describe("background proxy fallback safety", () => {
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 
+  it("uses hosted WebUI stream transport without browser auth headers", async () => {
+    const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = "hosted"
+    mocks.sendMessage.mockResolvedValue(null)
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "https://ignored-hosted.example.com",
+          authMode: "multi-user",
+          accessToken: "stale-browser-token",
+          orgId: 17
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async () =>
+      new Response(
+        'data: {"event":"run_started","run_id":"run_hosted","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      if (originalDeploymentMode === undefined) {
+        delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+      } else {
+        process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+      }
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchSpy.mock.calls[0] as [RequestInfo | URL, RequestInit?]
+    const requestHeaders = (init?.headers || {}) as Record<string, string>
+    expect(url).toBe("/api/proxy/chat/completions")
+    expect(requestHeaders.Authorization).toBeUndefined()
+    expect(requestHeaders["X-TLDW-Org-Id"]).toBe("17")
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("uses resolved advanced transport origin for stream and refresh when serverUrl is unset", async () => {
+    const originalApiUrl = process.env.NEXT_PUBLIC_API_URL
+    const originalDeploymentMode = process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    const originalWindow = globalThis.window
+    delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+    process.env.NEXT_PUBLIC_API_URL = "https://api.example.test"
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        location: {
+          origin: "https://webui.example.test",
+          protocol: "https:"
+        }
+      },
+      configurable: true
+    })
+    mocks.sendMessage.mockResolvedValue(null)
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          authMode: "multi-user",
+          accessToken: "expired-access",
+          refreshToken: "refresh-token"
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const authHeader = String(
+        ((init?.headers || {}) as Record<string, string>).Authorization || ""
+      )
+      if (url === "https://api.example.test/api/v1/auth/refresh") {
+        return new Response(
+          JSON.stringify({
+            access_token: "fresh-access",
+            refresh_token: "fresh-refresh",
+            token_type: "bearer"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      }
+      if (
+        url === "https://api.example.test/api/v1/chat/completions" &&
+        authHeader === "Bearer expired-access"
+      ) {
+        return new Response("Could not validate credentials", {
+          status: 401,
+          headers: { "content-type": "text/plain" }
+        })
+      }
+      return new Response(
+        'data: {"event":"run_started","run_id":"run_advanced","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    })
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      if (originalApiUrl === undefined) delete process.env.NEXT_PUBLIC_API_URL
+      else process.env.NEXT_PUBLIC_API_URL = originalApiUrl
+      if (originalDeploymentMode === undefined) {
+        delete process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE
+      } else {
+        process.env.NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE = originalDeploymentMode
+      }
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true
+      })
+      vi.unstubAllGlobals()
+    }
+
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/v1/chat/completions"
+    )
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      "https://api.example.test/api/v1/auth/refresh"
+    )
+    expect(fetchSpy.mock.calls[2]?.[0]).toBe(
+      "https://api.example.test/api/v1/chat/completions"
+    )
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
   it("does not refresh or re-add auth for cross-origin absolute stream URLs", async () => {
     mocks.sendMessage.mockResolvedValue({ ok: false })
     mocks.storageGet.mockImplementation(async (key: string) => {
@@ -665,6 +829,94 @@ describe("background proxy fallback safety", () => {
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it("persists rotated refresh token during direct stream refresh retry", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: false })
+    let storageReadCount = 0
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        storageReadCount += 1
+        if (storageReadCount === 1) {
+          return {
+            serverUrl: "http://127.0.0.1:8000",
+            authMode: "multi-user",
+            accessToken: "expired-access",
+            refreshToken: "old-refresh",
+            orgId: 1
+          }
+        }
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "multi-user",
+          accessToken: "expired-access",
+          refreshToken: "old-refresh",
+          orgId: 99,
+          customFlag: true
+        }
+      }
+      return null
+    })
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith("/api/v1/auth/refresh")) {
+        return new Response(
+          JSON.stringify({
+            access_token: "new-access",
+            refresh_token: "new-refresh",
+            token_type: "bearer"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        )
+      }
+      const authHeader = String(
+        ((init?.headers || {}) as Record<string, string>).Authorization || ""
+      )
+      if (authHeader === "Bearer expired-access") {
+        return new Response("Could not validate credentials", {
+          status: 401,
+          headers: { "content-type": "text/plain" }
+        })
+      }
+      return new Response(
+        'data: {"event":"run_started","run_id":"run_refresh","seq":1,"data":{}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        }
+      )
+    })
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const chunks: string[] = []
+
+    try {
+      for await (const chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] }
+      })) {
+        chunks.push(chunk)
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    expect(mocks.storageSet).toHaveBeenCalledWith(
+      "tldwConfig",
+      expect.objectContaining({
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        orgId: 99,
+        customFlag: true
+      })
+    )
+    expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 
   it("falls back directly when runtime ping preflight times out", async () => {
