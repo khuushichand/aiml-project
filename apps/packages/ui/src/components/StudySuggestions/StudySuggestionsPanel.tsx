@@ -58,6 +58,31 @@ const mapRankReason = (value: unknown): TopicBuilderRankReason => {
   return "candidate"
 }
 
+const readTopicLabel = (raw: Record<string, unknown>): string => {
+  const label = raw.display_label ?? raw.canonical_label
+  return normalizeLabel(String(label || ""))
+}
+
+const readTopicId = (raw: Record<string, unknown>, index: number): string => {
+  const id = raw.id
+  const normalizedId = normalizeLabel(String(id || ""))
+  return normalizedId || `topic-${index + 1}`
+}
+
+const readEvidenceClass = (raw: Record<string, unknown>): string | null => {
+  const evidenceReasons = raw.evidence_reasons
+  if (Array.isArray(evidenceReasons)) {
+    const normalizedReasons = evidenceReasons
+      .map((reason) => normalizeLabel(String(reason || "")))
+      .filter(Boolean)
+    if (normalizedReasons.length > 0) {
+      return normalizedReasons.join(", ")
+    }
+  }
+
+  return normalizeLabel(String(raw.type || raw.source_type || "")) || null
+}
+
 const hasSourceAwareEvidence = (
   snapshot: StudySuggestionSnapshotResponse | null
 ): boolean => {
@@ -96,7 +121,7 @@ const buildTopicsFromSnapshot = (
         return null
       }
       const raw = topic as Record<string, unknown>
-      const label = normalizeLabel(String(raw.display_label || ""))
+      const label = readTopicLabel(raw)
       if (!label) {
         return null
       }
@@ -106,14 +131,13 @@ const buildTopicsFromSnapshot = (
           ? "exploratory"
           : normalizedRankReason
       return {
-        id: String(raw.id || `topic-${index + 1}`),
+        id: readTopicId(raw, index),
         label,
         rankReason,
         selected: raw.selected !== false,
-        evidenceClass:
-          options?.suppressSourceAwareAdjacency
-            ? "exploratory"
-            : normalizeLabel(String(raw.type || "")) || null,
+        evidenceClass: options?.suppressSourceAwareAdjacency
+          ? "exploratory"
+          : readEvidenceClass(raw),
         isManual: false
       }
     })
