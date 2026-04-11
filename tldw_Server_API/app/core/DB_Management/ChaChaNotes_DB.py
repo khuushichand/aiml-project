@@ -126,6 +126,7 @@ _SUPPORTED_NOTE_STUDIO_HANDWRITING_MODES = {"off", "accented"}
 _FLASHCARD_REVIEW_SESSION_STATUSES = frozenset({"active", "completed", "abandoned"})
 _FLASHCARD_REVIEW_MODES = frozenset({"due", "cram"})
 _FLASHCARD_REVIEW_SESSION_TIMEOUT = timedelta(minutes=30)
+_FLASHCARD_REVIEW_SESSION_JSON_FIELDS = ["source_bundle_json"]
 _SUPPORTED_WEB_CLIPPER_DESTINATIONS = {"note", "workspace", "both"}
 _SUPPORTED_WEB_CLIPPER_OUTCOME_STATES = {"saved", "saved_with_warnings", "partially_saved", "failed"}
 _SUPPORTED_WEB_CLIPPER_ENRICHMENT_TYPES = {"ocr", "vlm"}
@@ -1543,6 +1544,10 @@ CREATE TABLE IF NOT EXISTS flashcard_review_sessions(
   started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   completed_at     DATETIME,
+  cards_reviewed   INTEGER DEFAULT 0,
+  correct_count    INTEGER DEFAULT 0,
+  source_bundle_json TEXT,
+  study_pack_id    INTEGER,
   client_id        TEXT NOT NULL DEFAULT 'unknown'
 );
 CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key);
@@ -9492,10 +9497,25 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   last_activity_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   completed_at     DATETIME,
+                  cards_reviewed   INTEGER DEFAULT 0,
+                  correct_count    INTEGER DEFAULT 0,
+                  source_bundle_json TEXT,
+                  study_pack_id    INTEGER,
                   client_id        TEXT NOT NULL DEFAULT 'unknown'
                 )
                 """
             )
+            session_cols = {
+                str(row[1]): row for row in conn.execute("PRAGMA table_info('flashcard_review_sessions')").fetchall()
+            }
+            if "cards_reviewed" not in session_cols:
+                conn.execute("ALTER TABLE flashcard_review_sessions ADD COLUMN cards_reviewed INTEGER DEFAULT 0")
+            if "correct_count" not in session_cols:
+                conn.execute("ALTER TABLE flashcard_review_sessions ADD COLUMN correct_count INTEGER DEFAULT 0")
+            if "source_bundle_json" not in session_cols:
+                conn.execute("ALTER TABLE flashcard_review_sessions ADD COLUMN source_bundle_json TEXT")
+            if "study_pack_id" not in session_cols:
+                conn.execute("ALTER TABLE flashcard_review_sessions ADD COLUMN study_pack_id INTEGER")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_scope ON flashcard_review_sessions(scope_key)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_status ON flashcard_review_sessions(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_flashcard_review_sessions_deck ON flashcard_review_sessions(deck_id)")
@@ -9715,9 +9735,29 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   last_activity_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   completed_at TIMESTAMPTZ,
+                  cards_reviewed INTEGER DEFAULT 0,
+                  correct_count INTEGER DEFAULT 0,
+                  source_bundle_json TEXT,
+                  study_pack_id BIGINT,
                   client_id TEXT NOT NULL DEFAULT 'unknown'
                 )
                 """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_review_sessions ADD COLUMN IF NOT EXISTS cards_reviewed INTEGER DEFAULT 0",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_review_sessions ADD COLUMN IF NOT EXISTS correct_count INTEGER DEFAULT 0",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_review_sessions ADD COLUMN IF NOT EXISTS source_bundle_json TEXT",
+                connection=conn,
+            )
+            self.backend.execute(
+                "ALTER TABLE flashcard_review_sessions ADD COLUMN IF NOT EXISTS study_pack_id BIGINT",
                 connection=conn,
             )
             self.backend.execute(
@@ -10213,6 +10253,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed ensuring SQLite study pack sync triggers: {exc}") from exc  # noqa: TRY003
 
+    def _dedupe_suggestion_generation_links_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Collapse legacy duplicate active generation links before enforcing the v2 unique index."""
+        conn.execute(
+            """
+            WITH ranked AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY snapshot_id, target_service, target_type, selection_fingerprint
+                           ORDER BY CASE WHEN target_id LIKE 'pending:%' THEN 1 ELSE 0 END ASC, id DESC
+                       ) AS row_rank
+                  FROM suggestion_generation_links
+                 WHERE deleted = 0
+            )
+            UPDATE suggestion_generation_links
+               SET deleted = 1,
+                   last_modified = CURRENT_TIMESTAMP,
+                   client_id = COALESCE(NULLIF(TRIM(client_id), ''), 'migration'),
+                   version = version + 1
+             WHERE id IN (SELECT id FROM ranked WHERE row_rank > 1)
+            """
+        )
+
+    def _dedupe_suggestion_generation_links_postgres(self, conn) -> None:
+        """Collapse legacy duplicate active generation links before enforcing the v2 unique index."""
+        self.backend.execute(
+            """
+            WITH ranked AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY snapshot_id, target_service, target_type, selection_fingerprint
+                           ORDER BY CASE WHEN target_id LIKE 'pending:%' THEN 1 ELSE 0 END ASC, id DESC
+                       ) AS row_rank
+                  FROM suggestion_generation_links
+                 WHERE deleted = FALSE
+            )
+            UPDATE suggestion_generation_links AS links
+               SET deleted = TRUE,
+                   last_modified = CURRENT_TIMESTAMP,
+                   client_id = COALESCE(NULLIF(BTRIM(client_id), ''), 'migration'),
+                   version = version + 1
+              FROM ranked
+             WHERE links.id = ranked.id
+               AND ranked.row_rank > 1
+            """,
+            connection=conn,
+        )
+
     def _ensure_study_pack_schema_sqlite(self, conn: sqlite3.Connection) -> None:
         """Ensure study pack tables exist for SQLite."""
         try:
@@ -10330,16 +10417,12 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)"
             )
+            self._dedupe_suggestion_generation_links_sqlite(conn)
+            conn.execute("DROP INDEX IF EXISTS idx_suggestion_generation_links_unique_active")
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
-                    ON suggestion_generation_links(
-                        snapshot_id,
-                        target_service,
-                        target_type,
-                        target_id,
-                        selection_fingerprint
-                    )
+                    ON suggestion_generation_links(snapshot_id, target_service, target_type, selection_fingerprint)
                  WHERE deleted = 0
                 """
             )
@@ -10452,16 +10535,24 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_status ON suggestion_snapshots(status)",
             "CREATE INDEX IF NOT EXISTS idx_suggestion_snapshots_deleted ON suggestion_snapshots(deleted)",
             "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_snapshot_id ON suggestion_generation_links(snapshot_id)",
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
-                ON suggestion_generation_links(snapshot_id, target_service, target_type, target_id, selection_fingerprint)
-             WHERE deleted = FALSE
-            """,
             "CREATE INDEX IF NOT EXISTS idx_suggestion_generation_links_deleted ON suggestion_generation_links(deleted)",
         ]
         try:
             for statement in statements:
                 self.backend.execute(statement, connection=conn)
+            self._dedupe_suggestion_generation_links_postgres(conn)
+            self.backend.execute(
+                "DROP INDEX IF EXISTS idx_suggestion_generation_links_unique_active",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestion_generation_links_unique_active
+                    ON suggestion_generation_links(snapshot_id, target_service, target_type, selection_fingerprint)
+                 WHERE deleted = FALSE
+                """,
+                connection=conn,
+            )
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise SchemaError(f"Failed ensuring PostgreSQL study pack schema: {exc}") from exc  # noqa: TRY003
 
@@ -26241,6 +26332,92 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise InputError("status must be one of: active, completed, abandoned")  # noqa: TRY003
         return normalized
 
+    @staticmethod
+    def _normalize_flashcard_review_session_source_bundle(source_bundle_value: Any) -> list[dict[str, Any]]:
+        if isinstance(source_bundle_value, dict) and isinstance(source_bundle_value.get("items"), list):
+            source_bundle_value = source_bundle_value.get("items")
+
+        if isinstance(source_bundle_value, list):
+            return [dict(entry) for entry in source_bundle_value if isinstance(entry, dict)]
+        if isinstance(source_bundle_value, dict):
+            return [dict(source_bundle_value)]
+        return []
+
+    def _deserialize_flashcard_review_session_row(self, row: Any) -> dict[str, Any] | None:
+        item = self._deserialize_row_fields(row, _FLASHCARD_REVIEW_SESSION_JSON_FIELDS)
+        if not item:
+            return None
+
+        if item.get("cards_reviewed") is not None:
+            item["cards_reviewed"] = int(item["cards_reviewed"])
+        if item.get("correct_count") is not None:
+            item["correct_count"] = int(item["correct_count"])
+        if item.get("study_pack_id") is not None:
+            item["study_pack_id"] = int(item["study_pack_id"])
+
+        normalized_bundle = self._normalize_flashcard_review_session_source_bundle(item.get("source_bundle_json"))
+        item["source_bundle_json"] = normalized_bundle or None
+        item["source_bundle"] = normalized_bundle
+        return item
+
+    def _get_flashcard_review_session_row_for_conn(self, conn: Any, session_id: int) -> dict[str, Any] | None:
+        row = conn.execute(
+            """
+            SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
+                   started_at, last_activity_at, completed_at, client_id,
+                   cards_reviewed, correct_count, source_bundle_json, study_pack_id
+              FROM flashcard_review_sessions
+             WHERE id = ?
+            """,
+            (int(session_id),),
+        ).fetchone()
+        return self._deserialize_flashcard_review_session_row(row) if row else None
+
+    def _get_flashcard_review_session_reconstructed_aggregates(self, conn: Any, session_id: int) -> tuple[int, int]:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cards_reviewed,
+                   COALESCE(SUM(CASE WHEN rating >= 3 THEN 1 ELSE 0 END), 0) AS correct_count
+              FROM flashcard_reviews
+             WHERE review_session_id = ?
+            """,
+            (int(session_id),),
+        ).fetchone()
+        if not row:
+            return 0, 0
+        return int(row["cards_reviewed"] or 0), int(row["correct_count"] or 0)
+
+    def _repair_flashcard_review_session_aggregates_if_unchanged(
+        self,
+        conn: Any,
+        session_id: int,
+        *,
+        expected_cards_reviewed: int | None,
+        expected_correct_count: int | None,
+        repaired_cards_reviewed: int,
+        repaired_correct_count: int,
+    ) -> bool:
+        cursor = conn.execute(
+            """
+            UPDATE flashcard_review_sessions
+               SET cards_reviewed = ?,
+                   correct_count = ?
+             WHERE id = ?
+               AND ((cards_reviewed IS NULL AND ? IS NULL) OR cards_reviewed = ?)
+               AND ((correct_count IS NULL AND ? IS NULL) OR correct_count = ?)
+            """,
+            (
+                repaired_cards_reviewed,
+                repaired_correct_count,
+                int(session_id),
+                expected_cards_reviewed,
+                expected_cards_reviewed,
+                expected_correct_count,
+                expected_correct_count,
+            ),
+        )
+        return max(0, int(getattr(cursor, "rowcount", 0) or 0)) > 0
+
     def abandon_stale_flashcard_review_sessions(self, *, scope_key: str | None = None) -> int:
         """Mark active review sessions as abandoned when inactive for over 30 minutes."""
         cutoff = to_iso_z(datetime.now(timezone.utc) - _FLASHCARD_REVIEW_SESSION_TIMEOUT) or self._get_current_utc_timestamp_iso()
@@ -26272,7 +26449,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query_parts = [
             """
             SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
-                   started_at, last_activity_at, completed_at, client_id
+                   started_at, last_activity_at, completed_at, client_id,
+                   cards_reviewed, correct_count, source_bundle_json, study_pack_id
               FROM flashcard_review_sessions
              WHERE 1 = 1
             """
@@ -26290,7 +26468,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         query_parts.append("ORDER BY last_activity_at DESC, started_at DESC, id DESC LIMIT ?")
         params.append(max(1, int(limit)))
         cursor = self.execute_query(" ".join(query_parts), tuple(params))
-        return [dict(row) for row in cursor.fetchall()]
+        return [
+            session
+            for row in cursor.fetchall()
+            if (session := self._deserialize_flashcard_review_session_row(row)) is not None
+        ]
 
     def get_or_create_flashcard_review_session(
         self,
@@ -26314,7 +26496,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 rows = conn.execute(
                     """
                     SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
-                           started_at, last_activity_at, completed_at, client_id
+                           started_at, last_activity_at, completed_at, client_id,
+                           cards_reviewed, correct_count, source_bundle_json, study_pack_id
                       FROM flashcard_review_sessions
                      WHERE scope_key = ? AND status = 'active'
                      ORDER BY last_activity_at DESC, started_at DESC, id DESC
@@ -26322,7 +26505,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     (normalized_scope_key,),
                 ).fetchall()
                 if rows:
-                    authoritative = dict(rows[0])
+                    authoritative = self._deserialize_flashcard_review_session_row(rows[0]) or {}
                     if len(rows) > 1:
                         duplicate_ids = [int(row["id"]) for row in rows[1:]]
                         placeholders = ", ".join("?" for _ in duplicate_ids)
@@ -26346,9 +26529,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         """
                         INSERT INTO flashcard_review_sessions(
                             deck_id, review_mode, tag_filter, scope_key, status,
-                            started_at, last_activity_at, completed_at, client_id
+                            started_at, last_activity_at, completed_at, cards_reviewed,
+                            correct_count, source_bundle_json, study_pack_id, client_id
                         )
-                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, 0, 0, NULL, NULL, ?)
                         RETURNING id
                         """,
                         (
@@ -26368,9 +26552,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         """
                         INSERT INTO flashcard_review_sessions(
                             deck_id, review_mode, tag_filter, scope_key, status,
-                            started_at, last_activity_at, completed_at, client_id
+                            started_at, last_activity_at, completed_at, cards_reviewed,
+                            correct_count, source_bundle_json, study_pack_id, client_id
                         )
-                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, ?)
+                        VALUES(?, ?, ?, ?, 'active', ?, ?, NULL, 0, 0, NULL, NULL, ?)
                         """,
                         (
                             int(deck_id) if deck_id is not None else None,
@@ -26388,13 +26573,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 row = conn.execute(
                     """
                     SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
-                           started_at, last_activity_at, completed_at, client_id
+                           started_at, last_activity_at, completed_at, client_id,
+                           cards_reviewed, correct_count, source_bundle_json, study_pack_id
                       FROM flashcard_review_sessions
                      WHERE id = ?
                     """,
                     (session_id,),
                 ).fetchone()
-                return dict(row)
+                return self._deserialize_flashcard_review_session_row(row) or {}
         except sqlite3.Error as exc:
             raise CharactersRAGDBError(f"Failed to get or create flashcard review session: {exc}") from exc  # noqa: TRY003
         except BackendDatabaseError as exc:
@@ -26405,14 +26591,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         cursor = self.execute_query(
             """
             SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
-                   started_at, last_activity_at, completed_at, client_id
+                   started_at, last_activity_at, completed_at, client_id,
+                   cards_reviewed, correct_count, source_bundle_json, study_pack_id
               FROM flashcard_review_sessions
              WHERE id = ?
             """,
             (int(session_id),),
         )
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return self._deserialize_flashcard_review_session_row(row) if row else None
 
     def mark_flashcard_review_session_completed(self, session_id: int) -> dict[str, Any]:
         """Mark a persisted review session as completed."""
@@ -26434,17 +26621,115 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             row = self.execute_query(
                 """
                 SELECT id, deck_id, review_mode, tag_filter, scope_key, status,
-                       started_at, last_activity_at, completed_at, client_id
+                       started_at, last_activity_at, completed_at, client_id,
+                       cards_reviewed, correct_count, source_bundle_json, study_pack_id
                   FROM flashcard_review_sessions
                  WHERE id = ?
                 """,
                 (int(session_id),),
             ).fetchone()
-            return dict(row)
+            return self._deserialize_flashcard_review_session_row(row) or {}
         except CharactersRAGDBError:
             raise
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
             raise CharactersRAGDBError(f"Failed to mark flashcard review session completed: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_review_session_rollup(
+        self,
+        session_id: int,
+        *,
+        repair_session_aggregates: bool = True,
+    ) -> dict[str, Any] | None:
+        """Return a merged session view that trusts review rows when cached aggregates drift."""
+        try:
+            with self.transaction() as conn:
+                session = self._get_flashcard_review_session_row_for_conn(conn, int(session_id))
+                if not session:
+                    return None
+
+                reconstructed_cards_reviewed, reconstructed_correct_count = (
+                    self._get_flashcard_review_session_reconstructed_aggregates(conn, int(session_id))
+                )
+                session_cards_reviewed = session.get("cards_reviewed")
+                session_correct_count = session.get("correct_count")
+                session_aggregates_match = (
+                    session_cards_reviewed is not None
+                    and session_correct_count is not None
+                    and session_cards_reviewed >= 0
+                    and session_correct_count >= 0
+                    and session_correct_count <= session_cards_reviewed
+                    and session_cards_reviewed == reconstructed_cards_reviewed
+                    and session_correct_count == reconstructed_correct_count
+                )
+
+                if session_aggregates_match:
+                    session["aggregate_source"] = "session"
+                    return session
+
+                if repair_session_aggregates:
+                    repaired = self._repair_flashcard_review_session_aggregates_if_unchanged(
+                        conn,
+                        int(session_id),
+                        expected_cards_reviewed=session_cards_reviewed,
+                        expected_correct_count=session_correct_count,
+                        repaired_cards_reviewed=reconstructed_cards_reviewed,
+                        repaired_correct_count=reconstructed_correct_count,
+                    )
+                    if repaired:
+                        session["cards_reviewed"] = reconstructed_cards_reviewed
+                        session["correct_count"] = reconstructed_correct_count
+                        session["aggregate_source"] = "reconstructed"
+                        return session
+
+                    session = self._get_flashcard_review_session_row_for_conn(conn, int(session_id))
+                    if not session:
+                        return None
+                    reconstructed_cards_reviewed, reconstructed_correct_count = (
+                        self._get_flashcard_review_session_reconstructed_aggregates(conn, int(session_id))
+                    )
+                    session_cards_reviewed = session.get("cards_reviewed")
+                    session_correct_count = session.get("correct_count")
+                    session_aggregates_match = (
+                        session_cards_reviewed is not None
+                        and session_correct_count is not None
+                        and session_cards_reviewed >= 0
+                        and session_correct_count >= 0
+                        and session_correct_count <= session_cards_reviewed
+                        and session_cards_reviewed == reconstructed_cards_reviewed
+                        and session_correct_count == reconstructed_correct_count
+                    )
+                    if session_aggregates_match:
+                        session["aggregate_source"] = "session"
+                        return session
+
+                session["cards_reviewed"] = reconstructed_cards_reviewed
+                session["correct_count"] = reconstructed_correct_count
+                session["aggregate_source"] = "reconstructed"
+                return session
+        except CharactersRAGDBError:
+            raise
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise CharactersRAGDBError(f"Failed to fetch flashcard review session rollup: {exc}") from exc  # noqa: TRY003
+
+    def get_flashcard_reviewed_cards(self, session_id: int) -> list[dict[str, Any]]:
+        """Return reviewed flashcard metadata for a session in review order."""
+        cursor = self.execute_query(
+            """
+            SELECT f.uuid,
+                   MAX(f.tags_json) AS tags_json,
+                   MAX(f.source_ref_type) AS source_ref_type,
+                   MAX(f.source_ref_id) AS source_ref_id,
+                   MAX(d.name) AS deck_name
+              FROM flashcard_reviews fr
+              JOIN flashcards f ON f.id = fr.card_id
+              LEFT JOIN decks d ON d.id = f.deck_id
+             WHERE fr.review_session_id = ?
+             GROUP BY f.uuid
+             ORDER BY MIN(fr.id)
+            """,
+            (int(session_id),),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_latest_flashcard_review(self, card_uuid: str) -> dict[str, Any] | None:
         """Return the most recent review row for a flashcard, including nullable session linkage."""
@@ -26591,13 +26876,16 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                 )
                 if resolved_review_session_id is not None:
+                    correct_increment = 1 if int(rating) >= 3 else 0
                     conn.execute(
                         """
                         UPDATE flashcard_review_sessions
-                           SET last_activity_at = ?
+                           SET last_activity_at = ?,
+                               cards_reviewed = COALESCE(cards_reviewed, 0) + 1,
+                               correct_count = COALESCE(correct_count, 0) + ?
                          WHERE id = ?
                         """,
-                        (now, resolved_review_session_id),
+                        (now, correct_increment, resolved_review_session_id),
                     )
                 updated = conn.execute(
                     """
@@ -27307,6 +27595,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "selected",
             "display_label",
             "label",
+            "topic_key",
+            "normalization_version",
+            "evidence_reasons",
             "source_id",
             "source_type",
             "source_ref",
@@ -27316,6 +27607,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             "available",
             "enabled",
             "count",
+            "source_count",
             "total",
             "id",
             "ids",
@@ -27342,6 +27634,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         "_status",
     )
     _SAFE_SUGGESTION_PAYLOAD_MAX_TEXT_LENGTH = 256
+    _SAFE_SUGGESTION_EVIDENCE_REASONS = frozenset(
+        {
+            "missed_question",
+            "source_citation",
+            "tag_match",
+            "derived_label",
+        }
+    )
 
     @classmethod
     def _is_safe_suggestion_payload_key(cls, key: str) -> bool:
@@ -27349,6 +27649,28 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return normalized in cls._SAFE_SUGGESTION_PAYLOAD_EXACT_KEYS or normalized.endswith(
             cls._SAFE_SUGGESTION_PAYLOAD_SUFFIXES
         )
+
+    @classmethod
+    def _sanitize_suggestion_evidence_reasons(cls, value: Any) -> list[str] | None:
+        """Persist only structured evidence reason codes from the approved set."""
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            raw_items: list[Any] = [value]
+        elif isinstance(value, list | tuple | set):
+            raw_items = list(value)
+        else:
+            return None
+
+        sanitized: list[str] = []
+        for item in raw_items:
+            reason = str(item or "").strip().lower()
+            if not reason or reason not in cls._SAFE_SUGGESTION_EVIDENCE_REASONS:
+                continue
+            if reason not in sanitized:
+                sanitized.append(reason)
+        return sanitized or None
 
     @classmethod
     def _sanitize_suggestion_payload(cls, payload: Any, *, parent_key: str | None = None) -> Any:
@@ -27359,7 +27681,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 key_text = str(raw_key)
                 if not cls._is_safe_suggestion_payload_key(key_text):
                     continue
-                cleaned_value = cls._sanitize_suggestion_payload(value, parent_key=key_text)
+                if key_text.strip().lower() == "evidence_reasons":
+                    cleaned_value = cls._sanitize_suggestion_evidence_reasons(value)
+                else:
+                    cleaned_value = cls._sanitize_suggestion_payload(value, parent_key=key_text)
                 if cleaned_value in (None, {}, []):
                     continue
                 sanitized[key_text] = cleaned_value
@@ -27570,7 +27895,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise ConflictError(
                     "Suggestion generation link already exists",
                     entity="suggestion_generation_links",
-                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{selection_fingerprint}",
                 ) from exc
             raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
         except BackendDatabaseError as exc:
@@ -27578,7 +27903,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 raise ConflictError(
                     "Suggestion generation link already exists",
                     entity="suggestion_generation_links",
-                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{target_id}:{selection_fingerprint}",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{selection_fingerprint}",
                 ) from exc
             raise CharactersRAGDBError(f"Failed to create suggestion generation link: {exc}") from exc  # noqa: TRY003
         except sqlite3.Error as exc:
@@ -27613,6 +27938,113 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         )
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    def replace_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        target_id: str,
+        selection_fingerprint: str,
+    ) -> int:
+        """Upsert a direct generation link without accumulating multiple active rows."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id
+                      FROM suggestion_generation_links
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                     ORDER BY id DESC
+                    """,
+                    (
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        selection_fingerprint,
+                    ),
+                ).fetchall()
+                if rows:
+                    keeper_id = int(rows[0]["id"])
+                    updated = conn.execute(
+                        """
+                        UPDATE suggestion_generation_links
+                           SET target_id = ?, last_modified = ?, version = version + 1, client_id = ?
+                         WHERE id = ? AND deleted = 0
+                        """,
+                        (
+                            str(target_id),
+                            now,
+                            self.client_id,
+                            keeper_id,
+                        ),
+                    ).rowcount
+                    stale_ids = [int(row["id"]) for row in rows[1:]]
+                    for stale_id in stale_ids:
+                        conn.execute(
+                            """
+                            UPDATE suggestion_generation_links
+                               SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                             WHERE id = ? AND deleted = 0
+                            """,
+                            (True, now, self.client_id, stale_id),
+                        )
+                    if updated <= 0:
+                        raise CharactersRAGDBError("Failed to update existing suggestion generation link")  # noqa: TRY003
+                    return keeper_id
+
+                insert_sql = (
+                    "INSERT INTO suggestion_generation_links("
+                    "snapshot_id, target_service, target_type, target_id, selection_fingerprint, "
+                    "created_at, last_modified, deleted, client_id, version"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                params = (
+                    int(snapshot_id),
+                    target_service,
+                    target_type,
+                    str(target_id),
+                    selection_fingerprint,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    link_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    link_id = int(cursor.lastrowid) if cursor.lastrowid is not None else None
+                if link_id is None:
+                    raise CharactersRAGDBError("Failed to determine suggestion generation link ID after insert")  # noqa: TRY003
+                return link_id
+        except sqlite3.IntegrityError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to replace suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Suggestion generation link already exists",
+                    entity="suggestion_generation_links",
+                    identifier=f"{snapshot_id}:{target_service}:{target_type}:{selection_fingerprint}",
+                ) from exc
+            raise CharactersRAGDBError(f"Failed to replace suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to replace suggestion generation link: {exc}") from exc  # noqa: TRY003
 
     def find_suggestion_generation_link_by_fingerprint(
         self,
@@ -27686,6 +28118,44 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to finalize suggestion generation link: {exc}") from exc  # noqa: TRY003
+
+    def soft_delete_suggestion_generation_link(
+        self,
+        *,
+        snapshot_id: int,
+        target_service: str,
+        target_type: str,
+        selection_fingerprint: str,
+    ) -> int:
+        """Soft-delete active generation links matching a snapshot fingerprint."""
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                updated = conn.execute(
+                    """
+                    UPDATE suggestion_generation_links
+                       SET deleted = ?, last_modified = ?, version = version + 1, client_id = ?
+                     WHERE snapshot_id = ?
+                       AND target_service = ?
+                       AND target_type = ?
+                       AND selection_fingerprint = ?
+                       AND deleted = 0
+                    """,
+                    (
+                        True,
+                        now,
+                        self.client_id,
+                        int(snapshot_id),
+                        target_service,
+                        target_type,
+                        selection_fingerprint,
+                    ),
+                ).rowcount
+            return int(updated)
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete suggestion generation link: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to soft-delete suggestion generation link: {exc}") from exc  # noqa: TRY003
 
     def release_suggestion_generation_link_reservation(
         self,
