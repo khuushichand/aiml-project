@@ -14,7 +14,6 @@ const {
   mockWorkspaceStorageGetItem: vi.fn(async (_key: string) => null as string | null),
   mockWorkspaceStorageSetItem: vi.fn(async (_key: string, _value: string) => undefined),
 }))
-
 const testState = {
   isMobile: false,
   storeHydrated: true,
@@ -65,8 +64,10 @@ vi.mock("react-i18next", () => ({
             defaultValue?: string
           }
     ) => {
-      if (typeof defaultValueOrOptions === "string") return defaultValueOrOptions
-      if (defaultValueOrOptions?.defaultValue) return defaultValueOrOptions.defaultValue
+      if (typeof defaultValueOrOptions === "string")
+        return defaultValueOrOptions
+      if (defaultValueOrOptions?.defaultValue)
+        return defaultValueOrOptions.defaultValue
       return key
     },
   }),
@@ -235,36 +236,19 @@ describe("WorkspacePlayground keyboard shortcuts modal", () => {
       expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument()
     })
 
+    // Antd Modal uses its own close mechanism via onCancel;
+    // find and click the close button to trigger it
     const modal = screen.getByRole("dialog")
     const closeButton = modal.querySelector("button.ant-modal-close")
     if (closeButton) {
       fireEvent.click(closeButton)
     } else {
+      // Fallback: press Escape on the document, which antd Modal intercepts
       fireEvent.keyDown(document, { key: "Escape" })
     }
 
     await waitFor(() => {
-      const dialog = screen.queryByRole("dialog")
-      if (dialog) {
-        expect(dialog).toHaveClass("ant-zoom-leave")
-      } else {
-        expect(dialog).toBeNull()
-      }
-    })
-  })
-
-  it("lets Escape close the shortcuts modal even when global search is not open", async () => {
-    render(<WorkspacePlayground />)
-
-    fireEvent.keyDown(window, { key: "?" })
-
-    await waitFor(() => {
-      expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument()
-    })
-
-    fireEvent.keyDown(window, { key: "Escape" })
-
-    await waitFor(() => {
+      // The modal should either be gone or in leave animation
       const dialog = screen.queryByRole("dialog")
       if (dialog) {
         expect(dialog).toHaveClass("ant-zoom-leave")

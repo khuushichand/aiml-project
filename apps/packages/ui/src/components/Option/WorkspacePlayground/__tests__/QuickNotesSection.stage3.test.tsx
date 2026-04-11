@@ -295,5 +295,4 @@ describe("QuickNotesSection Stage 3 authoring and conflict recovery", () => {
     })
     expect(screen.getByText("Unsaved")).toBeInTheDocument()
   })
-
 })

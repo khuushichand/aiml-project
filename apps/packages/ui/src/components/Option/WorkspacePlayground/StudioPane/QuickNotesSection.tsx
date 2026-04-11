@@ -769,7 +769,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
       keywords: [...currentNote.keywords]
     }
     const previousKeywordsInput = keywordsInput
-      const undoHandle = scheduleWorkspaceUndoAction({
+    const undoHandle = scheduleWorkspaceUndoAction({
       apply: () => {
         hideSavedIndicator()
         clearCurrentNote()
@@ -1094,7 +1094,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
                 {t("playground:studio.unsaved", "Unsaved")}
               </span>
             )}
-            {showSavedIndicator && (
+            {showSavedIndicator && !currentNote.isDirty && (
               <span className="flex items-center gap-1 text-xs text-success" data-testid="quick-notes-saved-indicator">
                 <Check className="h-3 w-3" />
                 {t("playground:studio.saved", "Saved")}
@@ -1122,7 +1122,7 @@ export const QuickNotesSection: React.FC<QuickNotesSectionProps> = ({ onCollapse
             <FolderOpen className="h-4 w-4" />
             {t("playground:studio.loadNoteTitle", "Load Note")}
           </span>
-  }
+        }
         open={isLoadModalOpen}
         onCancel={() => setIsLoadModalOpen(false)}
         footer={null}

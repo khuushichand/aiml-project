@@ -1794,7 +1794,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
         return
       }
 
-      if (event.key === "Escape" && globalSearchOpen) {
+      if (event.key === "Escape") {
         event.preventDefault()
         closeGlobalSearch()
         return
@@ -1835,7 +1835,6 @@ const WorkspacePlaygroundBody: React.FC = () => {
     focusNewNoteTitle,
     focusWorkspaceNote,
     focusWorkspacePane,
-    globalSearchOpen,
     startNewNoteWithUndo,
     t
   ])
@@ -2377,6 +2376,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
           )}
         </div>
       )}
+
+
       {/* Mobile vs desktop layout */}
       {isMobile ? (
         <>
