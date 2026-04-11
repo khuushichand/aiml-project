@@ -460,6 +460,39 @@ async def test_quizzes_generate_fails_when_no_generated_questions_persist(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_quizzes_generate_preserves_empty_generation_error_when_cleanup_returns_false(tmp_path: Path):
+    mod = QuizzesModule(ModuleConfig(name="quizzes"))
+
+    class CleanupFailureDB(FakeQuizzesDB):
+        def create_question(self, *args: Any, **kwargs: Any):  # type: ignore[override]
+            raise ValueError("invalid generated question")
+
+        def delete_quiz(self, quiz_id: int, hard_delete: bool = False, expected_version: int | None = None):  # type: ignore[override]
+            return False
+
+    fake_db = CleanupFailureDB()
+    mod._open_db = lambda ctx: fake_db  # type: ignore[attr-defined]
+
+    ctx = SimpleNamespace(db_paths={"media": str(tmp_path / "media.db"), "chacha": str(tmp_path / "chacha.db")}, client_id="test")
+
+    mod._get_media_content = lambda *_args, **_kwargs: "Content"  # type: ignore[attr-defined]
+
+    async def _fake_llm(_prompt: str, *, provider: str, model: str | None):
+        return json.dumps([
+            {"question_type": "multiple_choice", "question_text": "Q?", "options": ["A", "B"], "correct_answer": 0}
+        ])
+
+    mod._call_llm = _fake_llm  # type: ignore[attr-defined]
+
+    with pytest.raises(ValueError, match="no valid questions were created"):
+        await mod.execute_tool(
+            "quizzes.generate",
+            {"media_id": 1, "num_questions": 1},
+            context=ctx,
+        )
+
+
+@pytest.mark.asyncio
 async def test_quizzes_generate_cleans_up_quiz_after_unexpected_question_persistence_error(tmp_path: Path):
     mod = QuizzesModule(ModuleConfig(name="quizzes"))
 

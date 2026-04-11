@@ -475,13 +475,19 @@ class QuizzesModule(BaseModule):
         if order_index is not None and (not isinstance(order_index, int) or order_index < 0):
             raise ValueError("order_index must be a non-negative integer")
 
-    def _cleanup_generated_quiz(self, db: CharactersRAGDB, quiz_id: int, *, reason: str) -> None:
+    def _cleanup_generated_quiz(self, db: CharactersRAGDB, quiz_id: int, *, reason: str) -> bool:
         try:
             deleted = db.delete_quiz(quiz_id, hard_delete=True)
-        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
-            raise RuntimeError(f"Failed to clean up generated quiz after {reason}") from exc
+        except Exception as exc:
+            logger.error(
+                f"Exception during cleanup of generated quiz {quiz_id} after {reason}: {exc}",
+                exc_info=True,
+            )
+            return False
         if not deleted:
-            raise RuntimeError(f"Failed to clean up generated quiz after {reason}")
+            logger.error(f"Failed to clean up generated quiz {quiz_id} after {reason}")
+            return False
+        return True
 
     async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         args = self.sanitize_input(arguments)
@@ -1123,14 +1129,11 @@ Return ONLY the JSON array, no other text."""
                     except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Failed to create question {i}: {e}")
             except Exception:
-                try:
-                    self._cleanup_generated_quiz(
-                        db,
-                        quiz_id,
-                        reason="unexpected question persistence failure",
-                    )
-                except RuntimeError as cleanup_exc:
-                    logger.warning(f"Failed to clean up generated quiz {quiz_id} after unexpected error: {cleanup_exc}")
+                self._cleanup_generated_quiz(
+                    db,
+                    quiz_id,
+                    reason="unexpected question persistence failure",
+                )
                 raise
 
             if not created_questions:

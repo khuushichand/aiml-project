@@ -32,7 +32,7 @@ FROM python:3.11-slim
 
 # Security: Run as non-root user
 RUN useradd -m -u 1000 -s /bin/bash mcp && \
-    mkdir -p /app /data/databases /data/logs /data/cache && \
+    mkdir -p /app /data/databases /data/logs /data/cache /data/media /data/transcripts && \
     chown -R mcp:mcp /app /data
 
 # Install runtime dependencies
@@ -51,14 +51,6 @@ WORKDIR /app
 
 # Copy application code
 COPY --chown=mcp:mcp tldw_Server_API/app /app
-
-# Create necessary directories
-RUN mkdir -p \
-    /data/databases \
-    /data/logs \
-    /data/cache \
-    /data/media \
-    /data/transcripts
 
 # Environment variables (defaults - override in deployment)
 ENV PYTHONPATH=/app \
