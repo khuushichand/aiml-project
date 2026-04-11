@@ -17,7 +17,11 @@ import {
 import type { Page } from "@playwright/test"
 import { SpeechPage } from "../../utils/page-objects/SpeechPage"
 import { expectApiCall } from "../../utils/api-assertions"
-import { getAntdSelectTrigger, getVisibleAntdSelectDropdown, seedAuth } from "../../utils/helpers"
+import {
+  getAntdSelectTrigger,
+  getVisibleAntdSelectDropdown,
+  seedAuth
+} from "../../utils/helpers"
 
 async function openSpeechInputSourcePicker(page: Page) {
   const inputSourcePicker = getAntdSelectTrigger(page, {
@@ -26,7 +30,7 @@ async function openSpeechInputSourcePicker(page: Page) {
   await expect(inputSourcePicker).toBeVisible()
   await inputSourcePicker.click({ force: true })
   const dropdown = getVisibleAntdSelectDropdown(page)
-  await dropdown.waitFor({ state: "visible", timeout: 5_000 })
+  await expect(dropdown).toBeVisible()
   return dropdown
 }
 

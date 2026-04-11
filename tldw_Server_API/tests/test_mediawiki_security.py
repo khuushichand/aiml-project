@@ -3,11 +3,11 @@ Security tests for MediaWiki path traversal vulnerabilities.
 Tests ensure that all file operations are protected against path traversal attacks.
 """
 
-import pytest
-import tempfile
 import os
+import tempfile
 from pathlib import Path
 
+import pytest
 from tldw_Server_API.app.core.Ingestion_Media_Processing.MediaWiki.Media_Wiki import (
     validate_file_path,
     sanitize_wiki_name,
@@ -162,11 +162,11 @@ class TestPathTraversalProtection:
 
         """Test that checkpoint paths are protected."""
         # Test path traversal in wiki name
-        with pytest.raises(InvalidStoragePathError):
+        with pytest.raises(ValueError, match="Only alphanumeric"):
             get_safe_checkpoint_path("../evil")
 
         # Test null byte in wiki name
-        with pytest.raises(InvalidStoragePathError):
+        with pytest.raises(ValueError, match="null byte"):
             get_safe_checkpoint_path("test\x00wiki")
 
     def test_checkpoint_path_valid(self):
@@ -229,7 +229,7 @@ class TestPathTraversalProtection:
         """Test that file validation works for normal sized files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a file in the temp directory
-            test_file = Path(tmpdir) / "test.txt"
+            test_file = Path(tmpdir) / "test.xml"
             test_file.write_text("test content")
 
             # This should succeed - file exists, is small, and we specify the allowed dir
