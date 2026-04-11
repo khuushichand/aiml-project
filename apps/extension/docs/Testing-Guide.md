@@ -32,7 +32,7 @@ This document explains how to run and understand the test suite for this repo, a
 - **Playwright + Chromium**
   - If Chromium is not installed for Playwright, run: `npx playwright install chromium`.
 - **Build tooling**
-  - Global setup prefers `npm run build:chrome:prod`; falls back to `bun run build:chrome:prod`, then `cross-env TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --browser=chrome`.
+  - Global setup prefers `npm run build:chrome:prod`; falls back to `bun run build:chrome:prod`, then `node scripts/build-with-profile.mjs --browser=chrome` with `TLDW_BUILD_PROFILE=production` injected via the process environment.
   - You do not need to build manually for E2E runs, but a local build can speed iteration.
 - **Real server E2E checklist (tldw_server)**
   - Ensure media/audio routes load: install server deps (`yt_dlp`, `numpy`, `soundfile`) and confirm logs do not show "Media endpoints unavailable" or "Audio endpoints unavailable".

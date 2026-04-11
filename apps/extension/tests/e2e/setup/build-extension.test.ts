@@ -173,9 +173,12 @@ describe("extension playwright globalSetup", () => {
     })
     expect(execSync).toHaveBeenNthCalledWith(
       3,
-      "cross-env TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --browser=chrome",
+      "node scripts/build-with-profile.mjs --browser=chrome",
       {
         cwd: expect.any(String),
+        env: expect.objectContaining({
+          TLDW_BUILD_PROFILE: "production"
+        }),
         stdio: "inherit"
       }
     )

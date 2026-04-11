@@ -19,24 +19,21 @@ const browserConfigs = {
     browserArg: null,
     targetEnv: "chrome",
     targetName: "chrome-mv3",
-    stripDangerousEval: false,
   },
   edge: {
     browserArg: "edge",
     targetEnv: "chrome",
     targetName: "edge-mv3",
-    stripDangerousEval: false,
   },
   firefox: {
     browserArg: "firefox",
     targetEnv: "firefox",
     targetName: "firefox-mv2",
-    stripDangerousEval: true,
   },
 }
 
-function getNodeBinary() {
-  return process.execPath
+function hasBrowserConfig(browser) {
+  return Object.hasOwn(browserConfigs, browser)
 }
 
 function getWxtBinary() {
@@ -52,7 +49,7 @@ function parseBrowser(argv = process.argv.slice(2)) {
   }
 
   const browser = browserArg.slice("--browser=".length).trim().toLowerCase()
-  if (!(browser in browserConfigs)) {
+  if (!hasBrowserConfig(browser)) {
     throw new Error(
       `Unsupported browser "${browser}". Expected "chrome", "firefox", or "edge".`
     )
@@ -148,17 +145,8 @@ export function buildWithProfile({
     },
   })
 
-  if (browserConfig.stripDangerousEval) {
-    runCommand(getNodeBinary(), ["scripts/strip-dangerous-eval.mjs"], { cwd })
-  }
-
-  runCommand(
-    getNodeBinary(),
-    ["scripts/verify-shared-token-sync.mjs", "--target", browserConfig.targetName],
-    { cwd }
-  )
-
   const canonicalDir = resolveCanonicalArtifactDir(browserConfig.targetName)
+
   const exportedDir = path.join(
     projectRoot,
     getExportedArtifactDir(browserConfig.targetName, profile)

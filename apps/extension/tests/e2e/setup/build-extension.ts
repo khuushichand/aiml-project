@@ -94,18 +94,22 @@ export default async function globalSetup() {
     }
   }
 
-  const buildCommands = [
-    'npm run build:chrome:prod',
-    'bun run build:chrome:prod',
-    'cross-env TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --browser=chrome'
+  const buildCommands: Array<{ command: string; env?: NodeJS.ProcessEnv }> = [
+    { command: 'npm run build:chrome:prod' },
+    { command: 'bun run build:chrome:prod' },
+    {
+      command: 'node scripts/build-with-profile.mjs --browser=chrome',
+      env: { ...process.env, TLDW_BUILD_PROFILE: 'production' }
+    }
   ]
 
   let lastError: unknown
-  for (const command of buildCommands) {
+  for (const { command, env } of buildCommands) {
     try {
       execSync(command, {
         stdio: 'inherit',
-        cwd: projectRoot
+        cwd: projectRoot,
+        env
       })
       lastError = undefined
       break

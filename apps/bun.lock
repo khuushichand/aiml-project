@@ -317,6 +317,7 @@
         "@typescript-eslint/parser": "^8.50.0",
         "@vitejs/plugin-react": "^5.1.2",
         "autoprefixer": "^10.4.23",
+        "cross-env": "^7.0.3",
         "eslint": "^9.39.2",
         "eslint-config-next": "^16.1.0",
         "eslint-config-prettier": "^10.1.8",

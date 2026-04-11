@@ -25,6 +25,10 @@ const browserConfigs = {
   },
 }
 
+function hasBrowserConfig(browser) {
+  return Object.hasOwn(browserConfigs, browser)
+}
+
 function getWxtBinary() {
   return process.platform === "win32" ? "wxt.cmd" : "wxt"
 }
@@ -38,7 +42,7 @@ function parseBrowser(argv = process.argv.slice(2)) {
   }
 
   const browser = browserArg.slice("--browser=".length).trim().toLowerCase()
-  if (!(browser in browserConfigs)) {
+  if (!hasBrowserConfig(browser)) {
     throw new Error(
       `Unsupported browser "${browser}". Expected "chrome" or "firefox".`
     )

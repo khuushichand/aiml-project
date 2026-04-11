@@ -44,10 +44,10 @@ describe("frontend dev config", () => {
 
     expect(packageJson.scripts?.build).toBe(turbopackBuildScript)
     expect(packageJson.scripts?.["build:prod"]).toBe(
-      `TLDW_BUILD_PROFILE=production ${turbopackBuildScript}`
+      `cross-env TLDW_BUILD_PROFILE=production ${turbopackBuildScript}`
     )
     expect(packageJson.scripts?.["build:dev"]).toBe(
-      `TLDW_BUILD_PROFILE=development ${turbopackBuildScript}`
+      `cross-env TLDW_BUILD_PROFILE=development ${turbopackBuildScript}`
     )
   })
 
@@ -56,10 +56,10 @@ describe("frontend dev config", () => {
 
     expect(packageJson.scripts?.compile).toBe(webpackBuildScript)
     expect(packageJson.scripts?.["compile:prod"]).toBe(
-      `TLDW_BUILD_PROFILE=production ${webpackBuildScript}`
+      `cross-env TLDW_BUILD_PROFILE=production ${webpackBuildScript}`
     )
     expect(packageJson.scripts?.["compile:dev"]).toBe(
-      `TLDW_BUILD_PROFILE=development ${webpackBuildScript}`
+      `cross-env TLDW_BUILD_PROFILE=development ${webpackBuildScript}`
     )
   })
 
