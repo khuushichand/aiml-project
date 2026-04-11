@@ -1595,6 +1595,52 @@ async def health_check(
     return {"status": "healthy"}
 
 
+# ---------------------------------------------------------------------------
+# Catalog endpoints
+# ---------------------------------------------------------------------------
+
+
+class MCPConnectionTestRequest(BaseModel):
+    """Request body for testing connectivity to an external MCP server."""
+
+    url: str
+    auth_type: str = "none"
+    secret: str | None = None
+
+
+class MCPConnectionTestResponse(BaseModel):
+    """Response for an MCP server connection test."""
+
+    reachable: bool
+    tools_discovered: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+@router.get("/catalog")
+async def list_mcp_catalog(archetype_key: str | None = None):
+    """Return the curated external MCP server catalog."""
+    from tldw_Server_API.app.core.MCP_unified.catalog_loader import list_catalog_entries
+
+    return list_catalog_entries(archetype_key=archetype_key)
+
+
+@router.post("/catalog/test-connection", response_model=MCPConnectionTestResponse)
+async def check_mcp_connection(req: MCPConnectionTestRequest):
+    """Test connectivity to an external MCP server URL."""
+    import httpx
+
+    headers: dict[str, str] = {}
+    if req.auth_type == "bearer" and req.secret:
+        headers["Authorization"] = f"Bearer {req.secret}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            resp = await http.get(req.url, headers=headers)
+            resp.raise_for_status()
+            return MCPConnectionTestResponse(reachable=True)
+    except Exception as exc:
+        return MCPConnectionTestResponse(reachable=False, error=str(exc))
+
+
 # OpenAPI documentation customization
 
 def customize_openapi():

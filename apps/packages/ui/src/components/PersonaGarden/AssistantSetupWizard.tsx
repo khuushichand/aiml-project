@@ -3,6 +3,7 @@ import React from "react"
 import type { PersonaSetupStep } from "@/hooks/usePersonaSetupWizard"
 import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
 
+import { ArchetypePickerStep } from "./ArchetypePickerStep"
 import type { PersonaSetupProgressItem } from "./personaSetupProgress"
 
 type AssistantSetupWizardProps = {
@@ -12,6 +13,9 @@ type AssistantSetupWizardProps = {
   postSetupTargetTab: PersonaGardenTabKey
   progressItems?: PersonaSetupProgressItem[]
   onResetSetup?: () => void
+  archetypeKey?: string | null
+  archetypePreview?: Record<string, unknown> | null
+  onSelectArchetype?: (key: string) => void
   voiceStepContent?: React.ReactNode
   commandsStepContent?: React.ReactNode
   safetyStepContent?: React.ReactNode
@@ -29,6 +33,9 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   postSetupTargetTab,
   progressItems = [],
   onResetSetup,
+  archetypeKey,
+  archetypePreview: _archetypePreview,
+  onSelectArchetype,
   voiceStepContent,
   commandsStepContent,
   safetyStepContent,
@@ -39,6 +46,25 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   onCreatePersona
 }) => {
   const [newPersonaName, setNewPersonaName] = React.useState("")
+
+  const prevStepRef = React.useRef<PersonaSetupStep>(currentStep)
+  React.useEffect(() => {
+    const previousStep = prevStepRef.current
+    prevStepRef.current = currentStep
+
+    if (
+      currentStep === "archetype" &&
+      previousStep !== "archetype" &&
+      archetypeKey
+    ) {
+      const confirmed = window.confirm(
+        "Changing your archetype will reset your customizations. Continue?"
+      )
+      if (!confirmed && onResetSetup) {
+        onResetSetup()
+      }
+    }
+  }, [currentStep, archetypeKey, onResetSetup])
 
   const handleCreatePersona = React.useCallback(() => {
     const normalizedName = String(newPersonaName || "").trim()
@@ -115,7 +141,12 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
           {error}
         </div>
       ) : null}
-      {currentStep === "persona" ? (
+      {currentStep === "archetype" ? (
+        <ArchetypePickerStep
+          selectedKey={archetypeKey ?? null}
+          onSelect={(key) => onSelectArchetype?.(key)}
+        />
+      ) : currentStep === "persona" ? (
         <div className="space-y-3">
           <div>
             <div className="text-sm font-semibold text-text">Choose a persona</div>
