@@ -15,6 +15,7 @@ import { useServerCapabilities } from '@/hooks/useServerCapabilities'
 import { tldwClient } from '@/services/tldw/TldwApiClient'
 import { useAntdMessage } from '@/hooks/useAntdMessage'
 import { useStoreMessageOption } from "@/store/option"
+import { useTutorialStore } from "@/store/tutorials"
 import { shallow } from "zustand/shallow"
 import { updatePageTitle } from "@/utils/update-page-title"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
@@ -1930,6 +1931,18 @@ const NotesManagerPage: React.FC = () => {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [handleNewNote, ed])
+
+  // Auto-trigger notes tutorial on first visit
+  React.useEffect(() => {
+    const key = 'notes-tutorial-shown'
+    if (typeof window === 'undefined') return
+    if (localStorage.getItem(key)) return
+    const timer = window.setTimeout(() => {
+      localStorage.setItem(key, '1')
+      useTutorialStore.getState().startTutorial('notes-basics')
+    }, 1000)
+    return () => window.clearTimeout(timer)
+  }, [])
 
   // Cleanup
   React.useEffect(() => {

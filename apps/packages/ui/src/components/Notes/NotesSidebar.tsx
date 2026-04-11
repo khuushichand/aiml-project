@@ -357,10 +357,10 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
             </div>
 
             <div className="space-y-2">
-              {/* ---- Collapsible: View & Organize (always visible) ---- */}
+              {/* ---- Collapsible: Views (always visible) ---- */}
               <CollapsibleSection
                 title={t('option:notesSearch.viewOrganizeSectionTitle', {
-                  defaultValue: 'View & Organize'
+                  defaultValue: 'Views'
                 })}
                 defaultOpen
                 storageKey="view-organize"

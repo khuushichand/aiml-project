@@ -4,6 +4,8 @@ import { Button, Checkbox, Input, Modal, Select, Typography } from "antd"
 import KeywordPickerModal from "@/components/Notes/KeywordPickerModal"
 import NotesGraphModal from "@/components/Notes/NotesGraphModal"
 
+import { useTutorialStore } from "@/store/tutorials"
+
 import type {
   ImportDuplicateStrategy,
   KeywordManagementItem,
@@ -614,6 +616,24 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
               <div><strong>Ctrl/Cmd + F</strong>: {t("option:notesSearch.shortcutBrowserFindDescription", { defaultValue: "Find text in the current note (browser find)." })}</div>
               <div><strong>{'"exact phrase"'}</strong>: {t("option:notesSearch.shortcutExactMatchDescription", { defaultValue: "Search for an exact phrase in the notes search box." })}</div>
             </div>
+          </div>
+          <div className="border-t border-border pt-3">
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              data-testid="notes-restart-tutorial"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem('notes-tutorial-shown')
+                }
+                setShortcutHelpOpen(false)
+                useTutorialStore.getState().startTutorial('notes-basics')
+              }}
+            >
+              {t("option:notesSearch.restartTutorialAction", {
+                defaultValue: "Restart tutorial",
+              })}
+            </button>
           </div>
         </div>
       </Modal>

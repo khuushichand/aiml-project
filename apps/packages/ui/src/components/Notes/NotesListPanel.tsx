@@ -325,7 +325,7 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
         renderEmptyStateSurface('unsupported')
       ) : Array.isArray(notes) && notes.length > 0 ? (
         <>
-          <div className="divide-y divide-border">
+          <div className="divide-y divide-border" role="listbox">
             {notes.map((item) => (
               (() => {
                 const itemIdText = String(item.id)
@@ -394,9 +394,24 @@ const NotesListPanel: React.FC<NotesListPanelProps> = ({
                         onSelectNote(item.id)
                       }}
                       className="w-full text-left"
+                      role="option"
                       aria-selected={isSelectedNote}
                       aria-current={isSelectedNote ? "true" : undefined}
                       data-testid={`notes-open-button-${itemIdText.replace(/[^a-z0-9_-]/gi, '_')}`}
+                      data-notes-list-item
+                      onKeyDown={(e) => {
+                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                          e.preventDefault()
+                          const buttons = Array.from(
+                            e.currentTarget.closest('[data-testid="notes-list-region"]')
+                              ?.querySelectorAll<HTMLButtonElement>('[data-notes-list-item]') ?? []
+                          )
+                          const idx = buttons.indexOf(e.currentTarget as HTMLButtonElement)
+                          if (idx < 0) return
+                          const next = e.key === 'ArrowDown' ? buttons[idx + 1] : buttons[idx - 1]
+                          next?.focus()
+                        }
+                      }}
                     >
                       <div className="w-full">
                         {(() => {
