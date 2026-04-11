@@ -74,7 +74,11 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.backends.base import (  # noqa: E402
     DatabaseError as BackendDatabaseError,
 )
-from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory  # noqa: E402
+from tldw_Server_API.app.core.DB_Management.backends.factory import (  # noqa: E402
+    DatabaseBackendFactory,
+    is_factory_managed_backend,
+    release_managed_backend,
+)
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noqa: E402
     normalise_params,
@@ -83,6 +87,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (  # noq
     replace_insert_or_ignore,
     transform_sqlite_query_for_postgres,
 )
+from tldw_Server_API.app.core.DB_Management.backends.sqlite_backend import SQLiteBackend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths  # noqa: E402
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import begin_immediate_if_needed  # noqa: E402
@@ -5101,6 +5106,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not client_id:
             raise ValueError("Client ID cannot be empty or None.")  # noqa: TRY003
         self.client_id = client_id
+        # Ownership marker for backend lifecycle:
+        # - True: this wrapper directly owns the backend lifecycle and cleanup.
+        # - False: lifecycle is managed externally (factory-managed shared backend or injected backend).
+        self._owner_managed_backend = False
 
         self.backend = self._resolve_backend(backend=backend, config=config)
         self.backend_type = self.backend.backend_type
@@ -5150,6 +5159,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     ) -> DatabaseBackend:
         """Select the database backend instance for this content store."""
         if backend is not None:
+            self._owner_managed_backend = False
             return backend
 
         parser: ConfigParser | None = config
@@ -5162,12 +5172,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if parser is not None:
             candidate = get_content_backend(parser)
             if candidate and candidate.backend_type == BackendType.POSTGRESQL:
+                self._owner_managed_backend = False
                 return candidate
 
         fallback_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
             sqlite_path=self.db_path_str,
         )
+        if not self.is_memory_db:
+            # Contract: default file-backed SQLite for CharactersRAGDB is intentionally
+            # isolated from the global factory registry. This wrapper owns cleanup for
+            # that backend and it is not affected by factory-wide reset/close calls.
+            self._owner_managed_backend = True
+            return SQLiteBackend(fallback_config)
+        self._owner_managed_backend = False
         return DatabaseBackendFactory.create_backend(fallback_config)
 
 
@@ -5483,6 +5501,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         Primarily used in tests/shutdown to ensure no background SQLite threads remain.
         """
+        self.close_connection()
+
+        if (
+            self.backend_type == BackendType.SQLITE
+            and is_factory_managed_backend(self.backend)
+        ):
+            release_managed_backend(self.backend)
+            with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
+                self._local = threading.local()
+            return
+
         try:
             pool = self.backend.get_pool()
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
@@ -12407,6 +12436,51 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             }
         except _CHACHA_NONCRITICAL_EXCEPTIONS:
             return None
+
+    def get_message_metadata_map(self, message_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch metadata for multiple messages in a single query."""
+        if not message_ids:
+            return {}
+
+        try:
+            self._ensure_message_metadata_table()
+            if self.backend_type == BackendType.SQLITE:
+                placeholders = ",".join(["?"] * len(message_ids))
+                query = (
+                    "SELECT message_id, tool_calls_json, extra_json, last_modified "
+                    f"FROM message_metadata WHERE message_id IN ({placeholders})"  # nosec B608
+                )
+                cursor = self.execute_query(query, tuple(message_ids))
+                rows = cursor.fetchall()
+            else:
+                placeholders = ",".join(["%s"] * len(message_ids))
+                query = (
+                    "SELECT message_id, tool_calls_json, extra_json, last_modified "
+                    f"FROM message_metadata WHERE message_id IN ({placeholders})"  # nosec B608
+                )
+                result = self.backend.execute(query, tuple(message_ids))
+                rows = result.fetchall()
+
+            metadata_by_message_id: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                try:
+                    message_id = str(row["message_id"])
+                    tc = row["tool_calls_json"]
+                    ex = row["extra_json"]
+                    lm = row["last_modified"]
+                except _CHACHA_NONCRITICAL_EXCEPTIONS:
+                    message_id = str(row[0])
+                    tc = row[1]
+                    ex = row[2]
+                    lm = row[3]
+                metadata_by_message_id[message_id] = {
+                    "tool_calls": json.loads(tc) if tc else None,
+                    "extra": json.loads(ex) if ex else None,
+                    "last_modified": lm,
+                }
+            return metadata_by_message_id
+        except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            return {}
 
     def _ensure_persona_live_voice_session_summaries_table(self) -> None:
         """Ensure persona live-voice session summaries exist for analytics feedback."""

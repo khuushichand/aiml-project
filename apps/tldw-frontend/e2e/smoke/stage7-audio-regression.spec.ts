@@ -8,8 +8,9 @@ import {
 } from "./smoke.setup"
 import {
   dismissConnectionModals,
-  getVisibleAntdSelectOption,
+  getVisibleAntdSelectDropdown,
   getAntdSelectTrigger,
+  stubNotificationsApi,
   waitForAppShell
 } from "../utils/helpers"
 import type { Page, Route } from "@playwright/test"
@@ -53,6 +54,15 @@ const stubDocsInfo = async (page: Page) => {
   })
 }
 
+const stubAudioSmokeBootstrapApis = async (page: Page) => {
+  await stubNotificationsApi(page)
+  await page.route("**/api/v1/audio/voices**", async (route) => {
+    await fulfillJson(route, 200, {
+      voices: [{ id: "af_heart", name: "AF Heart", provider: "kokoro" }]
+    })
+  })
+}
+
 async function openSpeechInputSourcePicker(page: Page) {
   const inputSourcePicker = getAntdSelectTrigger(page, {
     ariaLabel: "Speech playground input source"
@@ -66,6 +76,9 @@ async function openSpeechInputSourcePicker(page: Page) {
   }
   await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
   await inputSourcePicker.click({ force: true })
+  const dropdown = getVisibleAntdSelectDropdown(page)
+  await expect(dropdown).toBeVisible({ timeout: LOAD_TIMEOUT })
+  return dropdown
 }
 
 test.describe("Stage 7 audio regression gate", () => {
@@ -74,6 +87,7 @@ test.describe("Stage 7 audio regression gate", () => {
     diagnostics
   }) => {
     await seedAuth(page)
+    await stubAudioSmokeBootstrapApis(page)
 
     for (const route of AUDIO_ROUTES) {
       diagnostics.console.length = 0
@@ -132,6 +146,44 @@ test.describe("Stage 7 audio regression gate", () => {
         )}`
       ).toHaveLength(0)
     }
+  })
+
+  test("audio smoke does not surface background bootstrap errors on /stt", async ({
+    page,
+    diagnostics
+  }) => {
+    await seedAuth(page)
+    await stubAudioSmokeBootstrapApis(page)
+
+    await page.goto("/tts", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await waitForAppShell(page, LOAD_TIMEOUT)
+
+    diagnostics.console.length = 0
+    diagnostics.pageErrors.length = 0
+    diagnostics.requestFailures.length = 0
+
+    const response = await page.goto("/stt", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+
+    const status = response?.status() ?? 0
+    expect(status, "Expected /stt to return HTTP 2xx/3xx").toBeGreaterThanOrEqual(200)
+    expect(status, "Expected /stt to return HTTP 2xx/3xx").toBeLessThan(400)
+    await waitForAppShell(page, LOAD_TIMEOUT)
+
+    const issues = getCriticalIssues(diagnostics)
+    const classified = classifySmokeIssues("/stt", issues)
+
+    expect(
+      classified.unexpectedConsoleErrors,
+      `Unexpected console errors on /stt: ${classified.unexpectedConsoleErrors
+        .map((entry) => entry.text)
+        .join(" | ")}`
+    ).toHaveLength(0)
   })
 
   test("tts ElevenLabs timeout state shows retry and recovers", async ({ page }) => {
@@ -288,10 +340,16 @@ test.describe("Stage 7 audio regression gate", () => {
     await waitForAppShell(page, LOAD_TIMEOUT)
     await dismissConnectionModals(page)
 
-    await openSpeechInputSourcePicker(page)
-    await expect(getVisibleAntdSelectOption(page, { text: /Default microphone/i })).toBeVisible()
-    await expect(getVisibleAntdSelectOption(page, { text: /Tab audio/i })).toHaveCount(0)
-    await expect(getVisibleAntdSelectOption(page, { text: /System audio/i })).toHaveCount(0)
+    const dropdown = await openSpeechInputSourcePicker(page)
+    await expect(
+      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /Default microphone/i })
+    ).toBeVisible()
+    await expect(
+      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /Tab audio/i })
+    ).toHaveCount(0)
+    await expect(
+      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /System audio/i })
+    ).toHaveCount(0)
   })
 
   test("stt transcription-model timeout state shows retry and recovers", async ({
