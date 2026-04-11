@@ -3534,12 +3534,20 @@ async def register(
                 api_key_value = key_result.get('key')
         except MandatoryAuditWriteError as exc:
             logger.error(
-                "Mandatory audit write failed while auto-generating default API key for new user {}",
+                "Mandatory audit write failed while auto-generating default API key for new user {}: {}",
                 user_info["user_id"],
+                exc,
+                exc_info=exc,
             )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Mandatory audit persistence unavailable",
+                detail={
+                    "error": {
+                        "message": "Mandatory audit persistence unavailable",
+                        "type": "audit_persistence_failure",
+                        "code": "audit_persistence_failure",
+                    }
+                },
             ) from exc
         except _AUTH_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to auto-generate API key for new user {user_info['user_id']}: {_e}")

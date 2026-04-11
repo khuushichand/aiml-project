@@ -1316,6 +1316,7 @@ class JobManager:
                                     "job_type": job_type,
                                 }
                             )
+                            emitted_job = {**d, "request_id": request_id, "trace_id": trace_id}
                             # Counters bump (PG, idempotent insert occurred)
                             try:
                                 if was_insert and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
@@ -1351,8 +1352,8 @@ class JobManager:
                                     "job.created",
                                     attrs_json,
                                     d.get("owner_user_id"),
-                                    d.get("request_id"),
-                                    d.get("trace_id"),
+                                    request_id,
+                                    trace_id,
                                 ),
                             )
                             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
@@ -1363,7 +1364,7 @@ class JobManager:
                                 if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.created",
-                                        job=d,
+                                        job=emitted_job,
                                         attrs={
                                             "idempotent": (not was_insert),
                                             "owner_user_id": d.get("owner_user_id"),
@@ -1376,7 +1377,7 @@ class JobManager:
                             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 submit_job_audit_event(
                                     "job.created",
-                                    job=d,
+                                    job=emitted_job,
                                     attrs={
                                         "idempotent": (not was_insert),
                                         "owner_user_id": d.get("owner_user_id"),

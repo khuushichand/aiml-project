@@ -65,6 +65,28 @@ async def test_emit_mandatory_api_key_audit_writes_unified_event_and_flushes(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
+async def test_emit_mandatory_api_key_audit_wraps_service_creation_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fail_create(_user_id: int) -> None:
+        raise RuntimeError("bootstrap boom")
+
+    monkeypatch.setattr(api_key_audit, "_create_isolated_audit_service", _fail_create)
+
+    with pytest.raises(MandatoryAuditWriteError) as exc_info:
+        await api_key_audit.emit_mandatory_api_key_management_audit(
+            user_id=9,
+            event_type=AuditEventType.DATA_WRITE,
+            category=AuditEventCategory.DATA_MODIFICATION,
+            action="api_key.create",
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert "bootstrap boom" in str(exc_info.value.__cause__)
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
 async def test_emit_mandatory_api_key_audit_wraps_log_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

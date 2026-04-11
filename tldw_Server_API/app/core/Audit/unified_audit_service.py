@@ -2559,6 +2559,8 @@ class UnifiedAuditService:
         with fb_path.open("a", encoding="utf-8") as fb:
             for ev in events:
                 fb.write(json.dumps(ev.to_dict(), ensure_ascii=False) + "\n")
+            fb.flush()
+            os.fsync(fb.fileno())
 
     async def _spill_events_to_fallback(self, events: list[AuditEvent]) -> Path:
         fb_path = self.db_path.parent / "audit_fallback_queue.jsonl"

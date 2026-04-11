@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import time
 
 import pytest
@@ -58,6 +59,14 @@ class _BlockingStopService:
         self.stopped = True
         self._started_event.set()
         await self._release_event.wait()
+
+
+class _OwnerLoopStub:
+    def is_closed(self) -> bool:
+        return False
+
+    def is_running(self) -> bool:
+        return True
 
 
 @pytest.mark.asyncio
@@ -166,7 +175,13 @@ async def test_shutdown_all_audit_services_returns_summary_and_can_raise(monkeyp
     state = _make_state()
     monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
 
-    summary = await deps.shutdown_all_audit_services()
+    with pytest.raises(deps.AuditShutdownError):
+        await deps.shutdown_all_audit_services()
+
+    state = _make_state()
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    summary = await deps.shutdown_all_audit_services(raise_on_error=False)
 
     assert isinstance(summary, deps.AuditShutdownSummary)
     assert summary.requested == 2
@@ -176,13 +191,6 @@ async def test_shutdown_all_audit_services_returns_summary_and_can_raise(monkeyp
     assert summary.errors
     assert "stop failed" in summary.errors[0]
     assert state.cache == {}
-
-    state = _make_state()
-    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
-
-    with pytest.raises(deps.AuditShutdownError):
-        await deps.shutdown_all_audit_services(raise_on_error=True)
-
 
 @pytest.mark.asyncio
 async def test_shutdown_all_audit_services_runs_stop_fan_out_concurrently(monkeypatch):
@@ -211,6 +219,73 @@ async def test_shutdown_all_audit_services_runs_stop_fan_out_concurrently(monkey
     assert summary.error_count == 0
     assert summary.timeout_count == 0
     assert state.cache == {}
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_does_not_recache_service_after_shutdown(monkeypatch):
+    state = deps._LoopState(cache={})
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_create(_user_id):
+        started.set()
+        await release.wait()
+        return _StoppingService(asyncio.get_running_loop())
+
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
+    monkeypatch.setattr(deps, "_state_for_loop", lambda: state)
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+    monkeypatch.setattr(deps, "_create_audit_service_for_user", _fake_create)
+
+    init_task = asyncio.create_task(deps._get_or_create_audit_service_for_key(123))
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    summary = await deps.shutdown_user_audit_service(123)
+    assert summary.requested == 0
+    assert state.cache == {}
+
+    release.set()
+
+    with pytest.raises(ServiceInitializationError, match="shutdown"):
+        await asyncio.wait_for(init_task, timeout=5)
+
+    assert state.cache == {}
+
+
+@pytest.mark.asyncio
+async def test_stop_audit_service_instance_cancels_cross_loop_future_on_timeout(monkeypatch):
+    cancel_called = {"value": False}
+
+    class _CancelableFuture(concurrent.futures.Future):
+        def cancel(self) -> bool:
+            cancel_called["value"] = True
+            return super().cancel()
+
+    class _CrossLoopService:
+        owner_loop = _OwnerLoopStub()
+
+        async def stop(self) -> None:
+            await asyncio.sleep(60)
+
+    future = _CancelableFuture()
+
+    def _fake_run_coroutine_threadsafe(coro, _loop):
+        coro.close()
+        return future
+
+    monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", _fake_run_coroutine_threadsafe)
+
+    stopped_ok, timeout_hit, error_message, exc = await deps._stop_audit_service_instance(
+        _CrossLoopService(),
+        label="cross-loop",
+        timeout_s=0.01,
+    )
+
+    assert stopped_ok is False
+    assert timeout_hit is True
+    assert error_message is not None and "timed out" in error_message
+    assert isinstance(exc, asyncio.TimeoutError)
+    assert cancel_called["value"] is True
 
 
 @pytest.mark.asyncio

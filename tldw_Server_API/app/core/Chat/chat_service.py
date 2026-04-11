@@ -3825,6 +3825,8 @@ async def execute_streaming_call(
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
+    if hasattr(raw_stream_iter, "__iter__") and not hasattr(raw_stream_iter, "__aiter__"):
+        raw_stream_iter = wrap_sync_stream(raw_stream_iter)
 
     stream_mod_state = {"block_logged": False, "redact_logged": False}
     loop_compat_enabled = False
@@ -4279,29 +4281,35 @@ async def execute_streaming_call(
                 return out
 
             async def _await_mandatory_moderation_audits() -> None:
-                if not mandatory_moderation_audit_tasks:
-                    return
-                results = await asyncio.gather(
-                    *mandatory_moderation_audit_tasks,
-                    return_exceptions=True,
-                )
-                failures = [result for result in results if isinstance(result, BaseException)]
-                if not failures:
-                    return
-                for failure in failures:
-                    logger.error(
-                        "Mandatory moderation audit task failed for {}: {}",
-                        final_conversation_id,
-                        failure,
-                        exc_info=True,
+                pending_tasks = list(mandatory_moderation_audit_tasks)
+                mandatory_moderation_audit_tasks.clear()
+                failures: list[BaseException] = []
+                if pending_tasks:
+                    results = await asyncio.gather(
+                        *pending_tasks,
+                        return_exceptions=True,
                     )
-                raise StopStreamWithError(
-                    message="Mandatory audit persistence unavailable",
-                    error_type="audit_persistence_failure",
-                ) from failures[0]
+                    failures = [result for result in results if isinstance(result, BaseException)]
+                if failures:
+                    for failure in failures:
+                        logger.error(
+                            "Mandatory moderation audit task failed for {}: {}",
+                            final_conversation_id,
+                            failure,
+                            exc_info=True,
+                        )
+                    raise StopStreamWithError(
+                        message="Mandatory audit persistence unavailable",
+                        error_type="audit_persistence_failure",
+                    ) from failures[0]
+                pending_stopper = stream_mod_state.pop("pending_stop_error", None)
+                if pending_stopper is not None:
+                    raise pending_stopper
 
             def _out_transform(s: str) -> str:
-                nonlocal chunk_seq
+                nonlocal chunk_seq, stream_holdback
+                if stream_mod_state.get("pending_stop_error") is not None:
+                    return ""
                 try:
                     mon = None
                     try:
@@ -4405,7 +4413,12 @@ async def execute_streaming_call(
                             )
                         )
                         stream_mod_state["block_logged"] = True
-                    raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
+                    stream_holdback = ""
+                    stream_mod_state["pending_stop_error"] = StopStreamWithError(
+                        message="Output violates moderation policy",
+                        error_type="output_moderation_block",
+                    )
+                    return ""
                 if resolved_action == "redact":
                     if not stream_mod_state["redact_logged"]:
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
@@ -5096,6 +5109,20 @@ async def execute_non_stream_call(
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
 
                 if resolved_action == "block":
+                    if audit_service and audit_context:
+                        await write_mandatory_moderation_audit(
+                            audit_service=audit_service,
+                            audit_context=audit_context,
+                            audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                            action="moderation.output",
+                            result="failure",
+                            metadata={
+                                "phase": "output",
+                                "streaming": False,
+                                "action": "block",
+                                "pattern": sample,
+                            },
+                        )
                     _emit_chat_run_first_completion_metric(
                         metrics,
                         context=run_first_metric_context,

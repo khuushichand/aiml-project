@@ -1,3 +1,5 @@
+"""Strict unified-audit helpers for API key management operations."""
+
 from __future__ import annotations
 
 from contextlib import suppress
@@ -10,10 +12,12 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
     AuditEventCategory,
     AuditEventType,
     MandatoryAuditWriteError,
+    UnifiedAuditService,
 )
 
 
-async def _get_or_create_audit_service(user_id: int):
+async def _get_or_create_audit_service(user_id: int) -> UnifiedAuditService:
+    """Return the cached audit service for the target user."""
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
         get_or_create_audit_service_for_user_id,
     )
@@ -21,7 +25,8 @@ async def _get_or_create_audit_service(user_id: int):
     return await get_or_create_audit_service_for_user_id(user_id)
 
 
-async def _create_isolated_audit_service(user_id: int):
+async def _create_isolated_audit_service(user_id: int) -> UnifiedAuditService:
+    """Create an isolated audit service instance for fail-closed writes."""
     from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
         _create_audit_service_for_user,
     )
@@ -54,8 +59,9 @@ async def emit_mandatory_api_key_management_audit(
     if actor_roles:
         merged_metadata["actor_roles"] = [str(role) for role in actor_roles if str(role).strip()]
 
-    audit_service = await _create_isolated_audit_service(int(user_id))
+    audit_service: UnifiedAuditService | None = None
     try:
+        audit_service = await _create_isolated_audit_service(int(user_id))
         await audit_service.log_event(
             event_type=event_type,
             category=category,
@@ -78,5 +84,6 @@ async def emit_mandatory_api_key_management_audit(
         )
         raise MandatoryAuditWriteError("Mandatory audit persistence unavailable") from exc
     finally:
-        with suppress(Exception):
-            await audit_service.stop()
+        if audit_service is not None:
+            with suppress(Exception):
+                await audit_service.stop()

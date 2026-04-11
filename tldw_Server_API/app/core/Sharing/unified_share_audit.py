@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection_async,
 )
+from tldw_Server_API.app.core.exceptions import ValidationError
 
 _SHARE_EVENT_FILTER_SQL = (
     "(event_type LIKE 'share.%'"
@@ -372,15 +373,16 @@ class UnifiedShareAuditWriter:
         result: str = "success",
         created_at: Any = None,
     ) -> int | None:
+        """Import a legacy share-audit row while preserving its compatibility id."""
         legacy_id = legacy_share_audit_id
         if legacy_id is None:
             legacy_id = legacy_audit_id
         elif legacy_audit_id is not None and legacy_audit_id != legacy_id:
-            raise ValueError(
+            raise ValidationError(
                 "legacy_share_audit_id and legacy_audit_id must match when both are provided"
             )
         if legacy_id is None:
-            raise TypeError("legacy_share_audit_id is required")
+            raise ValidationError("legacy_share_audit_id is required")
 
         compatibility_id = await self._write_event_transaction(
             event_type=event_type,

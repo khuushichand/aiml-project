@@ -22,6 +22,21 @@ app = FastAPI()
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1/chat")
 
+
+def _assert_mandatory_audit_detail(detail: dict[str, Any]) -> None:
+    assert detail == {
+        "error_code": "mandatory_audit_unavailable",
+        "message": "Mandatory audit persistence is currently unavailable",
+    }
+
+
+def _cleanup_db_artifacts(db_path: str) -> None:
+    os.unlink(db_path)
+    if os.path.exists(db_path + "-wal"):
+        os.unlink(db_path + "-wal")
+    if os.path.exists(db_path + "-shm"):
+        os.unlink(db_path + "-shm")
+
 def _make_test_db():
 
     with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as tmp:
@@ -205,9 +220,7 @@ def test_input_block_returns_400(monkeypatch):
                 assert "violates" in r.json().get("detail", "").lower()
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -234,13 +247,11 @@ def test_input_block_fails_closed_when_mandatory_audit_fails():
                 }
                 r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
                 assert r.status_code == 503
-                assert "mandatory audit persistence unavailable" in r.json().get("detail", "").lower()
+                _assert_mandatory_audit_detail(r.json().get("detail", {}))
                 assert not mock_provider.called
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -268,13 +279,11 @@ def test_input_block_fails_closed_when_audit_service_missing():
                 }
                 r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
                 assert r.status_code == 503
-                assert "mandatory audit persistence unavailable" in r.json().get("detail", "").lower()
+                _assert_mandatory_audit_detail(r.json().get("detail", {}))
                 assert not mock_provider.called
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -317,9 +326,7 @@ def test_output_redaction_non_streaming(monkeypatch):
                 assert got == "this has [REDACTED] token"
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -356,12 +363,51 @@ def test_output_redaction_non_streaming_fails_closed_when_mandatory_audit_fails(
                 }
                 r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
                 assert r.status_code == 503
-                assert "mandatory audit persistence unavailable" in r.json().get("detail", "").lower()
+                _assert_mandatory_audit_detail(r.json().get("detail", {}))
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
+        except Exception:
+            _ = None
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+        app.dependency_overrides.pop(get_audit_service_for_user, None)
+
+
+@pytest.mark.unit
+def test_output_block_non_streaming_fails_closed_when_mandatory_audit_fails():
+    db, db_path = _make_test_db()
+    try:
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        app.dependency_overrides[get_audit_service_for_user] = _failing_audit_service_override
+        policy = _StubPolicy(enabled=True, input_action='warn', output_action='block')
+
+        reply = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "this has secret token"}, "finish_reason": "stop"}
+            ]
+        }
+
+        with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(policy)), \
+             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=reply):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "stream": False,
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 503
+                _assert_mandatory_audit_detail(r.json().get("detail", {}))
+    finally:
+        try:
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -422,9 +468,7 @@ def test_streaming_redaction_applied():
                 assert "[REDACTED]" in full
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -491,9 +535,7 @@ def test_streaming_cross_chunk_redaction_output(monkeypatch):
                 assert "[REDACTED]" in full
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
@@ -535,12 +577,50 @@ def test_streaming_block_emits_sse_error_and_finishes():
                 assert saw_done, "Expected [DONE] marker for graceful finish"
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)
+
+
+@pytest.mark.unit
+def test_streaming_block_emits_audit_failure_when_mandatory_audit_fails(monkeypatch):
+    db, db_path = _make_test_db()
+    try:
+        monkeypatch.setenv("STREAMS_UNIFIED", "0")
+        app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+        app.dependency_overrides[get_audit_service_for_user] = _failing_audit_service_override
+        policy = _StubPolicy(enabled=True, input_action='warn', output_action='block', redact='[REDACTED]')
+
+        def upstream_stream():
+            chunk1 = {"choices": [{"delta": {"content": "this contains secret"}}]}
+            chunk2 = {"choices": [{"delta": {"content": " should be blocked"}}]}
+            yield f"data: {json.dumps(chunk1)}\n\n"
+            yield f"data: {json.dumps(chunk2)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        with patch("tldw_Server_API.app.api.v1.endpoints.chat.get_moderation_service", return_value=_StubModerationService(policy)), \
+             patch("tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call", return_value=upstream_stream()):
+            with TestClient(app) as client:
+                resp = client.get("/api/v1/health")
+                client.csrf_token = resp.cookies.get("csrf_token", "")
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                assert "audit_persistence_failure" in r.text
+                assert "[DONE]" in r.text
+    finally:
+        try:
+            _cleanup_db_artifacts(db_path)
+        except Exception:
+            _ = None
+        app.dependency_overrides.pop(get_chacha_db_for_user, None)
+        app.dependency_overrides.pop(get_audit_service_for_user, None)
 
 
 @pytest.mark.unit
@@ -592,9 +672,7 @@ def test_streaming_redaction_emits_audit_failure_and_fails_closed(monkeypatch):
                 assert stream_end_payload["success"] is False
     finally:
         try:
-            os.unlink(db_path)
-            if os.path.exists(db_path + "-wal"): os.unlink(db_path + "-wal")
-            if os.path.exists(db_path + "-shm"): os.unlink(db_path + "-shm")
+            _cleanup_db_artifacts(db_path)
         except Exception:
             _ = None
         app.dependency_overrides.pop(get_chacha_db_for_user, None)

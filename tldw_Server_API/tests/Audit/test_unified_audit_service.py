@@ -835,6 +835,7 @@ class TestUnifiedAuditService:
         fb_path = db_path.parent / "audit_fallback_queue.jsonl"
         assert fb_path.exists()
         assert len(fb_path.read_text(encoding="utf-8").splitlines()) == 1
+        assert service.event_buffer == []
         assert service._db_pool is None
         assert service.owner_loop is None
         monkeypatch.setattr(service, "_update_daily_stats", original_update_daily_stats)
@@ -964,7 +965,9 @@ class TestUnifiedAuditService:
         assert captured_event_ids == [first_event_id]
         fb_path = db_path.parent / "audit_fallback_queue.jsonl"
         assert fb_path.exists()
-        assert first_event_id in fb_path.read_text(encoding="utf-8")
+        fallback_contents = fb_path.read_text(encoding="utf-8")
+        assert first_event_id in fallback_contents
+        assert second_event_id not in fallback_contents
         assert len(service.event_buffer) == 1
         assert service.event_buffer[0].event_id == second_event_id
         assert service._db_pool is None

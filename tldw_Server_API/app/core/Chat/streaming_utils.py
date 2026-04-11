@@ -14,9 +14,9 @@ import json
 import os
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional, Union
 
 from loguru import logger
 
@@ -928,7 +928,6 @@ class StreamingResponseHandler:
                 if (
                     not self.is_cancelled
                     and not self.error_occurred
-                    and has_output
                 ):
                     if before_success_callback and not self.is_cancelled:
                         try:

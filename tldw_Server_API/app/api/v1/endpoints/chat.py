@@ -353,6 +353,14 @@ def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
     return _shared_env_flag_enabled("CHAT_CONNECTORS_V2_ENABLED")
 
+
+def _mandatory_audit_unavailable_detail() -> dict[str, str]:
+    """Return the standardized chat-module payload for mandatory audit failures."""
+    return {
+        "error_code": "mandatory_audit_unavailable",
+        "message": "Mandatory audit persistence is currently unavailable",
+    }
+
 # Load configuration values from config
 import contextlib
 
@@ -2565,7 +2573,7 @@ async def create_chat_completion(
                         except MandatoryAuditWriteError as exc:
                             raise HTTPException(
                                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="Mandatory audit persistence unavailable",
+                                detail=_mandatory_audit_unavailable_detail(),
                             ) from exc
                         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _mod_err:
                             logger.debug(f"Slash command moderation step skipped due to error: {_mod_err}")
@@ -2640,6 +2648,10 @@ async def create_chat_completion(
                                     request_data.messages.append(sys_msg)
                                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as inj_err:
                                     logger.debug(f"Failed to append system injection message: {inj_err}")
+        except HTTPException as _cmd_err:
+            if _cmd_err.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                raise
+            logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
 
@@ -3049,7 +3061,7 @@ async def create_chat_completion(
         except MandatoryAuditWriteError as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Mandatory audit persistence unavailable",
+                detail=_mandatory_audit_unavailable_detail(),
             ) from exc
         except HTTPException:
             raise
@@ -4237,7 +4249,7 @@ async def create_chat_completion(
         except MandatoryAuditWriteError as e_chat:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Mandatory audit persistence unavailable",
+                detail=_mandatory_audit_unavailable_detail(),
             ) from e_chat
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e_chat:
             # Do not leak raw HTTPException details from underlying call sites.
@@ -4249,6 +4261,7 @@ async def create_chat_completion(
                 if e_chat.status_code in (
                     status.HTTP_402_PAYMENT_REQUIRED,
                     status.HTTP_429_TOO_MANY_REQUESTS,
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
                 ):
                     raise
                 raise HTTPException(

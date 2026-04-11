@@ -316,7 +316,7 @@ async def test_migration_checkpoint_handles_empty_timestamp_resume(tmp_path, mon
 
         async def commit_with_interrupt():
             call_count["count"] += 1
-            if call_count["count"] == 1:
+            if call_count["count"] == 2:
                 raise RuntimeError("interrupt")
             await orig_commit()
 
@@ -331,14 +331,14 @@ async def test_migration_checkpoint_handles_empty_timestamp_resume(tmp_path, mon
             chunk_size=1,
         )
         assert counts.failed is True
-        assert counts.events_inserted == 0
+        assert counts.events_inserted == 1
         assert counts.events_skipped == 0
-        assert counts.stats_inserted == 0
+        assert counts.stats_inserted == 1
         assert counts.stats_skipped == 0
 
         async with shared_db.execute("SELECT COUNT(*) AS n FROM audit_events") as cur:
             row = await cur.fetchone()
-        assert row["n"] == 0
+        assert row["n"] == 1
 
         monkeypatch.setattr(shared_db, "commit", orig_commit)
         counts2 = await audit_migration._migrate_source(
@@ -350,7 +350,7 @@ async def test_migration_checkpoint_handles_empty_timestamp_resume(tmp_path, mon
             unidentified_tenant_id="unidentified_user",
             chunk_size=1,
         )
-        assert counts2.events_inserted == 2
+        assert counts2.events_inserted == 1
 
         async with shared_db.execute("SELECT event_id FROM audit_events") as cur:
             rows = await cur.fetchall()

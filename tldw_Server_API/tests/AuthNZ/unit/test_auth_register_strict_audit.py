@@ -64,4 +64,10 @@ async def test_register_returns_503_when_default_api_key_audit_fails(
         )
 
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Mandatory audit persistence unavailable"
+    assert exc_info.value.detail == {
+        "error": {
+            "message": "Mandatory audit persistence unavailable",
+            "type": "audit_persistence_failure",
+            "code": "audit_persistence_failure",
+        }
+    }

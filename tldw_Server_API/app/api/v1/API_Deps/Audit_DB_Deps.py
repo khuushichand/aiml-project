@@ -4,6 +4,7 @@ Manages user-specific audit service instances for dependency injection.
 
 import asyncio
 import concurrent.futures
+import contextlib
 import os
 import threading
 import time
@@ -47,6 +48,8 @@ _VALID_STORAGE_MODES = {"per_user", "shared"}
 
 @dataclass(frozen=True)
 class AuditShutdownSummary:
+    """Summarize how many audit services shutdown attempted, stopped, or failed."""
+
     requested: int = 0
     stopped: int = 0
     timeout_count: int = 0
@@ -161,6 +164,7 @@ async def _stop_audit_service_instance(
     timeout_s: Optional[float] = None,
 ) -> tuple[bool, bool, Optional[str], Optional[BaseException]]:
     owner_loop = getattr(service, "owner_loop", None)
+    future: concurrent.futures.Future[Any] | None = None
     if owner_loop:
         try:
             if owner_loop.is_closed():
@@ -191,6 +195,9 @@ async def _stop_audit_service_instance(
             await awaitable
         return True, False, None, None
     except asyncio.TimeoutError as exc:
+        if future is not None:
+            with contextlib.suppress(Exception):
+                future.cancel()
         timeout_label = (
             f"Audit service shutdown timed out after {timeout_s:.2f}s ({label})"
             if timeout_s is not None
@@ -543,6 +550,7 @@ class _LoopState:
     init_lock: threading.Lock = field(default_factory=threading.Lock)
     initializing_users: set[Optional[Union[int, str]]] = field(default_factory=set)
     initializing_events: dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
+    shutting_down_keys: set[Optional[Union[int, str]]] = field(default_factory=set)
 
 
 _STATE_LOCK = threading.Lock()
@@ -657,6 +665,10 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
 
     while True:
         with state.init_lock:
+            if cache_key in state.shutting_down_keys:
+                msg = f"Audit service initialization aborted during shutdown for user {user_id}"
+                logger.warning(msg)
+                raise ServiceInitializationError(msg)
             if cache_key in state.initializing_users:
                 if cache_key not in state.initializing_events:
                     state.initializing_events[cache_key] = asyncio.Event()
@@ -711,6 +723,11 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
                 service_instance = await _create_audit_service_for_user(user_id)
 
             # Store in cache
+            with state.init_lock:
+                if cache_key in state.shutting_down_keys:
+                    msg = f"Audit service initialization aborted during shutdown for user {user_id}"
+                    logger.warning(msg)
+                    raise ServiceInitializationError(msg)
             with state.cache_lock:
                 state.cache[cache_key] = service_instance
 
@@ -727,6 +744,17 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
                 event = state.initializing_events.pop(cache_key, None)
                 if event:
                     event.set()
+                should_clear_shutdown_key = (
+                    cache_key in state.shutting_down_keys
+                    and cache_key not in state.initializing_users
+                )
+            if should_clear_shutdown_key:
+                with state.cache_lock:
+                    has_cached_service = cache_key in state.cache
+                if not has_cached_service:
+                    with state.init_lock:
+                        if cache_key not in state.initializing_users:
+                            state.shutting_down_keys.discard(cache_key)
 
     if service_instance is None:
         # Defensive: should not happen, but avoid returning None.
@@ -838,48 +866,60 @@ async def shutdown_user_audit_service(user_id: int) -> AuditShutdownSummary:
     stopped = 0
 
     cache_keys = _shutdown_cache_keys(user_id)
-    for state in _all_loop_states():
-        with state.cache_lock:
-            for cache_key in cache_keys:
-                existing = state.cache.get(cache_key)
-                if existing:
-                    pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                    service = pop_no_cb(cache_key, None) if callable(pop_no_cb) else state.cache.pop(cache_key, None)
-                    if service:
-                        services.append(service)
+    states = list(_all_loop_states())
+    try:
+        for state in states:
+            waiters: list[asyncio.Event] = []
+            with state.init_lock:
+                for cache_key in cache_keys:
+                    state.shutting_down_keys.add(cache_key)
+                    event = state.initializing_events.get(cache_key)
+                    if event is not None:
+                        waiters.append(event)
+            for event in waiters:
+                event.set()
 
-        with state.init_lock:
-            for cache_key in cache_keys:
-                state.initializing_users.discard(cache_key)
-                event = state.initializing_events.pop(cache_key, None)
-                if event:
-                    event.set()
+            with state.cache_lock:
+                for cache_key in cache_keys:
+                    existing = state.cache.get(cache_key)
+                    if existing:
+                        pop_no_cb = getattr(state.cache, "pop_no_callback", None)
+                        service = pop_no_cb(cache_key, None) if callable(pop_no_cb) else state.cache.pop(cache_key, None)
+                        if service:
+                            services.append(service)
 
-    if not services:
-        return AuditShutdownSummary()
+        if not services:
+            return AuditShutdownSummary()
 
-    requested = len(services)
-    for service in services:
-        stopped_ok, _, error_message, _exc = await _stop_audit_service_instance(
-            service,
-            label=f"user {user_id}",
+        requested = len(services)
+        for service in services:
+            stopped_ok, _, error_message, _exc = await _stop_audit_service_instance(
+                service,
+                label=f"user {user_id}",
+            )
+            if stopped_ok:
+                stopped += 1
+                logger.info(f"Shut down audit service for user {user_id}")
+            elif error_message:
+                errors.append(error_message)
+
+        return AuditShutdownSummary(
+            requested=requested,
+            stopped=stopped,
+            timeout_count=0,
+            error_count=len(errors),
+            errors=tuple(errors),
         )
-        if stopped_ok:
-            stopped += 1
-            logger.info(f"Shut down audit service for user {user_id}")
-        elif error_message:
-            errors.append(error_message)
-
-    return AuditShutdownSummary(
-        requested=requested,
-        stopped=stopped,
-        timeout_count=0,
-        error_count=len(errors),
-        errors=tuple(errors),
-    )
+    finally:
+        for state in states:
+            with state.init_lock:
+                for cache_key in cache_keys:
+                    if cache_key not in state.initializing_users:
+                        state.shutting_down_keys.discard(cache_key)
+                        state.initializing_events.pop(cache_key, None)
 
 
-async def shutdown_all_audit_services(*, raise_on_error: bool = False) -> AuditShutdownSummary:
+async def shutdown_all_audit_services(*, raise_on_error: bool = True) -> AuditShutdownSummary:
     """
     Shutdown all cached audit service instances.
     Useful for application shutdown.
@@ -900,88 +940,105 @@ async def shutdown_all_audit_services(*, raise_on_error: bool = False) -> AuditS
     errors: list[str] = []
     first_exception: BaseException | None = None
 
-    for state in _all_loop_states():
-        with state.cache_lock:
-            keys = list(state.cache.keys())
-            total_instances += len(keys)
-            for key in keys:
-                pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                service = pop_no_cb(key, None) if callable(pop_no_cb) else state.cache.pop(key, None)
-                if service:
-                    services.append(service)
-
-        with state.init_lock:
-            for event in state.initializing_events.values():
-                event.set()
-            state.initializing_events.clear()
-            state.initializing_users.clear()
-
-    logger.info(f"Shutting down audit services for {total_instances} instances...")
-
-    def _service_label(service: UnifiedAuditService) -> str:
-        db_path = getattr(service, "db_path", None)
-        storage_mode = getattr(service, "storage_mode", None)
-        return f"id={id(service)} db_path={db_path} storage_mode={storage_mode}"
-
-    if services:
-        stop_tasks = [
-            asyncio.create_task(
-                _stop_audit_service_instance(
-                    service,
-                    label=_service_label(service),
-                    timeout_s=shutdown_timeout_s if shutdown_timeout_s > 0 else None,
-                )
-            )
-            for service in services
-        ]
-        stop_results = await asyncio.gather(*stop_tasks)
-        for stopped_ok, timeout_hit, error_message, exc in stop_results:
-            if stopped_ok:
-                stopped_count += 1
-            elif timeout_hit:
-                timeout_count += 1
-                if error_message:
-                    errors.append(error_message)
-                if first_exception is None:
-                    first_exception = exc
-            else:
-                error_count += 1
-                if error_message:
-                    errors.append(error_message)
-                if first_exception is None:
-                    first_exception = exc
-
+    states = list(_all_loop_states())
+    per_state_shutdown_keys: list[tuple[_LoopState, set[Optional[Union[int, str]]]]] = []
     try:
-        await _drain_scheduled_audit_stops(timeout=shutdown_timeout_s if shutdown_timeout_s > 0 else None)
-    except asyncio.TimeoutError as exc:
-        timeout_count += 1
-        drain_message = f"TimeoutError: scheduled audit stop drain timed out after {shutdown_timeout_s:.2f}s"
-        errors.append(drain_message)
-        if first_exception is None:
-            first_exception = exc
-        logger.error(f"Scheduled audit stop drain timed out after {shutdown_timeout_s:.2f}s")
+        for state in states:
+            waiters: list[asyncio.Event] = []
+            with state.init_lock:
+                shutdown_keys = set(state.initializing_users) | set(state.initializing_events.keys())
+            with state.cache_lock:
+                cache_keys = list(state.cache.keys())
+                total_instances += len(cache_keys)
+                shutdown_keys.update(cache_keys)
+                for key in cache_keys:
+                    pop_no_cb = getattr(state.cache, "pop_no_callback", None)
+                    service = pop_no_cb(key, None) if callable(pop_no_cb) else state.cache.pop(key, None)
+                    if service:
+                        services.append(service)
+            with state.init_lock:
+                state.shutting_down_keys.update(shutdown_keys)
+                for key in shutdown_keys:
+                    event = state.initializing_events.get(key)
+                    if event is not None:
+                        waiters.append(event)
+            for event in waiters:
+                event.set()
+            per_state_shutdown_keys.append((state, shutdown_keys))
 
-    summary = AuditShutdownSummary(
-        requested=total_instances,
-        stopped=stopped_count,
-        timeout_count=timeout_count,
-        error_count=error_count,
-        errors=tuple(errors),
-    )
+        logger.info(f"Shutting down audit services for {total_instances} instances...")
 
-    if timeout_count or error_count:
-        logger.warning(
-            f"Audit services shutdown completed with issues (timeouts={timeout_count}, errors={error_count})."
+        def _service_label(service: UnifiedAuditService) -> str:
+            db_path = getattr(service, "db_path", None)
+            storage_mode = getattr(service, "storage_mode", None)
+            return f"id={id(service)} db_path={db_path} storage_mode={storage_mode}"
+
+        if services:
+            stop_tasks = [
+                asyncio.create_task(
+                    _stop_audit_service_instance(
+                        service,
+                        label=_service_label(service),
+                        timeout_s=shutdown_timeout_s if shutdown_timeout_s > 0 else None,
+                    )
+                )
+                for service in services
+            ]
+            stop_results = await asyncio.gather(*stop_tasks)
+            for stopped_ok, timeout_hit, error_message, exc in stop_results:
+                if stopped_ok:
+                    stopped_count += 1
+                elif timeout_hit:
+                    timeout_count += 1
+                    if error_message:
+                        errors.append(error_message)
+                    if first_exception is None:
+                        first_exception = exc
+                else:
+                    error_count += 1
+                    if error_message:
+                        errors.append(error_message)
+                    if first_exception is None:
+                        first_exception = exc
+
+        try:
+            await _drain_scheduled_audit_stops(timeout=shutdown_timeout_s if shutdown_timeout_s > 0 else None)
+        except asyncio.TimeoutError as exc:
+            timeout_count += 1
+            drain_message = f"TimeoutError: scheduled audit stop drain timed out after {shutdown_timeout_s:.2f}s"
+            errors.append(drain_message)
+            if first_exception is None:
+                first_exception = exc
+            logger.error(f"Scheduled audit stop drain timed out after {shutdown_timeout_s:.2f}s")
+
+        summary = AuditShutdownSummary(
+            requested=total_instances,
+            stopped=stopped_count,
+            timeout_count=timeout_count,
+            error_count=error_count,
+            errors=tuple(errors),
         )
-    else:
-        logger.info("All audit services shut down successfully.")
 
-    return _finalize_shutdown_summary(
-        summary=summary,
-        raise_on_error=raise_on_error,
-        message="Audit services shutdown completed with issues",
-        first_exception=first_exception,
-    )
+        if timeout_count or error_count:
+            logger.warning(
+                f"Audit services shutdown completed with issues (timeouts={timeout_count}, errors={error_count})."
+            )
+        else:
+            logger.info("All audit services shut down successfully.")
+
+        return _finalize_shutdown_summary(
+            summary=summary,
+            raise_on_error=raise_on_error,
+            message="Audit services shutdown completed with issues",
+            first_exception=first_exception,
+        )
+    finally:
+        for state, shutdown_keys in per_state_shutdown_keys:
+            with state.init_lock:
+                for key in shutdown_keys:
+                    if key not in state.initializing_users:
+                        state.shutting_down_keys.discard(key)
+                        state.initializing_events.pop(key, None)
 
 # Example of how to register for shutdown event in FastAPI:
 # from fastapi import FastAPI

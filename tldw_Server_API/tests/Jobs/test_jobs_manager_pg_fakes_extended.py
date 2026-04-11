@@ -12,6 +12,7 @@ class FakePGCursor:
         self._last = None
         self.rowcount = 0
         self._fetch_buffer = None
+        self.job_event_inserts = []
 
     def __enter__(self):
 
@@ -65,6 +66,9 @@ class FakePGCursor:
                     self._fetch_buffer = j
                     return
             self._fetch_buffer = None
+            return
+        if "INSERT INTO job_events(" in s:
+            self.job_event_inserts.append(tuple(params or ()))
             return
         # Count(*) aliases c
         if s.startswith("SELECT COUNT(*) AS c FROM jobs"):
@@ -178,6 +182,50 @@ def test_pg_create_job_idempotent_gates_created_metric(monkeypatch, tmp_path):
     d2 = jm.create_job(domain="pg", queue="default", job_type="x", payload={}, owner_user_id=None, idempotency_key="K")
     assert d2 and d2.get("status") == "queued"
     assert calls["n"] == 1
+
+
+@pytest.mark.unit
+def test_pg_idempotent_create_uses_current_request_context_for_job_created_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOBS_DB_URL", "postgresql://fake")
+    jm = JobManager(db_path=tmp_path / "dummy.db")
+    jm.backend = "postgres"
+
+    jobs = {
+        1: {
+            "id": 1,
+            "domain": "pg",
+            "queue": "default",
+            "job_type": "x",
+            "idempotency_key": "K",
+            "status": "queued",
+            "priority": 5,
+            "available_at": None,
+            "owner_user_id": "owner-1",
+            "request_id": "old-request",
+            "trace_id": "old-trace",
+            "retry_count": 0,
+        }
+    }
+    cursor = FakePGCursor(jobs)
+    monkeypatch.setattr(jm, "_connect", lambda: FakePGConn())
+    monkeypatch.setattr(jm, "_pg_cursor", lambda conn: cursor)
+
+    row = jm.create_job(
+        domain="pg",
+        queue="default",
+        job_type="x",
+        payload={},
+        owner_user_id=None,
+        idempotency_key="K",
+        request_id="new-request",
+        trace_id="new-trace",
+    )
+
+    assert row["id"] == 1
+    assert cursor.job_event_inserts
+    event_params = cursor.job_event_inserts[-1]
+    assert event_params[7] == "new-request"
+    assert event_params[8] == "new-trace"
 
 
 @pytest.mark.unit
