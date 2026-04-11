@@ -10,7 +10,7 @@ describe("ServerReadinessGate", () => {
   it("accepts the backend healthy status envelope", async () => {
     vi.stubEnv("NEXT_PUBLIC_TLDW_DEPLOYMENT_MODE", "advanced")
     vi.stubEnv("NEXT_PUBLIC_API_URL", "http://127.0.0.1:8000")
-    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({ status: "healthy" })
     } as Response)
@@ -25,5 +25,10 @@ describe("ServerReadinessGate", () => {
     await waitFor(() => {
       expect(screen.getByText("App ready")).toBeInTheDocument()
     })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/v1/health",
+      expect.objectContaining({ method: "GET" })
+    )
   })
 })

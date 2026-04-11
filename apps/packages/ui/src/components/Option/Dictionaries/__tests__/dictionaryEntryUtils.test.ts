@@ -22,11 +22,12 @@ describe("dictionaryEntryUtils", () => {
   it("normalizes safe integers and timed-effects payload shape", () => {
     expect(toSafeNonNegativeInteger(3.8)).toBe(3)
     expect(toSafeNonNegativeInteger(-1)).toBe(0)
-    expect(toSafeNonNegativeInteger("5")).toBe(0)
+    expect(toSafeNonNegativeInteger("5")).toBe(5)
+    expect(toSafeNonNegativeInteger("abc")).toBe(0)
 
     expect(buildTimedEffectsPayload(undefined)).toBeUndefined()
     expect(buildTimedEffectsPayload({ sticky: "2", cooldown: 5.9, delay: -3 })).toEqual({
-      sticky: 0,
+      sticky: 2,
       cooldown: 5,
       delay: 0,
     })
