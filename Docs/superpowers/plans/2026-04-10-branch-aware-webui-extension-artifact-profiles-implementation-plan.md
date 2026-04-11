@@ -18,14 +18,14 @@
 **Tests**:
 - `cd apps/tldw-frontend && bunx vitest run __tests__/frontend-dev-config.test.ts __tests__/frontend-ci-networking-workflows.test.ts`
 - `cd apps/extension && bunx vitest run tests/e2e/utils/extension-paths.test.ts tests/e2e/setup/build-extension.test.ts tests/e2e/utils/extension.launch.test.ts`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 2: Lock The Shared Resolver And WebUI Contract With Red Tests
 **Goal**: Add failing tests for branch-to-profile resolution, fallback behavior, WebUI env shaping, and package script wiring before implementing the resolver and wrapper.
 **Success Criteria**: New tests fail because the shared resolver does not exist yet, `main`/feature-branch logic is not encoded anywhere, and the WebUI package scripts still call `next build` directly.
 **Tests**:
 - `cd apps/tldw-frontend && bunx vitest run __tests__/build-profile-resolver.test.ts __tests__/frontend-dev-config.test.ts`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Implement Shared Resolver And WebUI Profile-Aware Build Scripts
 **Goal**: Add the shared resolver, add the WebUI profile wrapper, and wire both Turbopack and webpack artifact paths through the same branch-aware contract.
@@ -34,7 +34,7 @@
 - Stage 2 command
 - `cd apps/tldw-frontend && NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 bun run build:dev`
 - `cd apps/tldw-frontend && bun run build:prod`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Implement Extension Profile-Aware Browser And Archive Entry Points
 **Goal**: Make browser-specific extension build and zip commands profile-aware, keep canonical internal build roots stable, and export developer-facing unpacked/zip artifacts with `-dev` suffixes.
@@ -44,7 +44,7 @@
 - `cd apps/extension && bun run build:chrome:dev`
 - `cd apps/extension && bun run build:chrome:prod`
 - `cd apps/extension && bun run zip:dev`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: Force Production In CI, Update Docs, And Verify End-To-End
 **Goal**: Update required workflows and contributor docs so production paths stay explicit in automation and human instructions match the new contract.
@@ -53,7 +53,7 @@
 - `cd apps/tldw-frontend && bunx vitest run __tests__/frontend-ci-networking-workflows.test.ts`
 - `cd apps/extension && bunx vitest run tests/unit/workflow-build-profile.test.ts`
 - Re-run the Stage 3 and Stage 4 verification commands after doc/workflow changes
-**Status**: Not Started
+**Status**: Complete
 
 ## File Map
 
@@ -105,7 +105,7 @@
 **Files:**
 - Modify: `Docs/superpowers/plans/2026-04-10-branch-aware-webui-extension-artifact-profiles-implementation-plan.md`
 
-- [ ] **Step 1: Create or switch to an isolated worktree**
+- [x] **Step 1: Create or switch to an isolated worktree**
 
 ```bash
 git worktree add ../tldw_server2-branch-aware-artifacts -b codex/branch-aware-artifact-profiles
@@ -113,23 +113,25 @@ git worktree add ../tldw_server2-branch-aware-artifacts -b codex/branch-aware-ar
 
 Expected: a new worktree exists on branch `codex/branch-aware-artifact-profiles`.
 
-- [ ] **Step 2: Install workspace dependencies once from the monorepo apps root**
+- [x] **Step 2: Install workspace dependencies once from the monorepo apps root**
 
 Run: `cd apps && bun install --frozen-lockfile`
 
 Expected: both `apps/tldw-frontend` and `apps/extension` can run Vitest and build wrappers without ad hoc dependency drift.
 
-- [ ] **Step 3: Run the baseline WebUI contract tests**
+- [x] **Step 3: Run the baseline WebUI contract tests**
 
 Run: `cd apps/tldw-frontend && bunx vitest run __tests__/frontend-dev-config.test.ts __tests__/frontend-ci-networking-workflows.test.ts`
 
 Expected: PASS. This confirms the current WebUI script/workflow contract is reproducible before changes.
 
-- [ ] **Step 4: Run the baseline extension helper tests**
+- [x] **Step 4: Run the baseline extension helper tests**
 
 Run: `cd apps/extension && bunx vitest run tests/e2e/utils/extension-paths.test.ts tests/e2e/setup/build-extension.test.ts tests/e2e/utils/extension.launch.test.ts`
 
 Expected: PASS. This confirms the extension’s canonical-root assumptions are stable before wrapper changes.
+
+**Execution notes:** `cd apps && bun install --frozen-lockfile` completed successfully. Baseline WebUI Vitest suite passed (`2` files, `6` tests). Baseline extension Vitest suite passed (`3` files, `8` tests).
 
 ### Task 2: Add Shared Resolver And WebUI Red Tests
 
@@ -138,7 +140,7 @@ Expected: PASS. This confirms the extension’s canonical-root assumptions are s
 - Create: `apps/tldw-frontend/__tests__/build-profile-resolver.test.ts`
 - Modify: `apps/tldw-frontend/__tests__/frontend-dev-config.test.ts`
 
-- [ ] **Step 1: Write the failing shared resolver and WebUI env-shaping tests**
+- [x] **Step 1: Write the failing shared resolver and WebUI env-shaping tests**
 
 ```ts
 import { describe, expect, it } from "vitest"
@@ -188,26 +190,28 @@ describe("shapeWebuiBuildEnv", () => {
 })
 ```
 
-- [ ] **Step 2: Extend the existing package-script contract test to assert new WebUI entrypoints**
+- [x] **Step 2: Extend the existing package-script contract test to assert new WebUI entrypoints**
 
 Add assertions in `apps/tldw-frontend/__tests__/frontend-dev-config.test.ts` that:
 - `build` runs the profile wrapper
 - `build:prod` and `build:dev` exist
 - `compile`, `compile:prod`, and `compile:dev` exist and route through the same wrapper
 
-- [ ] **Step 3: Run the new WebUI tests to verify they fail**
+- [x] **Step 3: Run the new WebUI tests to verify they fail**
 
 Run: `cd apps/tldw-frontend && bunx vitest run __tests__/build-profile-resolver.test.ts __tests__/frontend-dev-config.test.ts`
 
 Expected: FAIL because the shared resolver and wrapper do not exist and `package.json` still calls `next build` directly.
 
-- [ ] **Step 4: Commit the failing-test checkpoint**
+- [x] **Step 4: Commit the failing-test checkpoint**
 
 ```bash
 git add apps/tldw-frontend/__tests__/build-profile-resolver.test.ts \
         apps/tldw-frontend/__tests__/frontend-dev-config.test.ts
 git commit -m "test: lock webui branch-aware build profile contract"
 ```
+
+**Execution notes:** The red checkpoint intentionally adds only tests. `bunx vitest run __tests__/build-profile-resolver.test.ts __tests__/frontend-dev-config.test.ts` failed as expected because `../../scripts/resolve-build-profile.mjs` does not exist yet and `package.json` still points `build`/`compile` at direct `next build` commands instead of the future profile wrapper entrypoints.
 
 ### Task 3: Implement The Shared Resolver And WebUI Wrapper
 
@@ -218,7 +222,7 @@ git commit -m "test: lock webui branch-aware build profile contract"
 - Modify: `apps/tldw-frontend/__tests__/build-profile-resolver.test.ts`
 - Modify: `apps/tldw-frontend/__tests__/frontend-dev-config.test.ts`
 
-- [ ] **Step 1: Implement the shared profile resolver as a pure helper first**
+- [x] **Step 1: Implement the shared profile resolver as a pure helper first**
 
 ```js
 import { execFileSync } from "node:child_process"
@@ -255,7 +259,7 @@ export function getCurrentGitBranch(cwd = process.cwd()) {
 }
 ```
 
-- [ ] **Step 2: Implement the WebUI wrapper with explicit env shaping**
+- [x] **Step 2: Implement the WebUI wrapper with explicit env shaping**
 
 ```js
 import { spawn } from "node:child_process"
@@ -279,26 +283,26 @@ export function shapeWebuiBuildEnv(profile, env = process.env) {
 }
 ```
 
-Use an `--engine=turbopack|webpack` flag so both `build` and `compile` call one wrapper.
+Use a single bundler flag so both `build` and `compile` call one wrapper.
 
-- [ ] **Step 3: Wire `package.json` through the new wrapper**
+- [x] **Step 3: Wire `package.json` through the new wrapper**
 
 Update scripts so they follow this shape:
 
 ```json
 {
-  "build": "node scripts/build-with-profile.mjs --engine=turbopack",
-  "build:prod": "TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --engine=turbopack",
-  "build:dev": "TLDW_BUILD_PROFILE=development node scripts/build-with-profile.mjs --engine=turbopack",
-  "compile": "node scripts/build-with-profile.mjs --engine=webpack",
-  "compile:prod": "TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --engine=webpack",
-  "compile:dev": "TLDW_BUILD_PROFILE=development node scripts/build-with-profile.mjs --engine=webpack"
+  "build": "node scripts/build-with-profile.mjs --bundler=turbopack && node scripts/verify-shared-token-sync.mjs --dir .next",
+  "build:prod": "TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --bundler=turbopack && node scripts/verify-shared-token-sync.mjs --dir .next",
+  "build:dev": "TLDW_BUILD_PROFILE=development node scripts/build-with-profile.mjs --bundler=turbopack && node scripts/verify-shared-token-sync.mjs --dir .next",
+  "compile": "node scripts/build-with-profile.mjs --bundler=webpack && node scripts/verify-shared-token-sync.mjs --dir .next",
+  "compile:prod": "TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --bundler=webpack && node scripts/verify-shared-token-sync.mjs --dir .next",
+  "compile:dev": "TLDW_BUILD_PROFILE=development node scripts/build-with-profile.mjs --bundler=webpack && node scripts/verify-shared-token-sync.mjs --dir .next"
 }
 ```
 
-Keep the existing `verify-shared-token-sync.mjs --dir .next` call inside the wrapper after the build succeeds so the validation behavior stays unchanged.
+Keep the existing `verify-shared-token-sync.mjs --dir .next` behavior unchanged.
 
-- [ ] **Step 4: Run the WebUI tests and targeted build commands**
+- [x] **Step 4: Run the WebUI tests and targeted build commands**
 
 Run:
 - `cd apps/tldw-frontend && bunx vitest run __tests__/build-profile-resolver.test.ts __tests__/frontend-dev-config.test.ts`
@@ -310,7 +314,7 @@ Expected:
 - `build:dev` produces an advanced-mode artifact
 - `build:prod` produces a quickstart-mode artifact without requiring a browser-visible `NEXT_PUBLIC_API_URL`
 
-- [ ] **Step 5: Commit the WebUI slice**
+- [x] **Step 5: Commit the WebUI slice**
 
 ```bash
 git add apps/scripts/resolve-build-profile.mjs \
@@ -320,6 +324,8 @@ git add apps/scripts/resolve-build-profile.mjs \
         apps/tldw-frontend/__tests__/frontend-dev-config.test.ts
 git commit -m "feat: add branch-aware webui build profiles"
 ```
+
+**Execution notes:** Stage 2 WebUI tests now pass (`2` files, `11` tests). `build:dev` and `build:prod` both passed once rerun outside the desktop sandbox; the sandboxed Turbopack process could not create its helper process on macOS and failed with `Operation not permitted (os error 1)`. Both successful builds emitted pre-existing Turbopack warnings from `apps/tldw-frontend/lib/documentation.ts` about broad documentation file patterns, but completed successfully and preserved the `.next` token-sync verification step.
 
 ### Task 4: Add Extension Red Tests And Implement Profile-Aware Browser/Archive Commands
 
@@ -451,7 +457,7 @@ git commit -m "feat: add branch-aware extension artifact profiles"
 - Modify: `apps/extension/docs/Testing-Guide.md`
 - Modify: `Docs/superpowers/plans/2026-04-10-branch-aware-webui-extension-artifact-profiles-implementation-plan.md`
 
-- [ ] **Step 1: Add failing workflow guard tests**
+- [x] **Step 1: Add failing workflow guard tests**
 
 Extend `apps/tldw-frontend/__tests__/frontend-ci-networking-workflows.test.ts` to assert the WebUI smoke gate calls `bun run build:prod`.
 
@@ -474,7 +480,7 @@ describe("extension workflow build profile contract", () => {
 })
 ```
 
-- [ ] **Step 2: Update the required workflows to force production builds**
+- [x] **Step 2: Update the required workflows to force production builds**
 
 Modify:
 - `.github/workflows/frontend-ux-gates.yml`
@@ -484,7 +490,7 @@ Modify:
 
 Leave branch-faithful or dev-oriented workflows alone unless they explicitly validate production artifacts.
 
-- [ ] **Step 3: Update contributor docs**
+- [x] **Step 3: Update contributor docs**
 
 Update docs to say:
 - `main` builds production artifacts by default
@@ -492,7 +498,7 @@ Update docs to say:
 - explicit `:prod` commands are the escape hatch for release-like artifacts on feature branches
 - extension developer-facing install dirs and zips get `-dev`, while internal canonical roots used by tooling stay stable
 
-- [ ] **Step 4: Run the workflow contract tests**
+- [x] **Step 4: Run the workflow contract tests**
 
 Run:
 - `cd apps/tldw-frontend && bunx vitest run __tests__/frontend-ci-networking-workflows.test.ts`
@@ -500,7 +506,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 5: Re-run final targeted verification**
+- [x] **Step 5: Re-run final targeted verification**
 
 Run:
 - `cd apps/tldw-frontend && NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 bun run build:dev`
@@ -512,7 +518,7 @@ Run:
 
 Expected: all commands succeed and produce the expected profile-specific outputs.
 
-- [ ] **Step 6: Handle the security check requirement explicitly**
+- [x] **Step 6: Handle the security check requirement explicitly**
 
 If the implementation remains JavaScript/YAML/docs-only, record in the execution notes that Bandit is not applicable because no Python files were touched.
 
@@ -526,7 +532,7 @@ Expected:
 - non-applicable case is explicitly documented
 - applicable case produces no new findings in touched Python files
 
-- [ ] **Step 7: Commit the CI/docs slice**
+- [x] **Step 7: Commit the CI/docs slice**
 
 ```bash
 git add apps/tldw-frontend/__tests__/frontend-ci-networking-workflows.test.ts \
@@ -539,3 +545,15 @@ git add apps/tldw-frontend/__tests__/frontend-ci-networking-workflows.test.ts \
         apps/extension/docs/Testing-Guide.md
 git commit -m "docs: document branch-aware artifact profile workflow"
 ```
+
+**Execution notes:** Stage 5 workflow guard tests passed for both apps. Final targeted verification passed for:
+- `cd apps/tldw-frontend && bunx vitest run __tests__/build-profile-resolver.test.ts __tests__/frontend-dev-config.test.ts __tests__/frontend-ci-networking-workflows.test.ts`
+- `cd apps/tldw-frontend && NEXT_PUBLIC_API_URL=http://127.0.0.1:8000 bun run build:dev`
+- `cd apps/tldw-frontend && bun run build:prod`
+- `cd apps/extension && bunx vitest run tests/unit/build-profile-wrapper.test.ts tests/unit/workflow-build-profile.test.ts tests/e2e/utils/extension-paths.test.ts tests/e2e/setup/build-extension.test.ts`
+- `cd apps/extension && bun run build:chrome:dev`
+- `cd apps/extension && bun run build:chrome:prod`
+- `cd apps/extension && bun run zip:dev`
+- `cd apps/extension && bun run zip:prod`
+
+The WebUI Turbopack builds had to be rerun outside the sandbox because the in-sandbox execution failed with `Operation not permitted (os error 1)` while Turbopack spawned a helper process during CSS processing. That was an environment restriction rather than a contract failure. Follow-up hardening also closed two review gaps: development zips now rename the generated archive so only the `-dev` filename remains, and the Playwright global-setup fallback now calls the explicit production wrapper instead of raw `wxt build`. Bandit is not applicable here because only JavaScript/TypeScript, YAML, and Markdown files were touched.

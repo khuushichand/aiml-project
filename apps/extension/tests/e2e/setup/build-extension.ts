@@ -94,27 +94,28 @@ export default async function globalSetup() {
     }
   }
 
-  // Build the extension once before running tests
-  // Prefer npm (bun may be unavailable in some environments)
-  try {
-    execSync('npm run build:chrome', {
-      stdio: 'inherit',
-      cwd: projectRoot
-    })
-  } catch {
+  const buildCommands = [
+    'npm run build:chrome:prod',
+    'bun run build:chrome:prod',
+    'cross-env TLDW_BUILD_PROFILE=production node scripts/build-with-profile.mjs --browser=chrome'
+  ]
+
+  let lastError: unknown
+  for (const command of buildCommands) {
     try {
-      // Fallback: use wxt directly
-      execSync('cross-env TARGET=chrome wxt build', {
+      execSync(command, {
         stdio: 'inherit',
         cwd: projectRoot
       })
-    } catch {
-      // Last resort: bun (if present)
-      execSync('bun run build:chrome', {
-        stdio: 'inherit',
-        cwd: projectRoot
-      })
+      lastError = undefined
+      break
+    } catch (error) {
+      lastError = error
     }
+  }
+
+  if (lastError) {
+    throw lastError
   }
 
   applyTestHostPermissions(projectRoot)
