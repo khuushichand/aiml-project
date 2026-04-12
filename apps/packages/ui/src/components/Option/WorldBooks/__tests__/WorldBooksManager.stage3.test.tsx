@@ -171,11 +171,9 @@ describe("WorldBooksManager stage-3 action affordances", () => {
 
     await user.click(screen.getByText("Quick Attach Characters"))
     expect(
-      await screen.findByRole(
-        "button",
-        { name: "View attached characters for Arcana (1)" },
-        { timeout: 10_000 }
-      )
+      await screen.findByText("Quick attach: Arcana", undefined, { timeout: 10_000 })
     ).toBeInTheDocument()
+    expect(screen.getByText("Currently attached")).toBeInTheDocument()
+    expect(screen.getByRole("link", { name: "Open character Aria" })).toBeInTheDocument()
   }, 15_000)
 })
