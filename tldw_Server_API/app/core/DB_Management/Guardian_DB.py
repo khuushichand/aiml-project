@@ -27,6 +27,7 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from tldw_Server_API.app.core.DB_Management.db_path_utils import resolve_trusted_database_path
 from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     begin_immediate_if_needed,
     configure_sqlite_connection,
@@ -309,7 +310,7 @@ class ActivationRun:
 
 class GuardianDB:
     def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
+        self.db_path = str(resolve_trusted_database_path(db_path, label="guardian database"))
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._ensure_schema()

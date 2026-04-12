@@ -777,7 +777,6 @@ describe("background proxy fallback safety", () => {
     )
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
-
   it("does not refresh or re-add auth for cross-origin absolute stream URLs", async () => {
     mocks.sendMessage.mockResolvedValue({ ok: false })
     mocks.storageGet.mockImplementation(async (key: string) => {

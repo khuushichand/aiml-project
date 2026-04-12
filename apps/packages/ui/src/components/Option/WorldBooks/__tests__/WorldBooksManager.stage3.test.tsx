@@ -160,7 +160,7 @@ describe("WorldBooksManager stage-3 action affordances", () => {
     expect(screen.getByRole("button", { name: "Edit Arcana" })).toBeInTheDocument()
     expect(screen.getByRole("button", { name: "More actions for Arcana" })).toBeInTheDocument()
 
-    // Open overflow menu to check available actions
+    // Open overflow menu to check available actions.
     await user.click(screen.getByRole("button", { name: "More actions for Arcana" }))
     expect(await screen.findByText("Manage Entries")).toBeInTheDocument()
     expect(screen.getByText("Duplicate")).toBeInTheDocument()
@@ -168,5 +168,14 @@ describe("WorldBooksManager stage-3 action affordances", () => {
     expect(screen.getByText("Export JSON")).toBeInTheDocument()
     expect(screen.getByText("Statistics")).toBeInTheDocument()
     expect(screen.getByText("Delete")).toBeInTheDocument()
-  })
+
+    await user.click(screen.getByText("Quick Attach Characters"))
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "View attached characters for Arcana (1)" },
+        { timeout: 10_000 }
+      )
+    ).toBeInTheDocument()
+  }, 15_000)
 })
