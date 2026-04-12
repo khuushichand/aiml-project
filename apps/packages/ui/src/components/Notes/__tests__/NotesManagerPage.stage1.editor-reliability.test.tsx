@@ -253,6 +253,18 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
     })
   })
 
+  it("hides the welcome state after starting a new draft", async () => {
+    renderPage()
+
+    expect(screen.getByTestId("notes-editor-empty-state")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("notes-editor-empty-create"))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notes-editor-empty-state")).not.toBeInTheDocument()
+    })
+  })
+
   it("preserves the pending last-note setting when note hydration fails", async () => {
     mockGetSetting.mockResolvedValue("pending-note")
     mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {

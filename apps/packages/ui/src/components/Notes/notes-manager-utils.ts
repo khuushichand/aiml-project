@@ -1,8 +1,12 @@
 import React from 'react'
 import { Modal, Input } from 'antd'
 import type { NotesTitleSuggestStrategy, NotesNotebookSetting } from '@/services/settings/ui-settings'
+import { createSafeStorage } from '@/utils/safe-storage'
 import type { NotesStudioHandwritingMode, NotesStudioTemplateType } from './notes-studio-types'
 import type { NoteListItem } from './types'
+
+export const NOTES_TUTORIAL_SHOWN_STORAGE_KEY = 'notes-tutorial-shown'
+export const notesUiStorage = createSafeStorage({ area: 'local' })
 
 /**
  * Replacement for window.prompt() using Ant Design modal.
@@ -18,6 +22,12 @@ export function promptModal(options: {
 }): Promise<string | null> {
   return new Promise((resolve) => {
     let currentValue = options.defaultValue ?? ''
+    let settled = false
+    const finish = (value: string | null) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
     const modal = Modal.confirm({
       title: options.title,
       icon: null,
@@ -32,14 +42,14 @@ export function promptModal(options: {
           onChange: (e: React.ChangeEvent<HTMLInputElement>) => { currentValue = e.target.value },
           onPressEnter: () => {
             modal.destroy()
-            resolve(currentValue.trim() || null)
+            finish(currentValue.trim())
           },
         }),
       ),
       okText: options.okText ?? 'OK',
       cancelText: options.cancelText ?? 'Cancel',
-      onOk: () => resolve(currentValue.trim() || null),
-      onCancel: () => resolve(null),
+      onOk: () => finish(currentValue.trim()),
+      onCancel: () => finish(null),
     })
   })
 }

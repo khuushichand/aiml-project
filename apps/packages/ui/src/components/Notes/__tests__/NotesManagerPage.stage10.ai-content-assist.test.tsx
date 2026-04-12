@@ -130,7 +130,26 @@ vi.mock("@/components/Common/MarkdownPreview", () => ({
 }))
 
 vi.mock("@/components/Notes/NotesListPanel", () => ({
-  default: () => <div data-testid="notes-list-panel" />
+  default: ({
+    notes,
+    onSelectNote
+  }: {
+    notes?: Array<{ id: string | number; title?: string }>
+    onSelectNote?: (id: string | number) => void
+  }) => (
+    <div data-testid="notes-list-panel">
+      {(notes || []).map((note) => (
+        <button
+          key={String(note.id)}
+          type="button"
+          data-testid={`notes-open-button-${String(note.id)}`}
+          onClick={() => onSelectNote?.(note.id)}
+        >
+          {note.title || `Note ${String(note.id)}`}
+        </button>
+      ))}
+    </div>
+  )
 }))
 
 const renderPage = () => {
@@ -158,7 +177,43 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
       const path = String(request.path || "")
       const method = String(request.method || "GET").toUpperCase()
       if (path.startsWith("/api/v1/notes/?")) {
-        return { items: [], pagination: { total_items: 0, total_pages: 1 } }
+        return {
+          items: [
+            { id: "note-a", title: "Alpha note", content: "Alpha source body", metadata: { keywords: [] }, version: 1 },
+            { id: "note-b", title: "Beta note", content: "Beta source body", metadata: { keywords: [] }, version: 1 }
+          ],
+          pagination: { total_items: 2, total_pages: 1 }
+        }
+      }
+      if (path === "/api/v1/notes/note-a" && method === "GET") {
+        return {
+          id: "note-a",
+          title: "Alpha note",
+          content: "Alpha source body",
+          metadata: { keywords: [] },
+          version: 1
+        }
+      }
+      if (path === "/api/v1/notes/note-b" && method === "GET") {
+        return {
+          id: "note-b",
+          title: "Beta note",
+          content: "Beta source body",
+          metadata: { keywords: [] },
+          version: 1
+        }
+      }
+      if (path.startsWith("/api/v1/notes/note-a/neighbors")) {
+        return {
+          nodes: [{ id: "note-a", type: "note", label: "Alpha note" }],
+          edges: []
+        }
+      }
+      if (path.startsWith("/api/v1/notes/note-b/neighbors")) {
+        return {
+          nodes: [{ id: "note-b", type: "note", label: "Beta note" }],
+          edges: []
+        }
       }
       if (path === "/api/v1/admin/notes/title-settings" && method === "GET") {
         return {
@@ -273,5 +328,25 @@ describe("NotesManagerPage stage 10 AI content assist actions", () => {
     })
     const editorKeywordsControl = screen.getByTestId("notes-keywords-editor")
     expect(within(editorKeywordsControl).queryByText("quantum")).not.toBeInTheDocument()
+  })
+
+  it("clears AI undo state when switching to a different note", async () => {
+    renderPage()
+
+    fireEvent.click(await screen.findByTestId("notes-open-button-note-a"))
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Alpha note")).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByTestId("notes-assist-summarize"))
+    expect(await screen.findByTestId("notes-undo-assist")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("notes-open-button-note-b"))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Beta note")).toBeInTheDocument()
+    })
+    expect(screen.getByDisplayValue("Beta source body")).toBeInTheDocument()
+    expect(screen.queryByTestId("notes-undo-assist")).not.toBeInTheDocument()
   })
 })

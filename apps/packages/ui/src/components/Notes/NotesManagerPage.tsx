@@ -1,5 +1,6 @@
 import React from 'react'
 import { Input, Typography, Button } from 'antd'
+import type { InputRef } from 'antd'
 import {
   ChevronLeft,
   ChevronRight,
@@ -76,6 +77,8 @@ import {
   TRASH_LOOKUP_MAX_PAGES,
   sortNotesByPinnedIds,
   promptModal,
+  NOTES_TUTORIAL_SHOWN_STORAGE_KEY,
+  notesUiStorage,
 } from './notes-manager-utils'
 
 const LazyNotesManagerOverlays = React.lazy(() => import("./NotesManagerOverlays"))
@@ -152,6 +155,7 @@ const NotesManagerPage: React.FC = () => {
   const conversationLabelRetryAttemptsRef = React.useRef<Record<string, number>>({})
   const conversationLabelRetryTimeoutRef = React.useRef<number | null>(null)
   const [conversationLabelRetryTick, setConversationLabelRetryTick] = React.useState(0)
+  const searchInputRef = React.useRef<InputRef | null>(null)
 
   // ---- Notebook keyword tokens (needed before list hook) ----
   // We compute this after list hook provides selectedNotebook
@@ -247,6 +251,24 @@ const NotesManagerPage: React.FC = () => {
     setKeywordSuggestionSelection: kw.setKeywordSuggestionSelection,
     editorDisabled,
   })
+  const [hasActiveDraft, setHasActiveDraft] = React.useState(false)
+  const resetEditorToEmptyState = React.useCallback(() => {
+    setHasActiveDraft(false)
+    ed.resetEditor()
+  }, [ed.resetEditor])
+  const startDraftSession = React.useCallback(() => {
+    setHasActiveDraft(true)
+    ed.resetEditor()
+  }, [ed.resetEditor])
+  const focusSearchInput = React.useCallback(() => {
+    searchInputRef.current?.focus()
+  }, [])
+
+  React.useEffect(() => {
+    if (ed.selectedId != null) {
+      setHasActiveDraft(false)
+    }
+  }, [ed.selectedId])
 
   const [notesStudioCreateOpen, setNotesStudioCreateOpen] = React.useState(false)
   const [notesStudioCreateLoading, setNotesStudioCreateLoading] = React.useState(false)
@@ -340,7 +362,8 @@ const NotesManagerPage: React.FC = () => {
   const {
     data: noteNeighborsData,
     isLoading: noteNeighborsLoading,
-    isError: noteNeighborsError
+    isError: noteNeighborsError,
+    refetch: refetchNoteNeighbors
   } = useQuery({
     queryKey: ['note-graph-neighbors', ed.selectedId, ed.graphMutationTick],
     enabled: isOnline && ed.selectedId != null,
@@ -698,7 +721,7 @@ const NotesManagerPage: React.FC = () => {
     if (!ok) return
     if (list.listMode !== 'active') list.setListMode('active')
     if (isMobileViewport) setMobileSidebarOpen(false)
-    ed.resetEditor()
+    startDraftSession()
     const template = NOTE_TEMPLATES.find((entry) => entry.id === templateId)
     if (template) {
       ed.setTitle(template.title)
@@ -710,7 +733,19 @@ const NotesManagerPage: React.FC = () => {
     setTimeout(() => {
       ed.titleInputRef.current?.focus()
     }, 0)
-  }, [ed, isMobileViewport, list, message])
+  }, [
+    ed.confirmDiscardIfDirty,
+    ed.setContent,
+    ed.setIsDirty,
+    ed.setSaveIndicator,
+    ed.setTitle,
+    ed.titleInputRef,
+    isMobileViewport,
+    list.listMode,
+    list.setListMode,
+    message,
+    startDraftSession
+  ])
 
   const handleCreateStudyPackFromNote = React.useCallback(() => {
     const selectedNoteId = ed.selectedId
@@ -771,7 +806,7 @@ const NotesManagerPage: React.FC = () => {
     const duplicateContent = ed.content
     const duplicateKeywords = [...kw.editorKeywords]
 
-    ed.resetEditor()
+    startDraftSession()
     ed.setTitle(duplicateTitle)
     ed.setContent(duplicateContent)
     kw.setEditorKeywords(duplicateKeywords)
@@ -782,12 +817,22 @@ const NotesManagerPage: React.FC = () => {
       ed.titleInputRef.current?.focus()
     }, 0)
   }, [
-    ed,
+    ed.content,
+    ed.selectedId,
+    ed.setContent,
+    ed.setIsDirty,
+    ed.setSaveIndicator,
+    ed.setTitle,
+    ed.title,
+    ed.titleInputRef,
     editorDisabled,
     isMobileViewport,
-    kw,
-    list,
+    kw.editorKeywords,
+    kw.setEditorKeywords,
+    list.listMode,
+    list.setListMode,
     message,
+    startDraftSession
   ])
 
   // Manual links
@@ -1018,7 +1063,7 @@ const NotesManagerPage: React.FC = () => {
         headers: { "expected-version": String(expectedVersion) }
       })
       showDeleteUndoToast(targetId)
-      if (ed.selectedId != null && String(ed.selectedId) === targetId) ed.resetEditor()
+      if (ed.selectedId != null && String(ed.selectedId) === targetId) resetEditorToEmptyState()
       await list.refetch()
     } catch (e: any) {
       if (ed.isVersionConflictError(e)) {
@@ -1103,7 +1148,7 @@ const NotesManagerPage: React.FC = () => {
     if (deleted > 0) {
       message.success(`Deleted ${deleted} selected note${deleted === 1 ? '' : 's'}`)
       if (ed.selectedId != null && deletedIds.has(String(ed.selectedId))) {
-        ed.resetEditor()
+        resetEditorToEmptyState()
       }
       list.setBulkSelectedIds((current) => current.filter((id) => !deletedIds.has(id)))
       await list.refetch()
@@ -1200,10 +1245,12 @@ const NotesManagerPage: React.FC = () => {
       if (ed.editorInputMode === 'wysiwyg') {
         const richEditor = ed.richEditorRef.current
         if (!richEditor) return
-        richEditor.focus()
-        const execute = (command: string, value?: string) => {
+        const execute = (command: string, value?: string, options?: { focus?: boolean }) => {
           if (typeof document === 'undefined') return
           if (typeof document.execCommand !== 'function') return
+          if (options?.focus !== false) {
+            richEditor.focus()
+          }
           document.execCommand(command, false, value)
         }
         if (action === 'bold') execute('bold')
@@ -1212,6 +1259,17 @@ const NotesManagerPage: React.FC = () => {
         else if (action === 'list') execute('insertUnorderedList')
         else if (action === 'link') {
           ;(async () => {
+            const savedSelection =
+              typeof window !== 'undefined'
+                ? (() => {
+                    const selection = window.getSelection()
+                    if (!selection || selection.rangeCount === 0) return null
+                    const currentRange = selection.getRangeAt(0)
+                    return richEditor.contains(currentRange.commonAncestorContainer)
+                      ? currentRange.cloneRange()
+                      : null
+                  })()
+                : null
             const href = await promptModal({
               title: 'Insert link',
               defaultValue: 'https://',
@@ -1221,7 +1279,12 @@ const NotesManagerPage: React.FC = () => {
             const normalizedHref = String(href || '').trim()
             if (!normalizedHref) return
             richEditor.focus()
-            execute('createLink', normalizedHref)
+            if (savedSelection) {
+              const selection = window.getSelection()
+              selection?.removeAllRanges()
+              selection?.addRange(savedSelection)
+            }
+            execute('createLink', normalizedHref, { focus: false })
             const nextHtml = richEditor.innerHTML
             ed.setWysiwygHtml(nextHtml)
             ed.setWysiwygSessionDirty(true)
@@ -1764,6 +1827,13 @@ const NotesManagerPage: React.FC = () => {
 
   const showLargeListPaginationHint =
     list.listMode === 'active' && list.listViewMode !== 'moodboard' && list.total >= LARGE_NOTES_PAGINATION_THRESHOLD
+  const showEditorEmptyState =
+    ed.selectedId == null &&
+    !hasActiveDraft &&
+    !ed.isDirty &&
+    ed.title.trim().length === 0 &&
+    ed.content.trim().length === 0 &&
+    kw.editorKeywords.length === 0
 
   // Timeline sections
   const timelineSections = React.useMemo(() => {
@@ -1887,6 +1957,7 @@ const NotesManagerPage: React.FC = () => {
 
       // Alt+N — create new note
       if (event.altKey && (event.key === 'n' || event.key === 'N') && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        if (shouldIgnoreGlobalShortcut(event.target)) return
         event.preventDefault()
         void handleNewNote()
         return
@@ -1894,9 +1965,9 @@ const NotesManagerPage: React.FC = () => {
 
       // Ctrl/Cmd+K — focus search
       if ((event.ctrlKey || event.metaKey) && event.key === 'k' && !event.shiftKey && !event.altKey) {
+        if (shouldIgnoreGlobalShortcut(event.target)) return
         event.preventDefault()
-        const searchInput = document.querySelector<HTMLInputElement>('[data-testid="notes-list-region"] input[type="search"], [data-testid="notes-list-region"] input')
-        searchInput?.focus()
+        focusSearchInput()
         return
       }
 
@@ -1904,8 +1975,7 @@ const NotesManagerPage: React.FC = () => {
       if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
         if (shouldIgnoreGlobalShortcut(event.target)) return
         event.preventDefault()
-        const searchInput = document.querySelector<HTMLInputElement>('[data-testid="notes-list-region"] input[type="search"], [data-testid="notes-list-region"] input')
-        searchInput?.focus()
+        focusSearchInput()
         return
       }
 
@@ -1930,18 +2000,31 @@ const NotesManagerPage: React.FC = () => {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleNewNote, ed])
+  }, [ed.setEditorMode, focusSearchInput, handleNewNote])
 
   // Auto-trigger notes tutorial on first visit
   React.useEffect(() => {
-    const key = 'notes-tutorial-shown'
     if (typeof window === 'undefined') return
-    if (localStorage.getItem(key)) return
-    const timer = window.setTimeout(() => {
-      localStorage.setItem(key, '1')
-      useTutorialStore.getState().startTutorial('notes-basics')
-    }, 1000)
-    return () => window.clearTimeout(timer)
+    let cancelled = false
+    let timer: number | null = null
+
+    void (async () => {
+      const alreadyShown = await notesUiStorage
+        .get<string | null>(NOTES_TUTORIAL_SHOWN_STORAGE_KEY)
+        .catch(() => null)
+      if (cancelled || alreadyShown) return
+      timer = window.setTimeout(() => {
+        void notesUiStorage
+          .set(NOTES_TUTORIAL_SHOWN_STORAGE_KEY, '1')
+          .catch(() => undefined)
+        useTutorialStore.getState().startTutorial('notes-basics')
+      }, 1000)
+    })()
+
+    return () => {
+      cancelled = true
+      if (timer != null) window.clearTimeout(timer)
+    }
   }, [])
 
   // Cleanup
@@ -2051,6 +2134,7 @@ const NotesManagerPage: React.FC = () => {
         setPageSize={list.setPageSize}
         setSortOption={list.setSortOption}
         setQueryInput={list.setQueryInput}
+        searchInputRef={searchInputRef}
         setSelectedMoodboardId={list.setSelectedMoodboardId}
         setSelectedNotebookId={list.setSelectedNotebookId}
         setSearchTipsQuery={list.setSearchTipsQuery}
@@ -2079,7 +2163,7 @@ const NotesManagerPage: React.FC = () => {
         exportAllCSV={exp.exportAllCSV}
         exportAllJSON={exp.exportAllJSON}
         openImportPicker={imp.openImportPicker}
-        resetEditor={ed.resetEditor}
+        resetEditor={resetEditorToEmptyState}
         renderKeywordLabelWithFrequency={kw.renderKeywordLabelWithFrequency}
         onOpenSettings={() => navigate('/settings/tldw')}
         onOpenHealth={() => navigate('/settings/health')}
@@ -2101,6 +2185,7 @@ const NotesManagerPage: React.FC = () => {
         isMobileViewport={isMobileViewport}
         setMobileSidebarOpen={setMobileSidebarOpen}
         selectedId={ed.selectedId}
+        showEmptyState={showEditorEmptyState}
         title={ed.title}
         content={ed.content}
         editorDisabled={editorDisabled}
@@ -2114,6 +2199,9 @@ const NotesManagerPage: React.FC = () => {
         noteRelations={noteRelations}
         noteNeighborsLoading={noteNeighborsLoading}
         noteNeighborsError={noteNeighborsError}
+        onRetryNeighbors={() => {
+          void refetchNoteNeighbors()
+        }}
         selectedNotePinned={ed.selectedNotePinned}
         editorMode={ed.editorMode}
         editorInputMode={ed.editorInputMode}

@@ -14,7 +14,11 @@ import type {
   KeywordRenameDraft,
   PendingImportFile,
 } from "./notes-manager-types"
-import { toKeywordTestIdSegment } from "./notes-manager-utils"
+import {
+  NOTES_TUTORIAL_SHOWN_STORAGE_KEY,
+  notesUiStorage,
+  toKeywordTestIdSegment
+} from "./notes-manager-utils"
 
 type TranslationFn = (
   key: string,
@@ -623,9 +627,7 @@ const NotesManagerOverlays: React.FC<NotesManagerOverlaysProps> = ({
               className="text-xs text-primary hover:underline"
               data-testid="notes-restart-tutorial"
               onClick={() => {
-                if (typeof window !== 'undefined') {
-                  localStorage.removeItem('notes-tutorial-shown')
-                }
+                void notesUiStorage.remove(NOTES_TUTORIAL_SHOWN_STORAGE_KEY).catch(() => undefined)
                 setShortcutHelpOpen(false)
                 useTutorialStore.getState().startTutorial('notes-basics')
               }}

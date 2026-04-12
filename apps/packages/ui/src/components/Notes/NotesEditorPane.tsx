@@ -70,6 +70,7 @@ export interface NotesEditorPaneProps {
 
   // Selection / identity
   selectedId: string | number | null
+  showEmptyState: boolean
   title: string
   content: string
   editorDisabled: boolean
@@ -226,6 +227,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   isMobileViewport,
   setMobileSidebarOpen,
   selectedId,
+  showEmptyState,
   title,
   content,
   editorDisabled,
@@ -337,6 +339,18 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
   applyWikilinkSuggestion,
 }) => {
   const { t } = useTranslation(['option', 'common'])
+  const renderHelpButton = React.useCallback(
+    (label: string) => (
+      <button
+        type="button"
+        className="inline-flex items-center rounded-sm text-text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        aria-label={label}
+      >
+        <QuestionCircleOutlined className="text-[11px]" />
+      </button>
+    ),
+    []
+  )
 
   const renderMarkdownPreviewSurface = (
     testId: string,
@@ -450,7 +464,7 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         studioBadgeLabel={studioBadgeLabel}
       />
       <div className="flex-1 flex flex-col px-4 py-3 overflow-auto">
-        {selectedId == null && !loadingDetail && (
+        {showEmptyState && !loadingDetail && (
           <div className="flex flex-col items-center justify-center gap-4 px-8 py-12 text-center" data-testid="notes-editor-empty-state">
             <div className="text-lg font-medium text-text">
               {t('option:notesSearch.editorEmptyTitle', {
@@ -714,17 +728,21 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
         </div>
         {selectedId != null && (
           <CollapsibleSection
-            title={
-              <span className="inline-flex items-center gap-1">
-                {t('option:notesSearch.connectionsSectionTitle', {
-                  defaultValue: 'Connections'
-                })}
-                <Tooltip title={t('option:notesSearch.connectionsHelpTooltip', {
+            title={t('option:notesSearch.connectionsSectionTitle', {
+              defaultValue: 'Connections'
+            })}
+            titleAccessory={
+              <Tooltip
+                title={t('option:notesSearch.connectionsHelpTooltip', {
                   defaultValue: 'Links between this note and others — created by you, by [[ ]] note links, or automatically.'
-                })}>
-                  <QuestionCircleOutlined className="text-text-muted text-[11px]" />
-                </Tooltip>
-              </span>
+                })}
+              >
+                {renderHelpButton(
+                  t('option:notesSearch.connectionsHelpLabel', {
+                    defaultValue: 'Connections help'
+                  })
+                )}
+              </Tooltip>
             }
             defaultOpen
             storageKey="connections"

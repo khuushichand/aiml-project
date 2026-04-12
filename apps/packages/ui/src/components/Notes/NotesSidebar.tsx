@@ -1,4 +1,5 @@
 import React from 'react'
+import type { InputRef } from 'antd'
 import { Input, Typography, Select, Button, Tooltip, Popover, Spin } from 'antd'
 import {
   Plus as PlusIcon,
@@ -118,6 +119,7 @@ export interface NotesSidebarProps {
   setPageSize: React.Dispatch<React.SetStateAction<number>>
   setSortOption: (option: NotesSortOption) => void
   setQueryInput: (value: string) => void
+  searchInputRef?: React.Ref<InputRef>
   setSelectedMoodboardId: (id: number | null) => void
   setSelectedNotebookId: (id: number | null) => void
   setSearchTipsQuery: (query: string) => void
@@ -245,6 +247,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
   setPageSize,
   setSortOption,
   setQueryInput,
+  searchInputRef,
   setSelectedMoodboardId,
   setSelectedNotebookId,
   setSearchTipsQuery,
@@ -283,6 +286,18 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
   onOpenHealth,
 }) => {
   const { t } = useTranslation(['option', 'common'])
+  const renderHelpButton = React.useCallback(
+    (label: string) => (
+      <button
+        type="button"
+        className="inline-flex items-center rounded-sm text-text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        aria-label={label}
+      >
+        <QuestionCircleOutlined className="text-[11px]" />
+      </button>
+    ),
+    []
+  )
 
   // Compute active filter count for badge
   const activeFilterCount =
@@ -443,17 +458,21 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                   </Button>
                 </div>
                 <CollapsibleSection
-                  title={
-                    <span className="inline-flex items-center gap-1">
-                      {t('option:notesSearch.organizeSectionTitle', {
-                        defaultValue: 'Organize'
-                      })}
-                      <Tooltip title={t('option:notesSearch.organizeHelpTooltip', {
+                  title={t('option:notesSearch.organizeSectionTitle', {
+                    defaultValue: 'Organize'
+                  })}
+                  titleAccessory={
+                    <Tooltip
+                      title={t('option:notesSearch.organizeHelpTooltip', {
                         defaultValue: 'Collections group notes manually. Saved filters auto-group notes by tags.'
-                      })}>
-                        <QuestionCircleOutlined className="text-text-muted text-[11px]" />
-                      </Tooltip>
-                    </span>
+                      })}
+                    >
+                      {renderHelpButton(
+                        t('option:notesSearch.organizeHelpLabel', {
+                          defaultValue: 'Organize help'
+                        })
+                      )}
+                    </Tooltip>
                   }
                   defaultOpen={false}
                   storageKey="organize"
@@ -650,6 +669,7 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                           setQuery(queryInput)
                           setPage(1)
                         }}
+                        ref={searchInputRef}
                       />
                     </div>
                     <Select
@@ -757,10 +777,16 @@ const NotesSidebar: React.FC<NotesSidebarProps> = ({
                             defaultValue: 'Browse tags'
                           })}
                         </Button>
-                        <Tooltip title={t('option:notesSearch.tagsHelpTooltip', {
-                          defaultValue: 'Tags help you organize and filter notes. Add tags in the editor, then filter here.'
-                        })}>
-                          <QuestionCircleOutlined className="text-text-muted text-[11px]" />
+                        <Tooltip
+                          title={t('option:notesSearch.tagsHelpTooltip', {
+                            defaultValue: 'Tags help you organize and filter notes. Add tags in the editor, then filter here.'
+                          })}
+                        >
+                          {renderHelpButton(
+                            t('option:notesSearch.tagsHelpLabel', {
+                              defaultValue: 'Tags help'
+                            })
+                          )}
                         </Tooltip>
                       </div>
                       {availableKeywords.length > 0 && (

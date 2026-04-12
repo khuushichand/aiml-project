@@ -399,4 +399,11 @@ describe("NotesManagerPage stage 39 organization model", () => {
       )
     })
   })
+
+  it("renders keyboard-focusable help buttons for organize and tags guidance", async () => {
+    renderPage()
+
+    expect(await screen.findByRole("button", { name: "Organize help" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Tags help" })).toBeInTheDocument()
+  })
 })

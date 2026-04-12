@@ -169,6 +169,15 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   const assistUndoTimerRef = React.useRef<number | null>(null)
   const [canUndoAssist, setCanUndoAssist] = React.useState(false)
 
+  const clearAssistUndoState = React.useCallback(() => {
+    if (assistUndoTimerRef.current != null) {
+      window.clearTimeout(assistUndoTimerRef.current)
+      assistUndoTimerRef.current = null
+    }
+    contentBeforeAssistRef.current = null
+    setCanUndoAssist(false)
+  }, [])
+
   const pinnedNoteIdSet = React.useMemo(() => new Set(pinnedNoteIds), [pinnedNoteIds])
 
   const clearAutosaveTimeout = React.useCallback(() => {
@@ -358,6 +367,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
   }, [])
 
   const loadDetail = React.useCallback(async (id: string | number): Promise<boolean> => {
+    clearAssistUndoState()
     setLoadingDetail(true)
     try {
       const d = await bgRequest<any>({ path: `/api/v1/notes/${id}` as any, method: 'GET' as any })
@@ -400,9 +410,10 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
       message.error('Failed to load note')
       return false
     } finally { setLoadingDetail(false) }
-  }, [applyOfflineDraftToEditor, message, rememberRecentNote, setEditorKeywords])
+  }, [applyOfflineDraftToEditor, clearAssistUndoState, message, rememberRecentNote, setEditorKeywords])
 
   const resetEditor = React.useCallback(() => {
+    clearAssistUndoState()
     setSelectedId(null)
     setTitle('')
     setContent('')
@@ -422,7 +433,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
     setWysiwygHtml('<p><br/></p>')
     setWysiwygSessionDirty(false)
     markdownBeforeWysiwygRef.current = null
-  }, [setEditorKeywords])
+  }, [clearAssistUndoState, setEditorKeywords])
 
   const confirmDiscardIfDirty = React.useCallback(async () => {
     if (!isDirty) return true
@@ -1308,7 +1319,7 @@ export function useNotesEditorState(deps: UseNotesEditorStateDeps) {
 
   const undoAssist = React.useCallback(() => {
     if (contentBeforeAssistRef.current == null) return
-    setContentDirty(contentBeforeAssistRef.current, { provenance: undefined })
+    setContentDirty(contentBeforeAssistRef.current, { provenance: 'manual' })
     contentBeforeAssistRef.current = null
     setCanUndoAssist(false)
     if (assistUndoTimerRef.current != null) {
