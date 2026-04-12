@@ -18,7 +18,7 @@ from tldw_Server_API.app.core.DB_Management.sqlite_policy import (
     configure_sqlite_connection,
 )
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 
 _SCHEMA_SQL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -230,6 +230,32 @@ def _ensure_column(
     if column_name in existing_columns:
         return
     conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN {column_sql}')
+
+
+def _ensure_config_template_unique_index(conn: sqlite3.Connection) -> None:
+    """Enforce deterministic template lookup within a scope."""
+    duplicate = conn.execute(
+        """
+        SELECT name, scope, COALESCE(scope_id, '') AS normalized_scope_id, COUNT(*) AS duplicate_count
+        FROM config_templates
+        GROUP BY name, scope, COALESCE(scope_id, '')
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    ).fetchone()
+    if duplicate is not None:
+        raise sqlite3.IntegrityError(
+            "Duplicate config_templates rows detected for "
+            f"name={duplicate['name']!r}, scope={duplicate['scope']!r}, "
+            f"scope_id={duplicate['normalized_scope_id']!r}"
+        )
+
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_config_templates_name_scope_unique
+        ON config_templates(name, scope, COALESCE(scope_id, ''))
+        """
+    )
 
 
 class ACPSessionsDB:
@@ -501,6 +527,8 @@ class ACPSessionsDB:
                     "ancestry_chain_json",
                     "ancestry_chain_json TEXT",
                 )
+            if current_version < 13:
+                _ensure_config_template_unique_index(conn)
             conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             conn.commit()
             self._initialized = True
@@ -1904,18 +1932,21 @@ class ACPSessionsDB:
         """Insert a new config template. Returns the new row ID."""
         conn = self._get_conn()
         now = _utcnow_iso()
-        cursor = conn.execute(
-            """
-            INSERT INTO config_templates
-                (name, description, scope, scope_id, base_template_id,
-                 schema_version, config_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                name, description, scope, scope_id, base_template_id,
-                schema_version, config_json, now, now,
-            ),
-        )
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO config_templates
+                    (name, description, scope, scope_id, base_template_id,
+                     schema_version, config_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name, description, scope, scope_id, base_template_id,
+                    schema_version, config_json, now, now,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Config template already exists for this scope") from exc
         conn.commit()
         return cursor.lastrowid  # type: ignore[return-value]
 
@@ -1976,10 +2007,13 @@ class ACPSessionsDB:
         set_clause = ", ".join(f"{col} = ?" for col in updates)
         values = list(updates.values()) + [template_id]
         conn = self._get_conn()
-        cursor = conn.execute(
-            f"UPDATE config_templates SET {set_clause} WHERE id = ?",
-            values,
-        )
+        try:
+            cursor = conn.execute(
+                f"UPDATE config_templates SET {set_clause} WHERE id = ?",  # nosec B608
+                values,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Config template already exists for this scope") from exc
         conn.commit()
         return cursor.rowcount > 0
 

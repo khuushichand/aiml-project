@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -187,14 +187,11 @@ async def test_no_conditions_backward_compat():
 # ---------------------------------------------------------------------------
 
 
-def test_ancestry_chain_db_column():
+def test_ancestry_chain_db_column(tmp_path: Path) -> None:
     """The sessions table should have an ancestry_chain_json column after migration."""
     from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    db = ACPSessionsDB(db_path=db_path)
+    db = ACPSessionsDB(db_path=str(tmp_path / "test-ancestry.db"))
     # register_session triggers schema init
     d = db.register_session(
         session_id="test-anc",
@@ -212,14 +209,11 @@ def test_ancestry_chain_db_column():
 # ---------------------------------------------------------------------------
 
 
-def test_conditions_json_db_column():
+def test_conditions_json_db_column(tmp_path: Path) -> None:
     """The permission_policies table should have a conditions_json column."""
     from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    db = ACPSessionsDB(db_path=db_path)
+    db = ACPSessionsDB(db_path=str(tmp_path / "test-conditions.db"))
     # Create a permission policy to trigger schema init
     policy_id = db.create_permission_policy(
         name="test-policy",
@@ -255,3 +249,50 @@ async def test_empty_conditions_dict_applies_policy():
     published = bus.publish.call_args[0][0]
     assert published.kind == AgentEventKind.TOOL_RESULT
     assert published.metadata.get("governance_action") == "denied_by_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_source_ip_match_applies_policy() -> None:
+    """A policy restricted by source IP should apply when client_ip matches."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.governance_filter import GovernanceFilter
+
+    bus = _make_bus()
+    snapshot = _make_snapshot(
+        denied_tools=["restricted_*"],
+        conditions={"source_ips": ["10.0.0.0/24"]},
+    )
+    gov = GovernanceFilter(
+        bus=bus,
+        policy_snapshot=snapshot,
+        session_metadata={"client_ip": "10.0.0.42"},
+    )
+
+    event = _make_tool_event(tool_name="restricted_tool")
+    await gov.process(event)
+
+    published = bus.publish.call_args[0][0]
+    assert published.kind == AgentEventKind.TOOL_RESULT
+    assert published.metadata.get("governance_action") == "denied_by_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_source_ip_mismatch_skips_policy() -> None:
+    """A policy restricted by source IP should be skipped when client_ip mismatches."""
+    from tldw_Server_API.app.core.Agent_Client_Protocol.governance_filter import GovernanceFilter
+
+    bus = _make_bus()
+    snapshot = _make_snapshot(
+        denied_tools=["restricted_*"],
+        conditions={"source_ips": ["10.0.0.0/24"]},
+    )
+    gov = GovernanceFilter(
+        bus=bus,
+        policy_snapshot=snapshot,
+        session_metadata={"client_ip": "192.168.1.20"},
+    )
+
+    event = _make_tool_event(tool_name="restricted_tool")
+    await gov.process(event)
+
+    published = bus.publish.call_args[0][0]
+    assert published.metadata.get("governance_action") != "denied_by_snapshot"

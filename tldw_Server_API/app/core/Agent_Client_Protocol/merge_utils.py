@@ -15,6 +15,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+_MISSING = object()
+
 # Keys whose values are treated as lists and merged via append+dedup.
 UNION_LIST_KEYS: frozenset[str] = frozenset({
     "allowed_tools",
@@ -59,26 +61,37 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def merge_config(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+def merge_config(
+    base: dict[str, Any],
+    overlay: dict[str, Any],
+    *,
+    skip_none: bool = True,
+) -> dict[str, Any]:
     """Merge *overlay* on top of *base* with field-type-aware semantics.
 
     Rules:
-    1. ``None`` values in *overlay* are skipped (base value preserved).
+    1. ``None`` values in *overlay* are skipped when ``skip_none`` is true.
     2. Keys in :data:`UNION_LIST_KEYS` are appended and de-duplicated.
     3. If both sides are dicts the merge recurses.
     4. Everything else: overlay value replaces base value (deep-copied).
 
     Neither *base* nor *overlay* is mutated.
     """
-    merged = deepcopy(base)
+    merged = dict(base)
     for key, value in overlay.items():
-        if value is None:
+        base_value = base.get(key, _MISSING)
+        if value is None and skip_none:
+            if base_value is not _MISSING:
+                merged[key] = deepcopy(base_value)
             continue
         if key in UNION_LIST_KEYS:
-            merged[key] = _unique(_as_str_list(merged.get(key)) + _as_str_list(value))
+            merged[key] = _unique(_as_str_list(base_value) + _as_str_list(value))
             continue
-        if isinstance(merged.get(key), dict) and isinstance(value, dict):
-            merged[key] = merge_config(_as_dict(merged.get(key)), value)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            merged[key] = merge_config(base_value, value, skip_none=skip_none)
             continue
         merged[key] = deepcopy(value)
+    for key, value in base.items():
+        if key not in overlay:
+            merged[key] = deepcopy(value)
     return merged

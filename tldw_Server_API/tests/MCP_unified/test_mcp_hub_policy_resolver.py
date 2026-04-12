@@ -335,6 +335,28 @@ async def test_policy_resolver_allows_assignment_override_to_replace_path_scope_
 
 
 @pytest.mark.asyncio
+async def test_policy_resolver_allows_null_override_to_clear_inherited_field() -> None:
+    from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
+
+    repo = _FakeRepo()
+    repo.overrides[10] = {
+        "id": 501,
+        "assignment_id": 10,
+        "override_policy_document": {"path_scope_mode": None},
+        "is_active": True,
+    }
+    resolver = McpHubPolicyResolver(repo=repo)
+
+    policy = await resolver.resolve_for_context(
+        user_id=7,
+        metadata={"mcp_policy_context_enabled": True},
+    )
+
+    assert "path_scope_mode" in policy["policy_document"]
+    assert policy["policy_document"]["path_scope_mode"] is None
+
+
+@pytest.mark.asyncio
 async def test_policy_resolver_replaces_path_allowlist_prefixes_in_assignment_override() -> None:
     from tldw_Server_API.app.services.mcp_hub_policy_resolver import McpHubPolicyResolver
 

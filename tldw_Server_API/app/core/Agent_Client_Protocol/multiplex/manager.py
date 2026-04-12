@@ -9,8 +9,9 @@ Events are forwarded as ``STREAM_DATA`` frames.  A periodic ``PING`` /
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from typing import Any, Callable, Awaitable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
@@ -23,6 +24,8 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.multiplex.protocol import (
 # Type aliases for the two callables injected at construction time.
 SendFn = Callable[[str], Awaitable[None]]
 GetBusFn = Callable[[str], Optional[SessionEventBus]]
+AuthorizeStreamFn = Callable[[str], Awaitable[tuple[bool, str | None, Any | None]]]
+ReleaseStreamFn = Callable[[str, Any | None], None | Awaitable[None]]
 
 
 class MultiplexManager:
@@ -46,14 +49,18 @@ class MultiplexManager:
         connection_id: str,
         send_fn: SendFn,
         get_bus_fn: GetBusFn,
+        authorize_stream_fn: AuthorizeStreamFn | None = None,
+        release_stream_fn: ReleaseStreamFn | None = None,
         ping_interval: float = 30,
     ) -> None:
         self._connection_id = connection_id
         self._send_fn = send_fn
         self._get_bus_fn = get_bus_fn
+        self._authorize_stream_fn = authorize_stream_fn
+        self._release_stream_fn = release_stream_fn
         self._ping_interval = ping_interval
 
-        # stream_id -> {bus, consumer_id, task}
+        # stream_id -> {bus, consumer_id, task, release_state}
         self._streams: dict[str, dict[str, Any]] = {}
         self._ping_task: Optional[asyncio.Task[None]] = None
         self._stopped = False
@@ -72,9 +79,7 @@ class MultiplexManager:
         self._stopped = True
         # Cancel ping first
         if self._ping_task is not None:
-            self._ping_task.cancel()
-            with _suppress_cancelled():
-                await self._ping_task
+            await self._cancel_task(self._ping_task, label="ping loop")
             self._ping_task = None
 
         # Close every open stream
@@ -126,16 +131,53 @@ class MultiplexManager:
             # Already subscribed -- idempotent
             return
 
+        if msg.payload is not None and not isinstance(msg.payload, dict):
+            await self._send(
+                MultiplexMessage.error("stream_open payload must be an object", stream_id=stream_id),
+            )
+            return
+
         bus = self._get_bus_fn(stream_id)
+
+        last_sequence = 0
+        if isinstance(msg.payload, dict) and "last_sequence" in msg.payload:
+            try:
+                last_sequence = int(msg.payload["last_sequence"])
+            except (TypeError, ValueError):
+                await self._send(
+                    MultiplexMessage.error(
+                        "stream_open last_sequence must be a non-negative integer",
+                        stream_id=stream_id,
+                    ),
+                )
+                return
+            if last_sequence < 0:
+                await self._send(
+                    MultiplexMessage.error(
+                        "stream_open last_sequence must be a non-negative integer",
+                        stream_id=stream_id,
+                    ),
+                )
+                return
+
+        release_state: Any | None = None
+        if self._authorize_stream_fn is not None:
+            allowed, error_message, release_state = await self._authorize_stream_fn(stream_id)
+            if not allowed:
+                await self._send(
+                    MultiplexMessage.error(
+                        error_message or "stream_open not authorized",
+                        stream_id=stream_id,
+                    ),
+                )
+                return
+
         if bus is None:
+            await self._release_stream(stream_id, release_state)
             await self._send(
                 MultiplexMessage.error(f"Unknown session: {stream_id}", stream_id=stream_id),
             )
             return
-
-        last_sequence = 0
-        if msg.payload and "last_sequence" in msg.payload:
-            last_sequence = int(msg.payload["last_sequence"])
 
         consumer_id = f"mpx-{self._connection_id}-{stream_id}"
         queue = bus.subscribe(consumer_id, from_sequence=last_sequence)
@@ -145,6 +187,7 @@ class MultiplexManager:
             "bus": bus,
             "consumer_id": consumer_id,
             "task": task,
+            "release_state": release_state,
         }
         logger.debug(
             "Multiplex {}: opened stream {} (last_seq={})",
@@ -173,9 +216,8 @@ class MultiplexManager:
 
         # Cancel the forwarding task
         task: asyncio.Task[None] = info["task"]
-        task.cancel()
-        with _suppress_cancelled():
-            await task
+        await self._cancel_task(task, label=f"stream {stream_id}")
+        await self._release_stream(stream_id, info.get("release_state"))
 
         logger.debug("Multiplex {}: closed stream {}", self._connection_id, stream_id)
 
@@ -192,6 +234,13 @@ class MultiplexManager:
                 await self._send(data_msg)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            logger.warning(
+                "Multiplex {}: stopping forwarder for stream {} after send failure: {}",
+                self._connection_id,
+                stream_id,
+                exc,
+            )
 
     # ------------------------------------------------------------------
     # Keepalive
@@ -231,6 +280,36 @@ class MultiplexManager:
     async def _send(self, msg: MultiplexMessage) -> None:
         """Serialize and send a message via the injected send function."""
         await self._send_fn(msg.to_json())
+
+    async def _cancel_task(self, task: asyncio.Task[None], *, label: str) -> None:
+        """Cancel a background task, logging any non-cancellation failure."""
+        task.cancel()
+        with _suppress_cancelled():
+            try:
+                await task
+            except Exception as exc:
+                logger.warning(
+                    "Multiplex {}: background {} exited with error during cleanup: {}",
+                    self._connection_id,
+                    label,
+                    exc,
+                )
+
+    async def _release_stream(self, stream_id: str, release_state: Any | None) -> None:
+        """Release any stream-scoped resource allocations such as quota tokens."""
+        if self._release_stream_fn is None or release_state is None:
+            return
+        try:
+            maybe_awaitable = self._release_stream_fn(stream_id, release_state)
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
+        except Exception as exc:
+            logger.warning(
+                "Multiplex {}: failed to release stream {} resources: {}",
+                self._connection_id,
+                stream_id,
+                exc,
+            )
 
 
 # ---------------------------------------------------------------------------

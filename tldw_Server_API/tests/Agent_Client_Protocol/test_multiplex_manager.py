@@ -39,6 +39,13 @@ class FakeSender:
         self._raw.clear()
 
 
+class FailingSender:
+    """Raises on send to simulate a broken WebSocket transport."""
+
+    async def __call__(self, raw: str) -> None:
+        raise RuntimeError("send failed")
+
+
 def _make_buses(*session_ids: str) -> dict[str, SessionEventBus]:
     return {sid: SessionEventBus(sid) for sid in session_ids}
 
@@ -109,6 +116,25 @@ class TestOpenStream:
 
         assert mgr.active_streams == ["sess-1"]
         assert len(sender.messages) == 0
+        await mgr.stop()
+
+    @pytest.mark.asyncio
+    async def test_invalid_last_sequence_sends_error(self) -> None:
+        sender = FakeSender()
+        buses = _make_buses("sess-1")
+        mgr = _make_manager(sender, buses)
+
+        raw = MultiplexMessage(
+            type=MultiplexMessageType.STREAM_OPEN,
+            stream_id="sess-1",
+            payload={"session_id": "sess-1", "last_sequence": "not-an-int"},
+        ).to_json()
+        await mgr.handle_message(raw)
+
+        assert mgr.active_streams == []
+        assert len(sender.messages) == 1
+        assert sender.last().type == MultiplexMessageType.ERROR
+        assert "last_sequence" in sender.last().payload["error"]
         await mgr.stop()
 
 
@@ -225,6 +251,26 @@ class TestStopCleansUp:
 
         await mgr.stop()
         assert mgr._ping_task is None
+
+    @pytest.mark.asyncio
+    async def test_stop_continues_after_forwarder_failure(self) -> None:
+        sender = FailingSender()
+        buses = _make_buses("a", "b")
+        mgr = _make_manager(sender, buses)
+
+        await mgr.handle_message(MultiplexMessage.stream_open("a").to_json())
+        await mgr.handle_message(MultiplexMessage.stream_open("b").to_json())
+
+        await buses["a"].publish(
+            AgentEvent(session_id="a", kind=AgentEventKind.THINKING, payload={"step": 1}),
+        )
+        await asyncio.sleep(0.05)
+
+        await mgr.stop()
+
+        assert mgr.active_streams == []
+        assert len(buses["a"]._subscribers) == 0
+        assert len(buses["b"]._subscribers) == 0
 
 
 class TestEventForwarding:

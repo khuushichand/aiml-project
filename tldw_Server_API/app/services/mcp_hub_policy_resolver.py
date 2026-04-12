@@ -84,18 +84,8 @@ def _candidate_scope_filters(user_id: int | None, metadata: dict[str, Any]) -> l
 
 
 def _merge_policy_documents(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
-    """Merge policy documents with union semantics for list-based capability fields.
-
-    Delegates to :func:`merge_config` from ``merge_utils``.  Unlike
-    ``merge_config``, this function preserves the original behaviour of
-    *not* skipping ``None`` overlay values (the resolver never passes None
-    values in overlay dicts so the difference is academic, but we keep it
-    explicit for backward safety).
-    """
-    # merge_config skips None overlay values; the original implementation
-    # did not.  Since the resolver never puts None into overlay dicts the
-    # semantics are identical, but we call merge_config directly.
-    return merge_config(base, overlay)
+    """Merge policy documents with union semantics and explicit-null overrides."""
+    return merge_config(base, overlay, skip_none=False)
 
 
 def _has_explicit_scalar_value(value: Any) -> bool:

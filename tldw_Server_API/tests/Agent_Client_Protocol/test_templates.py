@@ -437,6 +437,12 @@ class TestDBCrud:
     def test_get_nonexistent_returns_none(self, db: ACPSessionsDB) -> None:
         assert db.get_config_template(99999) is None
 
+    def test_duplicate_name_within_same_scope_is_rejected(self, db: ACPSessionsDB) -> None:
+        db.create_config_template(name="dupe", scope="system", config_json="{}")
+
+        with pytest.raises(ValueError, match="already exists"):
+            db.create_config_template(name="dupe", scope="system", config_json="{}")
+
 
 # ---------------------------------------------------------------------------
 # 12. build_snapshot uses DB templates with fallback

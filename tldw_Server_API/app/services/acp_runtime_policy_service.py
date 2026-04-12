@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
@@ -196,8 +197,13 @@ class ACPRuntimePolicyService:
             if result is not None:
                 return result
         except Exception:
-            # DB templates not available; fall through to flat lookup.
-            pass
+            logger.exception(
+                "ACP runtime policy template lookup failed for template_name={} session_id={} persona_id={}; "
+                "falling back to flat templates",
+                template_name,
+                session_id,
+                persona_id,
+            )
 
         # Fallback: use the flat PERMISSION_POLICY_TEMPLATES dict.
         from tldw_Server_API.app.core.Agent_Client_Protocol.config import (

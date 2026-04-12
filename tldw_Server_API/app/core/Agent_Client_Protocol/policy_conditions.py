@@ -5,6 +5,7 @@ GovernanceFilter evaluates them synchronously (no DB lookups at call time).
 """
 from __future__ import annotations
 
+from ipaddress import ip_address, ip_network
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -58,6 +59,24 @@ def _format_datetime(dt: datetime | None) -> str | None:
     return dt.isoformat()
 
 
+def _normalize_source_ips(value: Any) -> list[str] | None:
+    """Normalize source IP conditions to a list of non-empty IP/CIDR strings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else None
+    if not isinstance(value, (list, tuple, set)):
+        return None
+    out = [str(entry).strip() for entry in value if str(entry).strip()]
+    return out or None
+
+
+def _normalize_required_labels(value: Any) -> dict[str, str] | None:
+    """Normalize required_labels to a mapping, or None when the payload is invalid."""
+    return dict(value) if isinstance(value, dict) else None
+
+
 @dataclass
 class PolicyConditions:
     """Conditions attached to a policy that must be satisfied for it to apply.
@@ -104,8 +123,8 @@ class PolicyConditions:
         return cls(
             valid_from=_parse_datetime(data.get("valid_from")),
             valid_until=_parse_datetime(data.get("valid_until")),
-            source_ips=data.get("source_ips"),
-            required_labels=data.get("required_labels"),
+            source_ips=_normalize_source_ips(data.get("source_ips")),
+            required_labels=_normalize_required_labels(data.get("required_labels")),
             delegation=DelegationCondition.from_dict(data.get("delegation")),
         )
 
@@ -127,6 +146,7 @@ def evaluate_conditions(
     *,
     resource_labels: dict[str, str] | None = None,
     ancestry_chain: list[str] | None = None,
+    source_ip: str | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Evaluate policy conditions synchronously.
@@ -134,7 +154,8 @@ def evaluate_conditions(
     Returns ``True`` if all conditions are satisfied (or no conditions are set).
 
     Notes:
-        - ``source_ips`` is NOT evaluated here; that is an endpoint-layer concern.
+        - ``source_ips`` supports both individual IP addresses and CIDR ranges.
+        - Missing or invalid request IP context causes IP-scoped policies to fail closed.
         - Empty conditions always pass.
     """
     if conditions.is_empty():
@@ -148,6 +169,26 @@ def evaluate_conditions(
         return False
     if conditions.valid_until is not None and now > conditions.valid_until:
         return False
+
+    # --- Source IP allowlist ---
+    if conditions.source_ips is not None:
+        if not source_ip:
+            return False
+        try:
+            client_ip = ip_address(str(source_ip).strip())
+        except ValueError:
+            return False
+
+        ip_match = False
+        for allowed_entry in conditions.source_ips:
+            try:
+                if client_ip in ip_network(str(allowed_entry).strip(), strict=False):
+                    ip_match = True
+                    break
+            except ValueError:
+                continue
+        if not ip_match:
+            return False
 
     # --- Required labels (AND semantics) ---
     if conditions.required_labels is not None:

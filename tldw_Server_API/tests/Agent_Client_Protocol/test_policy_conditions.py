@@ -110,6 +110,37 @@ def test_label_missing_fails():
     assert evaluate_conditions(cond, resource_labels=None, now=_NOW) is False
 
 
+def test_required_labels_non_mapping_deserializes_to_none() -> None:
+    cond = PolicyConditions.from_dict({"required_labels": ["not", "a", "mapping"]})
+    assert cond.required_labels is None
+    assert cond.is_empty()
+
+
+# ---------------------------------------------------------------------------
+# Source IPs
+# ---------------------------------------------------------------------------
+
+
+def test_source_ip_exact_match_passes() -> None:
+    cond = PolicyConditions(source_ips=["10.0.0.7"])
+    assert evaluate_conditions(cond, source_ip="10.0.0.7", now=_NOW) is True
+
+
+def test_source_ip_cidr_match_passes() -> None:
+    cond = PolicyConditions(source_ips=["10.0.0.0/24"])
+    assert evaluate_conditions(cond, source_ip="10.0.0.42", now=_NOW) is True
+
+
+def test_source_ip_missing_context_fails() -> None:
+    cond = PolicyConditions(source_ips=["10.0.0.0/24"])
+    assert evaluate_conditions(cond, source_ip=None, now=_NOW) is False
+
+
+def test_source_ip_outside_allowlist_fails() -> None:
+    cond = PolicyConditions(source_ips=["10.0.0.0/24"])
+    assert evaluate_conditions(cond, source_ip="192.168.1.10", now=_NOW) is False
+
+
 # ---------------------------------------------------------------------------
 # Delegation
 # ---------------------------------------------------------------------------
