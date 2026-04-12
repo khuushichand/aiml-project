@@ -2,7 +2,7 @@
   "name": "tldw-monorepo",
   "private": true,
   "scripts": {
-    "build:prod": "bun run --cwd tldw-frontend build"
+    "build:prod": "bun run --cwd tldw-frontend build:prod"
   },
   "workspaces": [
     "extension",

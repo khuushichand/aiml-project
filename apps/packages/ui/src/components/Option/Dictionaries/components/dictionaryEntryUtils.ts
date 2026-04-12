@@ -92,10 +92,17 @@ export function humanizeValidationCode(code: string): { label: string; fix?: str
 }
 
 export function toSafeNonNegativeInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+  const normalizedValue =
+    typeof value === "string" && value.trim() !== "" ? Number(value) : value
+
+  if (
+    typeof normalizedValue !== "number" ||
+    !Number.isFinite(normalizedValue) ||
+    normalizedValue < 0
+  ) {
     return 0
   }
-  return Math.floor(value)
+  return Math.floor(normalizedValue)
 }
 
 export function buildTimedEffectsPayload(

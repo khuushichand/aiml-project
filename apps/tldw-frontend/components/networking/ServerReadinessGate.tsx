@@ -12,7 +12,7 @@ const _origin =
     ? resolvePublicApiOrigin(_env, window.location.origin)
     : resolvePublicApiOrigin(_env)
 
-const HEALTH_URL = `${_origin}/health`
+const HEALTH_URL = `${_origin}/api/v1/health`
 const MAX_WAIT_MS = 15_000
 const RETRY_INTERVAL_MS = 2_000
 

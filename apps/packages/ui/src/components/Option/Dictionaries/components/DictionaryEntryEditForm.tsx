@@ -36,38 +36,53 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
   const watchedTimedEffects = Form.useWatch("timed_effects", form)
   const watchedCaseSensitive = Form.useWatch("case_sensitive", form)
 
-  const hasNonDefaultAdvancedValues = React.useMemo(() => {
-    const prob = watchedProbability
-    const group = watchedGroup
-    const maxReplacements = watchedMaxReplacements
-    const sticky = watchedTimedEffects?.sticky
-    const cooldown = watchedTimedEffects?.cooldown
-    const delay = watchedTimedEffects?.delay
-    const caseSensitive = watchedCaseSensitive
+  const toFiniteNumber = React.useCallback((value: unknown): number | null => {
+    const normalizedValue =
+      typeof value === "string" && value.trim() !== "" ? Number(value) : value
+
+    if (typeof normalizedValue !== "number" || !Number.isFinite(normalizedValue)) {
+      return null
+    }
+
+    return normalizedValue
+  }, [])
+
+  const hasNonDefaultAdvancedValues = React.useCallback((values: Record<string, any>) => {
+    const prob = toFiniteNumber(values?.probability)
+    const group = values?.group
+    const maxReplacements = toFiniteNumber(values?.max_replacements)
+    const sticky = toFiniteNumber(values?.timed_effects?.sticky)
+    const cooldown = toFiniteNumber(values?.timed_effects?.cooldown)
+    const delay = toFiniteNumber(values?.timed_effects?.delay)
+    const caseSensitive = values?.case_sensitive
     return (
-      (typeof prob === "number" && prob !== 1) ||
+      (prob !== null && prob !== 1) ||
       (typeof group === "string" && group.trim() !== "") ||
-      (typeof maxReplacements === "number" && maxReplacements > 0) ||
-      (typeof sticky === "number" && sticky > 0) ||
-      (typeof cooldown === "number" && cooldown > 0) ||
-      (typeof delay === "number" && delay > 0) ||
+      (maxReplacements !== null && maxReplacements > 0) ||
+      (sticky !== null && sticky > 0) ||
+      (cooldown !== null && cooldown > 0) ||
+      (delay !== null && delay > 0) ||
       caseSensitive === true
     )
+  }, [toFiniteNumber])
+
+  const [advancedMode, setAdvancedMode] = React.useState(() =>
+    hasNonDefaultAdvancedValues(form.getFieldsValue(true))
+  )
+
+  React.useEffect(() => {
+    if (hasNonDefaultAdvancedValues(form.getFieldsValue(true))) {
+      setAdvancedMode(true)
+    }
   }, [
+    form,
+    hasNonDefaultAdvancedValues,
     watchedCaseSensitive,
     watchedGroup,
     watchedMaxReplacements,
     watchedProbability,
     watchedTimedEffects,
   ])
-
-  const [advancedMode, setAdvancedMode] = React.useState(hasNonDefaultAdvancedValues)
-
-  React.useEffect(() => {
-    if (hasNonDefaultAdvancedValues) {
-      setAdvancedMode(true)
-    }
-  }, [hasNonDefaultAdvancedValues])
 
   return (
     <Form layout="vertical" form={form} onFinish={onSubmit}>
@@ -146,7 +161,6 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
                 help="Chance of applying this replacement (0-1). Use 1 for always, 0.5 for 50% of the time."
               />
             }
-            initialValue={1}
             rules={[
               {
                 type: "number",
@@ -223,8 +237,7 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
                   label="Sticky (seconds)"
                   help="Keep this replacement active for additional messages after it fires. Use 0 to disable."
                 />
-              }
-              initialValue={0}>
+              }>
               <InputNumber min={0} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item
@@ -234,8 +247,7 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
                   label="Cooldown (seconds)"
                   help="Minimum wait time before this entry can fire again. Use 0 to disable."
                 />
-              }
-              initialValue={0}>
+              }>
               <InputNumber min={0} style={{ width: "100%" }} />
             </Form.Item>
             <Form.Item
@@ -245,8 +257,7 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
                   label="Delay (seconds)"
                   help="Wait time before this entry becomes eligible to run. Use 0 to disable."
                 />
-              }
-              initialValue={0}>
+              }>
               <InputNumber min={0} style={{ width: "100%" }} />
             </Form.Item>
           </div>
