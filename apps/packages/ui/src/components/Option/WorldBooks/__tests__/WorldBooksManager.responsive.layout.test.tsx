@@ -40,7 +40,11 @@ const {
     addWorldBookEntry: vi.fn(async () => ({})),
     updateWorldBookEntry: vi.fn(async () => ({})),
     deleteWorldBookEntry: vi.fn(async () => ({})),
-    bulkWorldBookEntries: vi.fn(async () => ({ success: true, affected_count: 0, failed_ids: [] })),
+    bulkWorldBookEntries: vi.fn(async () => ({
+      success: true,
+      affected_count: 0,
+      failed_ids: []
+    })),
     exportWorldBook: vi.fn(async () => ({})),
     worldBookStatistics: vi.fn(async () => ({})),
     importWorldBook: vi.fn(async () => ({})),
@@ -55,7 +59,7 @@ const {
       diagnostics: []
     }))
   },
-  mockBreakpoints: { md: false }
+  mockBreakpoints: { lg: true, md: true, sm: true } as Record<string, boolean>
 }))
 
 vi.mock("@tanstack/react-query", () => ({
@@ -145,59 +149,58 @@ const makeUseMutationResult = (opts: any) => ({
   isPending: false
 })
 
-describe("WorldBooksManager responsive stage-2 entry drawer mobile ergonomics", () => {
+const WORLD_BOOKS_DATA = [
+  {
+    id: 1,
+    name: "Arcana",
+    description: "Main lore",
+    enabled: true,
+    entry_count: 2,
+    token_budget: 500
+  },
+  {
+    id: 2,
+    name: "Geography",
+    description: "Maps and places",
+    enabled: false,
+    entry_count: 5,
+    token_budget: 300
+  }
+]
+
+function setupQueryMocks() {
+  useQueryClientMock.mockReturnValue({
+    invalidateQueries: vi.fn()
+  })
+  useMutationMock.mockImplementation((opts: any) => makeUseMutationResult(opts))
+
+  useQueryMock.mockImplementation((opts: any) => {
+    const queryKey = Array.isArray(opts?.queryKey) ? opts.queryKey : []
+    const key = queryKey[0]
+
+    if (key === "tldw:listWorldBooks") {
+      return makeUseQueryResult({
+        data: WORLD_BOOKS_DATA,
+        status: "success"
+      })
+    }
+    if (key === "tldw:listCharactersForWB") {
+      return makeUseQueryResult({ data: [] })
+    }
+    if (key === "tldw:worldBookAttachments") {
+      return makeUseQueryResult({ data: {} })
+    }
+    if (key === "tldw:listWorldBookEntries") {
+      return makeUseQueryResult({ data: [] })
+    }
+    return makeUseQueryResult({})
+  })
+}
+
+describe("WorldBooksManager responsive layout", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-
-    useQueryClientMock.mockReturnValue({
-      invalidateQueries: vi.fn()
-    })
-    useMutationMock.mockImplementation((opts: any) => makeUseMutationResult(opts))
-
-    useQueryMock.mockImplementation((opts: any) => {
-      const queryKey = Array.isArray(opts?.queryKey) ? opts.queryKey : []
-      const key = queryKey[0]
-
-      if (key === "tldw:listWorldBooks") {
-        return makeUseQueryResult({
-          data: [
-            {
-              id: 1,
-              name: "Arcana",
-              description: "Main lore",
-              enabled: true,
-              entry_count: 1,
-              token_budget: 500
-            }
-          ],
-          status: "success"
-        })
-      }
-      if (key === "tldw:listCharactersForWB") {
-        return makeUseQueryResult({ data: [] })
-      }
-      if (key === "tldw:worldBookAttachments") {
-        return makeUseQueryResult({ data: {} })
-      }
-      if (key === "tldw:listWorldBookEntries") {
-        return makeUseQueryResult({
-          data: [
-            {
-              entry_id: 10,
-              keywords: ["seed-keyword"],
-              content: "Seed entry",
-              priority: 75,
-              enabled: true,
-              case_sensitive: false,
-              regex_match: false,
-              whole_word_match: true,
-              appendable: false
-            }
-          ]
-        })
-      }
-      return makeUseQueryResult({})
-    })
+    setupQueryMocks()
   })
 
   afterEach(() => {
@@ -205,44 +208,104 @@ describe("WorldBooksManager responsive stage-2 entry drawer mobile ergonomics", 
   })
 
   it(
-    "hides priority/enabled columns and applies larger touch targets on mobile",
-    async () => {
-      const user = userEvent.setup()
-      mockBreakpoints.md = false
+    "desktop shows two-panel layout",
+    () => {
+      mockBreakpoints.lg = true
+      mockBreakpoints.md = true
+      mockBreakpoints.sm = true
+
       render(<WorldBooksManager />)
 
-      await user.click(screen.getByText("Arcana"))
-      const detailPanel = await screen.findByRole("main", { name: "World book detail" })
-
-      expect(within(detailPanel).queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(0)
-      expect(within(detailPanel).queryAllByRole("columnheader", { name: "Enabled" })).toHaveLength(0)
-
-      const editEntryButton = within(detailPanel).getByRole("button", { name: "Edit entry" })
-      const deleteEntryButton = within(detailPanel).getByRole("button", { name: "Delete entry" })
-      expect(editEntryButton).toHaveClass("min-h-11")
-      expect(editEntryButton).toHaveClass("min-w-11")
-      expect(deleteEntryButton).toHaveClass("min-h-11")
-      expect(deleteEntryButton).toHaveClass("min-w-11")
+      expect(screen.getByTestId("world-books-two-panel")).toBeInTheDocument()
+      expect(screen.queryByTestId("world-books-stacked")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("world-books-mobile")).not.toBeInTheDocument()
     },
-    30000
+    15000
   )
 
   it(
-    "keeps priority/enabled columns visible on desktop",
-    async () => {
-      const user = userEvent.setup()
-      mockBreakpoints.md = true
+    "mobile shows only list when no selection",
+    () => {
+      mockBreakpoints.lg = false
+      mockBreakpoints.md = false
+      mockBreakpoints.sm = true
+
       render(<WorldBooksManager />)
 
+      expect(screen.getByTestId("world-books-mobile")).toBeInTheDocument()
+      // List panel should be visible
+      expect(screen.getByRole("navigation", { name: "World books list" })).toBeInTheDocument()
+      // Detail panel should NOT be rendered (no world book detail landmark)
+      expect(screen.queryByRole("main", { name: "World book detail" })).not.toBeInTheDocument()
+    },
+    15000
+  )
+
+  it(
+    "mobile shows only detail with back button when world book is selected",
+    async () => {
+      mockBreakpoints.lg = false
+      mockBreakpoints.md = false
+      mockBreakpoints.sm = true
+
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
+
+      // Select a world book by clicking on it in the list
       await user.click(screen.getByText("Arcana"))
-      const detailPanel = await screen.findByRole("main", { name: "World book detail" })
 
-      expect(within(detailPanel).queryAllByRole("columnheader", { name: "Priority" })).toHaveLength(1)
-      expect(within(detailPanel).queryAllByRole("columnheader", { name: "Enabled" })).toHaveLength(1)
+      // Now the list should be hidden and detail visible
+      expect(screen.queryByRole("navigation", { name: "World books list" })).not.toBeInTheDocument()
+      expect(screen.getByRole("main", { name: "World book detail" })).toBeInTheDocument()
 
-      const editEntryButton = within(detailPanel).getByRole("button", { name: "Edit entry" })
-      expect(editEntryButton.className).not.toContain("min-h-11")
-      expect(editEntryButton.className).not.toContain("min-w-11")
+      // Back button should be present
+      expect(
+        screen.getByRole("button", { name: "Back to world books list" })
+      ).toBeInTheDocument()
+    },
+    15000
+  )
+
+  it(
+    "back button clears selection and shows list again on mobile",
+    async () => {
+      mockBreakpoints.lg = false
+      mockBreakpoints.md = false
+      mockBreakpoints.sm = true
+
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
+
+      // Select a world book
+      await user.click(screen.getByText("Arcana"))
+
+      // Verify detail is showing
+      expect(screen.getByRole("main", { name: "World book detail" })).toBeInTheDocument()
+
+      // Click back button
+      await user.click(
+        screen.getByRole("button", { name: "Back to world books list" })
+      )
+
+      // List should be visible again, detail gone
+      expect(screen.getByRole("navigation", { name: "World books list" })).toBeInTheDocument()
+      expect(screen.queryByRole("main", { name: "World book detail" })).not.toBeInTheDocument()
+    },
+    15000
+  )
+
+  it(
+    "tablet shows stacked layout",
+    () => {
+      mockBreakpoints.lg = false
+      mockBreakpoints.md = true
+      mockBreakpoints.sm = true
+
+      render(<WorldBooksManager />)
+
+      expect(screen.getByTestId("world-books-stacked")).toBeInTheDocument()
+      expect(screen.queryByTestId("world-books-two-panel")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("world-books-mobile")).not.toBeInTheDocument()
     },
     15000
   )
