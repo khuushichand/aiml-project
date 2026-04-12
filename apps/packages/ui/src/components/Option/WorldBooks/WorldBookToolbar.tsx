@@ -1,6 +1,7 @@
 import React from "react"
 import { Button, Dropdown, Input, Select } from "antd"
 import type { MenuProps } from "antd"
+import { Link, useInRouterContext } from "react-router-dom"
 import {
   Wrench,
   FlaskConical,
@@ -55,6 +56,8 @@ export const WorldBookToolbar: React.FC<WorldBookToolbarProps> = ({
   bulkExportSelectedLoading,
   compact
 }) => {
+  const inRouterContext = useInRouterContext()
+
   const toolsMenuItems: MenuProps["items"] = [
     // Group 1: Analysis
     {
@@ -108,7 +111,14 @@ export const WorldBookToolbar: React.FC<WorldBookToolbarProps> = ({
     // Group 3: Debug
     {
       key: "chat-injection-panel",
-      label: (
+      label: inRouterContext ? (
+        <Link
+          to={LOREBOOK_DEBUG_ENTRYPOINT_HREF}
+          onClick={(e) => e.stopPropagation()}
+        >
+          Chat Injection Panel
+        </Link>
+      ) : (
         <a
           href={LOREBOOK_DEBUG_ENTRYPOINT_HREF}
           onClick={(e) => e.stopPropagation()}

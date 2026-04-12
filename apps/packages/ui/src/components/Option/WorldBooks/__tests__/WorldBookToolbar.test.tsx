@@ -2,6 +2,7 @@ import React from "react"
 import { describe, expect, it, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, useLocation } from "react-router-dom"
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -37,6 +38,11 @@ const defaultProps = {
   hasSelection: false,
   globalStatsFetching: false,
   bulkExportAllLoading: false
+}
+
+const LocationProbe = () => {
+  const location = useLocation()
+  return <div data-testid="location-probe">{location.pathname + location.search}</div>
 }
 
 describe("WorldBookToolbar", () => {
@@ -121,5 +127,22 @@ describe("WorldBookToolbar", () => {
     await waitFor(() => {
       expect(screen.getByText("Export Selected")).toBeInTheDocument()
     })
+  })
+
+  it("navigates internally when the chat injection panel tool is selected", async () => {
+    const user = userEvent.setup()
+    render(
+      <MemoryRouter initialEntries={["/world-books"]}>
+        <WorldBookToolbar {...defaultProps} />
+        <LocationProbe />
+      </MemoryRouter>
+    )
+
+    await user.click(screen.getByRole("button", { name: /tools/i }))
+    await user.click(await screen.findByText("Chat Injection Panel"))
+
+    expect(screen.getByTestId("location-probe")).toHaveTextContent(
+      "/chat?from=world-books&focus=lorebook-debug"
+    )
   })
 })

@@ -1,28 +1,11 @@
 import React from "react"
 import { Button, Form, Select, Tabs, Tag } from "antd"
 import { ArrowLeft } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { WorldBookEntryManager, DEFAULT_ENTRY_FILTER_PRESET } from "./WorldBookEntryManager"
 import { WorldBookForm } from "./WorldBookForm"
+import { formatWorldBookLastModified } from "./worldBookListUtils"
 import type { EntryFilterPreset } from "./WorldBookEntryManager"
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Friendly relative-time label for last_modified timestamps */
-const formatRelativeTime = (timestamp: number | null | undefined): string => {
-  if (timestamp == null || !Number.isFinite(timestamp)) return ""
-  const delta = Date.now() - timestamp
-  if (delta < 0) return "just now"
-  const seconds = Math.floor(delta / 1000)
-  if (seconds < 60) return "just now"
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,6 +53,7 @@ const AttachmentsTabContent: React.FC<{
   onAttachCharacter,
   onDetachCharacter
 }) => {
+  const { t } = useTranslation(["option"])
   const [selectedCharacterId, setSelectedCharacterId] = React.useState<number | null>(null)
   const [attaching, setAttaching] = React.useState(false)
 
@@ -99,10 +83,16 @@ const AttachmentsTabContent: React.FC<{
       {/* Attached characters list */}
       <div>
         <h3 className="text-sm font-medium mb-2">
-          Attached Characters ({attachedCharacters.length})
+          {t("option:worldBooks.detail.attachments.heading", {
+            defaultValue: `Attached Characters (${attachedCharacters.length})`
+          })}
         </h3>
         {attachedCharacters.length === 0 ? (
-          <p className="text-text-muted text-sm">No characters attached.</p>
+          <p className="text-text-muted text-sm">
+            {t("option:worldBooks.detail.attachments.empty", {
+              defaultValue: "No characters attached."
+            })}
+          </p>
         ) : (
           <div className="space-y-2">
             {attachedCharacters.map((character: any) => (
@@ -115,7 +105,9 @@ const AttachmentsTabContent: React.FC<{
                     String(character.id)
                   )}&focusWorldBookId=${encodeURIComponent(String(worldBookId))}`}
                   className="text-sm text-primary hover:underline"
-                  aria-label={`Open character ${character.name || `Character ${character.id}`}`}
+                  aria-label={t("option:worldBooks.detail.attachments.openCharacter", {
+                    defaultValue: `Open character ${character.name || `Character ${character.id}`}`
+                  })}
                 >
                   {character.name}
                 </a>
@@ -124,7 +116,9 @@ const AttachmentsTabContent: React.FC<{
                   size="small"
                   onClick={() => onDetachCharacter(character.id)}
                 >
-                  Detach
+                  {t("option:worldBooks.detail.attachments.detach", {
+                    defaultValue: "Detach"
+                  })}
                 </Button>
               </div>
             ))}
@@ -135,11 +129,17 @@ const AttachmentsTabContent: React.FC<{
       {/* Attach new character */}
       {availableCharacters.length > 0 && (
         <div>
-          <h3 className="text-sm font-medium mb-2">Attach a Character</h3>
+          <h3 className="text-sm font-medium mb-2">
+            {t("option:worldBooks.detail.attachments.attachHeading", {
+              defaultValue: "Attach a Character"
+            })}
+          </h3>
           <div className="flex gap-2">
             <Select
               className="flex-1"
-              placeholder="Select a character"
+              placeholder={t("option:worldBooks.detail.attachments.selectPlaceholder", {
+                defaultValue: "Select a character"
+              })}
               value={selectedCharacterId}
               onChange={(value) => setSelectedCharacterId(value)}
               options={availableCharacters.map((c: any) => ({
@@ -154,7 +154,9 @@ const AttachmentsTabContent: React.FC<{
               loading={attaching}
               onClick={handleAttach}
             >
-              Attach
+              {t("option:worldBooks.detail.attachments.attach", {
+                defaultValue: "Attach"
+              })}
             </Button>
           </div>
         </div>
@@ -218,39 +220,95 @@ const StatsTabContent: React.FC<{
   loading?: boolean
   error?: string | null
 }> = ({ statsData, loading, error }) => {
+  const { t } = useTranslation(["option"])
+
   if (loading) {
-    return <div data-testid="stats-tab-content">Loading statistics...</div>
+    return (
+      <div data-testid="stats-tab-content">
+        {t("option:worldBooks.detail.stats.loading", {
+          defaultValue: "Loading statistics..."
+        })}
+      </div>
+    )
   }
 
   if (error) {
     return (
       <div data-testid="stats-tab-content" role="alert" className="text-sm text-danger">
-        Failed to load statistics: {error}
+        {t("option:worldBooks.detail.stats.error", {
+          defaultValue: `Failed to load statistics: ${error}`
+        })}
       </div>
     )
   }
 
   const metricRows = [
-    { label: "Entries", value: statsData?.total_entries },
-    { label: "Enabled entries", value: statsData?.enabled_entries },
-    { label: "Disabled entries", value: statsData?.disabled_entries },
-    { label: "Keywords", value: statsData?.total_keywords },
-    { label: "Regex entries", value: statsData?.regex_entries },
-    { label: "Average priority", value: statsData?.average_priority },
-    { label: "Estimated tokens", value: statsData?.estimated_tokens },
-    { label: "Content length", value: statsData?.total_content_length }
+    {
+      label: t("option:worldBooks.detail.stats.entries", {
+        defaultValue: "Entries"
+      }),
+      value: statsData?.total_entries
+    },
+    {
+      label: t("option:worldBooks.detail.stats.enabledEntries", {
+        defaultValue: "Enabled entries"
+      }),
+      value: statsData?.enabled_entries
+    },
+    {
+      label: t("option:worldBooks.detail.stats.disabledEntries", {
+        defaultValue: "Disabled entries"
+      }),
+      value: statsData?.disabled_entries
+    },
+    {
+      label: t("option:worldBooks.detail.stats.keywords", {
+        defaultValue: "Keywords"
+      }),
+      value: statsData?.total_keywords
+    },
+    {
+      label: t("option:worldBooks.detail.stats.regexEntries", {
+        defaultValue: "Regex entries"
+      }),
+      value: statsData?.regex_entries
+    },
+    {
+      label: t("option:worldBooks.detail.stats.averagePriority", {
+        defaultValue: "Average priority"
+      }),
+      value: statsData?.average_priority
+    },
+    {
+      label: t("option:worldBooks.detail.stats.estimatedTokens", {
+        defaultValue: "Estimated tokens"
+      }),
+      value: statsData?.estimated_tokens
+    },
+    {
+      label: t("option:worldBooks.detail.stats.contentLength", {
+        defaultValue: "Content length"
+      }),
+      value: statsData?.total_content_length
+    }
   ].filter((row) => row.value != null)
 
   const estimatorNote =
     typeof statsData?.token_estimation_method === "string" &&
     statsData.token_estimation_method.trim().length > 0
-      ? `Estimated using ${statsData.token_estimation_method}.`
-      : "Estimated using ~4 characters per token."
+      ? t("option:worldBooks.detail.stats.estimatorMethod", {
+          defaultValue: `Estimated using ${statsData.token_estimation_method}.`
+        })
+      : t("option:worldBooks.detail.stats.estimatorFallback", {
+          defaultValue: "Estimated using ~4 characters per token."
+        })
 
   if (metricRows.length === 0) {
     return (
       <div data-testid="stats-tab-content" className="text-sm text-text-muted">
-        No statistics available yet.
+        {t("option:worldBooks.detail.stats.empty", {
+          defaultValue: "No statistics available yet."
+        })}
       </div>
     )
   }
@@ -299,6 +357,7 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
   statsError,
   onBack
 }) => {
+  const { t } = useTranslation(["option"])
   const headingRef = React.useRef<HTMLHeadingElement>(null)
 
   React.useEffect(() => {
@@ -312,7 +371,9 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
     return (
       <main aria-label="World book detail" className="flex items-center justify-center h-full">
         <p className="text-text-muted text-center">
-          Select a world book to view its entries and settings
+          {t("option:worldBooks.detail.empty", {
+            defaultValue: "Select a world book to view its entries and settings"
+          })}
         </p>
       </main>
     )
@@ -320,11 +381,14 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
 
   const entryCount = typeof worldBook.entry_count === "number" ? worldBook.entry_count : 0
   const characterCount = attachedCharacters.length
+  const lastModifiedDisplay = formatWorldBookLastModified(worldBook.last_modified)
 
   const tabItems = [
     {
       key: "entries",
-      label: "Entries",
+      label: t("option:worldBooks.detail.tabs.entries", {
+        defaultValue: "Entries"
+      }),
       children: (
         <WorldBookEntryManager
           worldBookId={worldBook.id}
@@ -338,7 +402,9 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
     },
     {
       key: "attachments",
-      label: "Attachments",
+      label: t("option:worldBooks.detail.tabs.attachments", {
+        defaultValue: "Attachments"
+      }),
       children: (
         <AttachmentsTabContent
           worldBookId={worldBook.id}
@@ -351,7 +417,9 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
     },
     {
       key: "stats",
-      label: "Stats",
+      label: t("option:worldBooks.detail.tabs.stats", {
+        defaultValue: "Stats"
+      }),
       children: (
         <StatsTabContent
           statsData={statsData}
@@ -362,7 +430,9 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
     },
     {
       key: "settings",
-      label: "Settings",
+      label: t("option:worldBooks.detail.tabs.settings", {
+        defaultValue: "Settings"
+      }),
       children: (
         <SettingsTabContent
           worldBook={worldBook}
@@ -384,9 +454,14 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
         <button
           className="mb-2 flex items-center gap-1 text-sm text-primary hover:underline"
           onClick={onBack}
-          aria-label="Back to world books list"
+          aria-label={t("option:worldBooks.detail.backAriaLabel", {
+            defaultValue: "Back to world books list"
+          })}
         >
-          <ArrowLeft className="w-4 h-4" /> World Books
+          <ArrowLeft className="w-4 h-4" />
+          {t("option:header.modeWorldBooks", {
+            defaultValue: "World Books"
+          })}
         </button>
       )}
 
@@ -396,22 +471,37 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
           {worldBook.name}
         </h2>
         <Tag color={worldBook.enabled ? "green" : "default"}>
-          {worldBook.enabled ? "Enabled" : "Disabled"}
+          {worldBook.enabled
+            ? t("option:worldBooks.detail.status.enabled", {
+                defaultValue: "Enabled"
+              })
+            : t("option:worldBooks.detail.status.disabled", {
+                defaultValue: "Disabled"
+              })}
         </Tag>
         <span className="text-sm text-text-muted">
-          {entryCount} {entryCount === 1 ? "entry" : "entries"}
+          {t("option:worldBooks.detail.entrySummary", {
+            defaultValue: `${entryCount} ${entryCount === 1 ? "entry" : "entries"}`
+          })}
         </span>
         {worldBook.token_budget != null && (
           <span className="text-sm text-text-muted">
-            Budget: {worldBook.token_budget}
+            {t("option:worldBooks.detail.tokenBudget", {
+              defaultValue: `Budget: ${worldBook.token_budget}`
+            })}
           </span>
         )}
         <span className="text-sm text-text-muted">
-          {characterCount} {characterCount === 1 ? "character" : "characters"}
+          {t("option:worldBooks.detail.characterSummary", {
+            defaultValue: `${characterCount} ${characterCount === 1 ? "character" : "characters"}`
+          })}
         </span>
-        {worldBook.last_modified != null && (
-          <span className="text-xs text-text-muted">
-            {formatRelativeTime(worldBook.last_modified)}
+        {lastModifiedDisplay.timestamp != null && (
+          <span
+            className="text-xs text-text-muted"
+            title={lastModifiedDisplay.absolute || undefined}
+          >
+            {lastModifiedDisplay.relative}
           </span>
         )}
       </div>

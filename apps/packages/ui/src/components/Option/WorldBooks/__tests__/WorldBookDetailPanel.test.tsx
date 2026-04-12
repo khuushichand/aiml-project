@@ -121,6 +121,29 @@ describe("WorldBookDetailPanel", () => {
     expect(screen.getByText(/2 characters/i)).toBeInTheDocument()
   })
 
+  it("renders last-modified metadata for ISO timestamps in the summary bar", () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date("2026-02-18T12:00:00Z"))
+
+      render(
+        <TestWrapper
+          worldBook={{
+            ...mockWorldBook,
+            last_modified: "2026-02-18T09:00:00Z"
+          }}
+        />
+      )
+
+      expect(screen.getByText("3 hours ago")).toBeInTheDocument()
+      expect(
+        screen.getByTitle("2026-02-18 09:00:00 UTC")
+      ).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("renders Entries tab as default active tab", () => {
     render(<TestWrapper />)
 
