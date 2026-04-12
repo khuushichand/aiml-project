@@ -53,7 +53,7 @@ import {
 import { WorldBookEmptyState } from "./WorldBookEmptyState"
 import { WorldBookToolbar } from "./WorldBookToolbar"
 import { WorldBookListPanel } from "./WorldBookListPanel"
-import { WorldBookDetailPanel } from "./WorldBookDetailPanel"
+import { WorldBookDetailPanel, type WorldBookDetailTabKey } from "./WorldBookDetailPanel"
 
 export { WorldBookForm } from "./WorldBookForm"
 
@@ -82,7 +82,9 @@ export const WorldBooksManager: React.FC = () => {
   const [createForm] = Form.useForm()
   const [editForm] = Form.useForm()
   const [entryForm] = Form.useForm()
+  const [settingsForm] = Form.useForm()
   const [attachForm] = Form.useForm()
+  const [detailActiveTab, setDetailActiveTab] = React.useState<WorldBookDetailTabKey>("entries")
   const importFormatHelpContentId = React.useId()
   const importErrorDetailsContentId = React.useId()
   const importPreviewEntriesContentId = React.useId()
@@ -275,10 +277,36 @@ export const WorldBooksManager: React.FC = () => {
     () => ((data || []) as any[]).find((book: any) => Number(book?.id) === Number(selectedWorldBookId)) || null,
     [data, selectedWorldBookId]
   )
+  const selectedWorldBookVersion =
+    typeof selectedWorldBookRecord?.version === "number" ? selectedWorldBookRecord.version : null
 
   const selectedWorldBookAttached = React.useMemo(
     () => selectedWorldBookId ? getAttachedCharacters(selectedWorldBookId) : [],
     [selectedWorldBookId, getAttachedCharacters]
+  )
+
+  const {
+    data: selectedWorldBookStats,
+    status: selectedWorldBookStatsStatus,
+    error: selectedWorldBookStatsError,
+    isFetching: selectedWorldBookStatsFetching
+  } = useQuery({
+    queryKey: ["tldw:selectedWorldBookStatistics", selectedWorldBookId],
+    queryFn: async () => {
+      if (selectedWorldBookId == null) return null
+      await tldwClient.initialize()
+      return await tldwClient.worldBookStatistics(selectedWorldBookId)
+    },
+    enabled: isOnline && selectedWorldBookId != null && detailActiveTab === "stats"
+  })
+
+  const selectWorldBookInDetail = React.useCallback(
+    (id: number, tab: WorldBookDetailTabKey = "entries") => {
+      setSelectedWorldBookId(id)
+      setDetailActiveTab(tab)
+      requestAttachmentHydration()
+    },
+    [requestAttachmentHydration]
   )
 
   const { mutate: createWB, isPending: creating } = useMutation({
@@ -326,15 +354,22 @@ export const WorldBooksManager: React.FC = () => {
     mutationFn: (values: any) => {
       const targetId = editId ?? selectedWorldBookId
       if (targetId == null) return Promise.resolve(null)
-      if (typeof editExpectedVersion === "number") {
+      const versionToUse =
+        typeof editExpectedVersion === "number"
+          ? editExpectedVersion
+          : editId == null
+            ? selectedWorldBookVersion
+            : null
+      if (typeof versionToUse === "number") {
         return tldwClient.updateWorldBook(targetId, values, {
-          expectedVersion: editExpectedVersion
+          expectedVersion: versionToUse
         })
       }
       return tldwClient.updateWorldBook(targetId, values)
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['tldw:listWorldBooks'] })
+      setEditConflict(null)
       if (editId != null) {
         setOpenEdit(false)
         editForm.resetFields()
@@ -353,6 +388,7 @@ export const WorldBooksManager: React.FC = () => {
         description
       })
       if (isWorldBookVersionConflictError(e)) {
+        setDetailActiveTab("settings")
         setEditConflict({
           attemptedValues: { ...(values || {}) },
           message: description
@@ -993,19 +1029,22 @@ export const WorldBooksManager: React.FC = () => {
     [data, getActiveFocusableElement]
   )
 
+  const activeEditTargetId = editId ?? selectedWorldBookId
+
   const latestEditRecord = React.useMemo(
     () =>
       ((data || []) as any[]).find(
-        (book: any) => Number(book?.id) === Number(editId)
+        (book: any) => Number(book?.id) === Number(activeEditTargetId)
       ) || null,
-    [data, editId]
+    [activeEditTargetId, data]
   )
   const latestEditVersion =
     typeof latestEditRecord?.version === "number" ? latestEditRecord.version : null
 
   const handleLoadLatestEditValues = React.useCallback(() => {
     if (!latestEditRecord) return
-    editForm.setFieldsValue(toWorldBookFormValues(latestEditRecord))
+    const targetForm = editId != null ? editForm : settingsForm
+    targetForm.setFieldsValue(toWorldBookFormValues(latestEditRecord))
     setEditExpectedVersion(
       typeof latestEditRecord.version === "number" ? latestEditRecord.version : null
     )
@@ -1014,11 +1053,12 @@ export const WorldBooksManager: React.FC = () => {
       message: "Latest values loaded",
       description: "Review the refreshed values, reapply any local edits, then save again."
     })
-  }, [editForm, latestEditRecord, notification])
+  }, [editForm, editId, latestEditRecord, notification, settingsForm])
 
   const handleReapplyEditDraft = React.useCallback(() => {
     if (!latestEditRecord || !editConflict) return
-    editForm.setFieldsValue({
+    const targetForm = editId != null ? editForm : settingsForm
+    targetForm.setFieldsValue({
       ...toWorldBookFormValues(latestEditRecord),
       ...editConflict.attemptedValues
     })
@@ -1030,7 +1070,46 @@ export const WorldBooksManager: React.FC = () => {
       message: "Edits reapplied",
       description: "Your unsaved edits were merged onto the latest version. Save to retry."
     })
-  }, [editConflict, editForm, latestEditRecord, notification])
+  }, [editConflict, editForm, editId, latestEditRecord, notification, settingsForm])
+
+  const renderEditConflictBanner = React.useCallback(() => {
+    if (!editConflict) return null
+
+    return (
+      <div
+        data-testid="world-book-edit-conflict"
+        className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+      >
+        <p>{editConflict.message}</p>
+        <p className="mt-1 text-xs text-amber-700">
+          Reload the latest version and then reapply your edits before saving again.
+          {latestEditVersion != null ? ` Latest version: ${latestEditVersion}.` : ""}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button
+            size="small"
+            onClick={handleLoadLatestEditValues}
+            disabled={!latestEditRecord}
+          >
+            Load latest values
+          </Button>
+          <Button
+            size="small"
+            onClick={handleReapplyEditDraft}
+            disabled={!latestEditRecord}
+          >
+            Reapply my edits
+          </Button>
+        </div>
+      </div>
+    )
+  }, [
+    editConflict,
+    handleLoadLatestEditValues,
+    handleReapplyEditDraft,
+    latestEditRecord,
+    latestEditVersion
+  ])
 
   React.useEffect(() => {
     return () => {
@@ -1068,7 +1147,7 @@ export const WorldBooksManager: React.FC = () => {
   const handleRowAction = React.useCallback((action: string, record: any) => {
     switch (action) {
       case "entries":
-        setSelectedWorldBookId(record.id)
+        selectWorldBookInDetail(record.id, "entries")
         break
       case "duplicate":
         void duplicateWorldBook(record)
@@ -1087,7 +1166,7 @@ export const WorldBooksManager: React.FC = () => {
         void requestDeleteWorldBook(record)
         break
     }
-  }, [duplicateWorldBook, exportSingleWorldBook, requestAttachmentHydration, requestDeleteWorldBook, openWorldBookStatistics])
+  }, [duplicateWorldBook, exportSingleWorldBook, requestDeleteWorldBook, openWorldBookStatistics, selectWorldBookInDetail])
 
   const layoutMode: "desktop" | "tablet" | "mobile" = screens.lg
     ? "desktop"
@@ -1196,14 +1275,11 @@ export const WorldBooksManager: React.FC = () => {
                   <WorldBookListPanel
                     worldBooks={filteredWorldBooks}
                     selectedWorldBookId={selectedWorldBookId}
-                    onSelectWorldBook={(id) => {
-                      setSelectedWorldBookId(id)
-                      requestAttachmentHydration()
-                    }}
+                    onSelectWorldBook={(id) => selectWorldBookInDetail(id, "entries")}
                     selectedRowKeys={selectedWorldBookKeys}
                     onSelectedRowKeysChange={setSelectedWorldBookKeys}
                     pendingDeleteIds={pendingDeleteIds}
-                    onEditWorldBook={(record) => setSelectedWorldBookId(record.id)}
+                    onEditWorldBook={(record) => selectWorldBookInDetail(record.id, "settings")}
                     onRowAction={handleRowAction}
                     tableSort={tableSort}
                     onTableSortChange={handleTableSortChange}
@@ -1216,6 +1292,8 @@ export const WorldBooksManager: React.FC = () => {
                     attachedCharacters={selectedWorldBookAttached}
                     allWorldBooks={(data || []) as any[]}
                     allCharacters={(characters || []) as any[]}
+                    activeTab={detailActiveTab}
+                    onActiveTabChange={setDetailActiveTab}
                     onUpdateWorldBook={updateWB}
                     onAttachCharacter={async (characterId) => {
                       if (selectedWorldBookId) {
@@ -1231,7 +1309,19 @@ export const WorldBooksManager: React.FC = () => {
                     maxRecursiveDepth={maxRecursiveDepth}
                     updating={updating}
                     entryFormInstance={entryForm}
+                    settingsFormInstance={settingsForm}
                     entryFilterPreset={entryFilterPreset}
+                    settingsBanner={editId == null ? renderEditConflictBanner() : null}
+                    statsData={selectedWorldBookStats}
+                    statsLoading={
+                      detailActiveTab === "stats" &&
+                      (selectedWorldBookStatsStatus === "pending" || selectedWorldBookStatsFetching)
+                    }
+                    statsError={
+                      detailActiveTab === "stats"
+                        ? (selectedWorldBookStatsError as any)?.message || null
+                        : null
+                    }
                   />
                 </div>
               </div>
@@ -1242,14 +1332,11 @@ export const WorldBooksManager: React.FC = () => {
                 <WorldBookListPanel
                   worldBooks={filteredWorldBooks}
                   selectedWorldBookId={selectedWorldBookId}
-                  onSelectWorldBook={(id) => {
-                    setSelectedWorldBookId(id)
-                    requestAttachmentHydration()
-                  }}
+                  onSelectWorldBook={(id) => selectWorldBookInDetail(id, "entries")}
                   selectedRowKeys={selectedWorldBookKeys}
                   onSelectedRowKeysChange={setSelectedWorldBookKeys}
                   pendingDeleteIds={pendingDeleteIds}
-                  onEditWorldBook={(record) => setSelectedWorldBookId(record.id)}
+                  onEditWorldBook={(record) => selectWorldBookInDetail(record.id, "settings")}
                   onRowAction={handleRowAction}
                   tableSort={tableSort}
                   onTableSortChange={handleTableSortChange}
@@ -1261,6 +1348,8 @@ export const WorldBooksManager: React.FC = () => {
                   attachedCharacters={selectedWorldBookAttached}
                   allWorldBooks={(data || []) as any[]}
                   allCharacters={(characters || []) as any[]}
+                  activeTab={detailActiveTab}
+                  onActiveTabChange={setDetailActiveTab}
                   onUpdateWorldBook={updateWB}
                   onAttachCharacter={async (characterId) => {
                     if (selectedWorldBookId) {
@@ -1276,7 +1365,19 @@ export const WorldBooksManager: React.FC = () => {
                   maxRecursiveDepth={maxRecursiveDepth}
                   updating={updating}
                   entryFormInstance={entryForm}
+                  settingsFormInstance={settingsForm}
                   entryFilterPreset={entryFilterPreset}
+                  settingsBanner={editId == null ? renderEditConflictBanner() : null}
+                  statsData={selectedWorldBookStats}
+                  statsLoading={
+                    detailActiveTab === "stats" &&
+                    (selectedWorldBookStatsStatus === "pending" || selectedWorldBookStatsFetching)
+                  }
+                  statsError={
+                    detailActiveTab === "stats"
+                      ? (selectedWorldBookStatsError as any)?.message || null
+                      : null
+                  }
                 />
               </div>
             )}
@@ -1287,14 +1388,11 @@ export const WorldBooksManager: React.FC = () => {
                   <WorldBookListPanel
                     worldBooks={filteredWorldBooks}
                     selectedWorldBookId={selectedWorldBookId}
-                    onSelectWorldBook={(id) => {
-                      setSelectedWorldBookId(id)
-                      requestAttachmentHydration()
-                    }}
+                    onSelectWorldBook={(id) => selectWorldBookInDetail(id, "entries")}
                     selectedRowKeys={selectedWorldBookKeys}
                     onSelectedRowKeysChange={setSelectedWorldBookKeys}
                     pendingDeleteIds={pendingDeleteIds}
-                    onEditWorldBook={(record) => setSelectedWorldBookId(record.id)}
+                    onEditWorldBook={(record) => selectWorldBookInDetail(record.id, "settings")}
                     onRowAction={handleRowAction}
                     tableSort={tableSort}
                     onTableSortChange={handleTableSortChange}
@@ -1306,6 +1404,8 @@ export const WorldBooksManager: React.FC = () => {
                     attachedCharacters={selectedWorldBookAttached}
                     allWorldBooks={(data || []) as any[]}
                     allCharacters={(characters || []) as any[]}
+                    activeTab={detailActiveTab}
+                    onActiveTabChange={setDetailActiveTab}
                     onUpdateWorldBook={updateWB}
                     onAttachCharacter={async (characterId) => {
                       if (selectedWorldBookId) {
@@ -1321,7 +1421,19 @@ export const WorldBooksManager: React.FC = () => {
                     maxRecursiveDepth={maxRecursiveDepth}
                     updating={updating}
                     entryFormInstance={entryForm}
+                    settingsFormInstance={settingsForm}
                     entryFilterPreset={entryFilterPreset}
+                    settingsBanner={editId == null ? renderEditConflictBanner() : null}
+                    statsData={selectedWorldBookStats}
+                    statsLoading={
+                      detailActiveTab === "stats" &&
+                      (selectedWorldBookStatsStatus === "pending" || selectedWorldBookStatsFetching)
+                    }
+                    statsError={
+                      detailActiveTab === "stats"
+                        ? (selectedWorldBookStatsError as any)?.message || null
+                        : null
+                    }
                     onBack={() => setSelectedWorldBookId(null)}
                   />
                 )}
@@ -1826,34 +1938,7 @@ export const WorldBooksManager: React.FC = () => {
         footer={null}
         styles={{ body: MODAL_BODY_SCROLL_STYLE }}
       >
-        {editConflict && (
-          <div
-            data-testid="world-book-edit-conflict"
-            className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-          >
-            <p>{editConflict.message}</p>
-            <p className="mt-1 text-xs text-amber-700">
-              Reload the latest version and then reapply your edits before saving again.
-              {latestEditVersion != null ? ` Latest version: ${latestEditVersion}.` : ""}
-            </p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button
-                size="small"
-                onClick={handleLoadLatestEditValues}
-                disabled={!latestEditRecord}
-              >
-                Load latest values
-              </Button>
-              <Button
-                size="small"
-                onClick={handleReapplyEditDraft}
-                disabled={!latestEditRecord}
-              >
-                Reapply my edits
-              </Button>
-            </div>
-          </div>
-        )}
+        {renderEditConflictBanner()}
         <WorldBookForm
           mode="edit"
           form={editForm}
@@ -2329,4 +2414,3 @@ export const WorldBooksManager: React.FC = () => {
     </div>
   )
 }
-

@@ -259,8 +259,8 @@ describe("WorldBooksManager cross-feature integration stage-2 test matching", ()
     15000
   )
 
-  it.skip(
-    "opens test keywords from entries drawer and surfaces API errors - SKIP: test keywords button was in drawer header, now accessed via Tools menu",
+  it(
+    "opens test keywords from Tools menu and surfaces API errors",
     async () => {
       const user = userEvent.setup()
       tldwClientMock.processWorldBookContext.mockRejectedValueOnce(
@@ -269,8 +269,8 @@ describe("WorldBooksManager cross-feature integration stage-2 test matching", ()
 
       render(<WorldBooksManager />)
 
-      await user.click(screen.getByRole("button", { name: "Manage entries" }))
-      await user.click(screen.getByRole("button", { name: "Test keywords for this world book" }))
+      await user.click(screen.getByRole("button", { name: "Tools" }))
+      await user.click(await screen.findByRole("menuitem", { name: "Test Matching" }))
       fireEvent.change(screen.getByRole("textbox", { name: "Sample text for keyword test" }), {
         target: { value: "castle walls" }
       })

@@ -212,10 +212,21 @@ describe("WorldBooksManager error-handling stage-5 edge warnings", () => {
     vi.clearAllMocks()
   })
 
-  it.skip("filters stale attachment rows when attached characters no longer exist - SKIP: attachment column removed from list panel, now in detail panel", () => {
-    // Old: Attached To column showed "Open to load" and attachment count
-    // New: Attachments are in detail panel's Attachments tab
-  })
+  it(
+    "filters stale attachment rows when attached characters no longer exist",
+    async () => {
+      const user = userEvent.setup()
+      render(<WorldBooksManager />)
+
+      await user.click(screen.getByText("Arcana"))
+      const detailPanel = await screen.findByRole("main", { name: "World book detail" })
+      await user.click(screen.getByRole("tab", { name: "Attachments" }))
+
+      expect(screen.queryByText("Deleted Character")).not.toBeInTheDocument()
+      expect(detailPanel).toHaveTextContent("No characters attached.")
+    },
+    20000
+  )
 
   it(
     "shows recursive scanning warning with backend max depth",

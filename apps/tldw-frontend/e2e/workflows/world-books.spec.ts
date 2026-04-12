@@ -163,17 +163,21 @@ test.describe("World Books Workflow", () => {
 
       // Add entry
       await wbPage.fillEntryForm("dragon, fire", "Dragons breathe fire", 50)
-      await wbPage.submitEntry()
+      const [entryResult] = await Promise.all([
+        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+\/entries$/, "POST"),
+        wbPage.submitEntry()
+      ])
+      expect(entryResult.status).toBeLessThan(300)
 
       // Verify entry count
       await expect
-        .poll(async () => wbPage.getEntryCount(), { timeout: 15_000 })
+        .poll(async () => wbPage.getEntryCount(), { timeout: 30_000 })
         .toBeGreaterThanOrEqual(1)
 
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("should support bulk entry add mode", async ({
+    test("should surface bulk add failures in bulk mode", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -182,6 +186,14 @@ test.describe("World Books Workflow", () => {
       wbPage = new WorldBooksPage(authedPage)
       await wbPage.goto()
       await wbPage.waitForReady()
+
+      await authedPage.route(/\/api\/v1\/characters\/world-books\/\d+\/entries$/, async (route) => {
+        await route.fulfill({
+          status: 429,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "rate_limited" })
+        })
+      })
 
       const name = `${testPrefix}-bulk`
       await wbPage.createWorldBook(name, "For bulk entry tests")
@@ -193,20 +205,18 @@ test.describe("World Books Workflow", () => {
       await wbPage.openEntriesTab(name)
 
       // Toggle bulk mode
-      try {
-        await wbPage.toggleBulkAddMode()
+      await wbPage.toggleBulkAddMode()
 
-        // Fill bulk text using -> separator
-        await wbPage.fillBulkText("elf, forest -> Elves live in ancient forests\nwizard, magic -> Wizards wield powerful magic")
+      // Fill bulk text using -> separator
+      await wbPage.fillBulkText("elf, forest -> Elves live in ancient forests")
 
-        // Submit
-        await wbPage.submitEntry()
-        await expect
-          .poll(async () => wbPage.getEntryCount(), { timeout: 15_000 })
-          .toBeGreaterThanOrEqual(2)
-      } catch {
-        // Bulk mode may not be available
-      }
+      // Submit
+      await wbPage.submitEntry()
+
+      const panel = wbPage.detailPanel()
+      await expect(panel.getByText("Parsed entries: 1")).toBeVisible({ timeout: 10_000 })
+      await expect(panel.getByText(/failed entries \(1\)/i)).toBeVisible({ timeout: 10_000 })
+      await expect(panel.getByText(/line 1/i)).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -233,15 +243,16 @@ test.describe("World Books Workflow", () => {
         timeout: 10_000
       })
 
-      try {
-        await wbPage.openAttachmentsTab(name)
+      await wbPage.openAttachmentsTab(name)
+      await wbPage.expectDetailTabActive("Attachments")
 
-        // Verify the attachments section is visible in the detail panel
-        const panel = wbPage.detailPanel()
-        await expect(panel.getByText(/attached characters/i)).toBeVisible({ timeout: 10_000 })
-      } catch {
-        // Attachments tab may not render fully without characters
-      }
+      const panel = wbPage.detailPanel()
+      await expect(panel.getByRole("heading", { name: /attached characters/i })).toBeVisible({
+        timeout: 10_000
+      })
+      await expect(panel.getByText(/no characters attached\./i)).toBeVisible({
+        timeout: 10_000
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -256,14 +267,16 @@ test.describe("World Books Workflow", () => {
       await wbPage.goto()
       await wbPage.waitForReady()
 
-      try {
-        await wbPage.clickRelationshipMatrix()
-        // Matrix modal should open
-        const matrixModal = authedPage.locator(".ant-modal")
-        await expect(matrixModal).toBeVisible({ timeout: 10_000 })
-      } catch {
-        // Matrix button may not be available when no world books exist
-      }
+      const name = `${testPrefix}-matrix`
+      await wbPage.createWorldBook(name, "For matrix tests")
+      await expect(await wbPage.findWorldBookRow(name)).toBeVisible({
+        timeout: 10_000
+      })
+
+      await wbPage.clickRelationshipMatrix()
+      await expect(
+        authedPage.getByText(/(?:list|matrix) view active \(\d+ characters\)\./i)
+      ).toBeVisible({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -293,7 +306,10 @@ test.describe("World Books Workflow", () => {
       await wbPage.clickDeleteOnRow(name)
       await wbPage.confirmDeletion()
 
+      await expect(wbPage.pendingDeleteBanner()).toBeVisible({ timeout: 10_000 })
+      await expect(row.getByText(/pending delete/i)).toBeVisible({ timeout: 10_000 })
       await expect(row).toBeHidden({ timeout: 20_000 })
+      await expect(wbPage.pendingDeleteBanner()).toBeHidden({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -317,13 +333,14 @@ test.describe("World Books Workflow", () => {
       await wbPage.clickDeleteOnRow(name)
       await wbPage.confirmDeletion()
 
-      // Try to click undo
-      try {
-        await wbPage.clickUndoDelete()
-        await expect(row).toBeVisible({ timeout: 5_000 })
-      } catch {
-        // Undo may not be available for all delete patterns
-      }
+      await expect(wbPage.pendingDeleteBanner()).toBeVisible({ timeout: 10_000 })
+      await expect(row.getByText(/pending delete/i)).toBeVisible({ timeout: 10_000 })
+
+      await wbPage.cancelPendingDelete()
+
+      await expect(wbPage.pendingDeleteBanner()).toBeHidden({ timeout: 10_000 })
+      await expect(row).toBeVisible({ timeout: 10_000 })
+      await expect(row.getByText(/pending delete/i)).toBeHidden({ timeout: 10_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -398,16 +415,11 @@ test.describe("World Books Workflow", () => {
         timeout: 10_000
       })
 
-      try {
-        // Open the Stats tab in the detail panel
-        await wbPage.openStatsTab(name)
+      await wbPage.openStatsTab(name)
+      await wbPage.expectDetailTabActive("Stats")
 
-        // Stats tab content should be visible
-        const content = await wbPage.getStatsTabContent()
-        expect(content).toBeTruthy()
-      } catch {
-        // Stats tab may not show meaningful data for empty world books
-      }
+      const content = await wbPage.getStatsTabContent()
+      expect(content).toContain("Entries")
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -446,17 +458,35 @@ test.describe("World Books Workflow", () => {
       await wbPage.clickDetailTab("Settings")
 
       // 5. Update description and save
-      await wbPage.fillSettingsDescription("Updated lifecycle description")
-      const [putResult] = await Promise.all([
-        wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+/, "PUT"),
-        wbPage.submitSettingsForm()
-      ])
-      expect(putResult.status).toBeLessThan(300)
+      let putResult: { status: number; body: any } | null = null
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        await wbPage.fillSettingsDescription("Updated lifecycle description")
+        ;[putResult] = await Promise.all([
+          wbPage.waitForApiCall(/\/api\/v1\/characters\/world-books\/\d+/, "PUT"),
+          wbPage.submitSettingsForm()
+        ])
+
+        if (putResult.status < 300) {
+          break
+        }
+
+        if (putResult.status !== 429 || attempt === 4) {
+          expect(putResult.status).toBeLessThan(300)
+        }
+
+        await authedPage.waitForTimeout(1_000 * attempt)
+      }
+
+      await authedPage.reload({ waitUntil: "domcontentloaded" })
+      await wbPage.waitForReady()
+      const refreshedRow = await wbPage.findWorldBookRow(name)
+      await expect(refreshedRow).toBeVisible({ timeout: 30_000 })
 
       // 6. Delete via overflow menu on the row
       await wbPage.clickDeleteOnRow(name)
       await wbPage.confirmDeletion()
-      await expect(row).toBeHidden({ timeout: 20_000 })
+      await expect(wbPage.pendingDeleteBanner()).toBeVisible({ timeout: 10_000 })
+      await expect(refreshedRow).toBeHidden({ timeout: 20_000 })
 
       await assertNoCriticalErrors(diagnostics)
     })

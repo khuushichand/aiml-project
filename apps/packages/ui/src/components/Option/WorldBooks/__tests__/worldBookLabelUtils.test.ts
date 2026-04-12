@@ -34,6 +34,12 @@ describe("worldBookLabelUtils", () => {
       expect(getSettingDescription("scan_depth", true)).toMatch(/scan_depth/i)
     })
 
+    it("describes token budget in tokens rather than characters", () => {
+      expect(getSettingDescription("token_budget", true)).toMatch(/tokens/i)
+      expect(getSettingDescription("token_budget", true)).not.toMatch(/maximum characters/i)
+      expect(getSettingTechnicalNote("token_budget")).toMatch(/tokens/i)
+    })
+
     it("returns empty string for unknown key", () => {
       expect(getSettingDescription("unknown_setting", false)).toBe("")
       expect(getSettingDescription("unknown_setting", true)).toBe("")

@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
@@ -345,8 +345,17 @@ describe("WorldBooksManager stage-4 flows", () => {
     )
   }, 20000)
 
-  it.skip("renders expandable entry previews - SKIP: requires rewrite for two-panel layout (entry previews moved to detail panel)", async () => {
-    // Old: clicking row expanded inline entry preview
-    // New: clicking row selects it and shows detail panel with entries tab
+  it("opens the detail panel entries view when a world book row is selected", async () => {
+    const user = userEvent.setup()
+    render(<WorldBooksManager />)
+
+    await user.click(screen.getByText("Arcana"))
+
+    const detailPanel = await screen.findByRole("main", { name: "World book detail" })
+    expect(within(detailPanel).getByRole("tab", { name: "Entries" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    expect(detailPanel).toHaveTextContent("No entries yet")
   })
 })

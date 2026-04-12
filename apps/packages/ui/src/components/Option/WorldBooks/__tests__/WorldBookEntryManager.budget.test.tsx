@@ -1,6 +1,6 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { Form } from "antd"
 import { WorldBookEntryManager } from "../WorldBookEntryManager"
@@ -196,74 +196,35 @@ describe("WorldBookEntryManager budget feedback", () => {
   })
 
   it("shows projected budget when content is typed in the add form", async () => {
-    const user = userEvent.setup()
     render(<TestWrapper tokenBudget={500} />)
 
-    // Find the add form's content textarea
-    const addSection = screen.getByText("Add New Entry")
-    expect(addSection).toBeInTheDocument()
-
-    // Find the content textarea in the add form area
-    const contentTextareas = screen.getAllByRole("textbox")
-    // The content textarea is typically the one with "Content" label
-    const contentField = contentTextareas.find((el) => {
-      const parent = el.closest(".ant-form-item")
-      return parent?.textContent?.includes("Content")
+    const contentField = screen.getByRole("textbox", { name: "Content" })
+    fireEvent.change(contentField, {
+      target: { value: "Projected budget copy for the add-entry form." }
     })
 
-    if (contentField) {
-      await user.type(contentField, "A long piece of entry content for testing projected budget calculations")
-
-      // After typing, the projected budget bar should appear with "After save" text
-      const afterSave = screen.queryByText(/After save/)
-      // If projected tokens > 0 and budget is set, the budget bar with projection should appear
-      if (afterSave) {
-        expect(afterSave).toBeInTheDocument()
-      }
-    }
+    expect(await screen.findByText(/After save/)).toBeInTheDocument()
   }, 15000)
 
   it("shows soft warning when projected total exceeds budget", async () => {
-    const user = userEvent.setup()
-    // Use a very small budget that existing entries already nearly fill
-    // sampleEntries total: ~13 + ~11 = ~24 tokens
-    // Set budget to 25, then typing content pushes it over
     render(<TestWrapper tokenBudget={25} />)
 
-    const contentTextareas = screen.getAllByRole("textbox")
-    const contentField = contentTextareas.find((el) => {
-      const parent = el.closest(".ant-form-item")
-      return parent?.textContent?.includes("Content")
+    const contentField = screen.getByRole("textbox", { name: "Content" })
+    fireEvent.change(contentField, {
+      target: { value: "This extra content should exceed the tiny token budget." }
     })
 
-    if (contentField) {
-      // Type enough content to push over the budget of 25
-      // 24 existing + typing ~20 chars = 5 more tokens = 29 > 25
-      await user.type(contentField, "This is extra content that will exceed the tiny budget limit")
-
-      // The soft warning about being over budget should appear
-      const warning = screen.queryByText(/over budget/)
-      if (warning) {
-        expect(warning).toBeInTheDocument()
-      }
-    }
+    expect(await screen.findByText(/over budget/)).toBeInTheDocument()
   }, 15000)
 
   it("Save button is NOT disabled when over budget", async () => {
-    const user = userEvent.setup()
     render(<TestWrapper tokenBudget={25} />)
 
-    const contentTextareas = screen.getAllByRole("textbox")
-    const contentField = contentTextareas.find((el) => {
-      const parent = el.closest(".ant-form-item")
-      return parent?.textContent?.includes("Content")
+    const contentField = screen.getByRole("textbox", { name: "Content" })
+    fireEvent.change(contentField, {
+      target: { value: "This content pushes us way over the tiny budget limit easily." }
     })
 
-    if (contentField) {
-      await user.type(contentField, "This content pushes us way over the tiny budget limit easily")
-    }
-
-    // The Add Entry button should not be disabled
     const addButton = screen.getByRole("button", { name: /Add Entry/i })
     expect(addButton).not.toBeDisabled()
   }, 15000)

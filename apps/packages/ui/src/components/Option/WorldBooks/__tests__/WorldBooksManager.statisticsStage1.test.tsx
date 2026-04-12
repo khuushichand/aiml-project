@@ -206,6 +206,18 @@ describe("WorldBooksManager statistics stage-1 actionable metrics", () => {
           status: "success"
         })
       }
+      if (key === "tldw:selectedWorldBookStatistics") {
+        return makeUseQueryResult({
+          data: {
+            total_entries: 2,
+            enabled_entries: 1,
+            disabled_entries: 1,
+            total_keywords: 3,
+            estimated_tokens: 32
+          },
+          status: "success"
+        })
+      }
       return makeUseQueryResult({})
     })
   })
@@ -275,5 +287,16 @@ describe("WorldBooksManager statistics stage-1 actionable metrics", () => {
     })
     expect(screen.queryByRole("button", { name: "Open disabled entries" })).not.toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Open regex entries" })).not.toBeInTheDocument()
+  }, 15000)
+
+  it("renders live statistics in the detail-panel stats tab", async () => {
+    const user = userEvent.setup()
+    render(<WorldBooksManager />)
+
+    await user.click(screen.getByText("Arcana"))
+    await user.click(screen.getByRole("tab", { name: "Stats" }))
+
+    expect(await screen.findByText("Enabled entries")).toBeInTheDocument()
+    expect(screen.getByText("Estimated using ~4 characters per token.")).toBeInTheDocument()
   }, 15000)
 })

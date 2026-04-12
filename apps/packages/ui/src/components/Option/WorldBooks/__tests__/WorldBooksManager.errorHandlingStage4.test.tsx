@@ -1,6 +1,7 @@
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { WorldBooksManager } from "../Manager"
 
 const {
@@ -196,13 +197,14 @@ describe("WorldBooksManager error-handling stage-4 delete-undo semantics", () =>
     vi.useRealTimers()
   })
 
-  it.skip(
-    "shows a pending-deletion indicator and allows undo before timeout - SKIP: delete action moved to overflow dropdown, requires async rewrite",
+  it(
+    "shows a pending-deletion indicator and allows undo before timeout",
     async () => {
+      vi.useRealTimers()
       render(<WorldBooksManager />)
 
-      // Open overflow menu then click Delete
       fireEvent.click(screen.getByRole("button", { name: "More actions for Arcana" }))
+      fireEvent.click(await screen.findByText("Delete"))
 
       await act(async () => {
         await Promise.resolve()
@@ -219,10 +221,6 @@ describe("WorldBooksManager error-handling stage-4 delete-undo semantics", () =>
         await Promise.resolve()
       })
       expect(screen.queryByTestId("world-book-pending-delete-banner")).not.toBeInTheDocument()
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10000)
-      })
       expect(tldwClientMock.deleteWorldBook).not.toHaveBeenCalled()
     },
     20000

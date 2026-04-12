@@ -32,14 +32,14 @@ const TECHNICAL_DESCRIPTIONS: Record<SettingKey, string> = {
   scan_depth:
     "scan_depth: 1-20. Number of recent messages to search for keyword matches.",
   token_budget:
-    "token_budget: 50-5000 (~4 chars \u2248 1 token). Maximum characters of world info injected into context.",
+    "token_budget: 50-5000 (tokens). Maximum tokens of world info injected into context.",
   recursive_scanning:
     "recursive_scanning: Also search matched content for additional keyword matches. Max depth configurable server-side.",
 }
 
 const TECHNICAL_NOTES: Record<SettingKey, string> = {
   scan_depth: "scan_depth: 1-20",
-  token_budget: "token_budget: 50-5000 (~4 chars \u2248 1 token)",
+  token_budget: "token_budget: 50-5000 (tokens)",
   recursive_scanning: "recursive_scanning: max depth configurable",
 }
 

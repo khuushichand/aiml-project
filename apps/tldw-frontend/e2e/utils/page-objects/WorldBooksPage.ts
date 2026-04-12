@@ -34,7 +34,12 @@ export class WorldBooksPage {
     const container = this.page.locator(
       "[data-testid='world-books-two-panel'], [data-testid='world-books-stacked'], [data-testid='world-books-mobile'], [data-testid='world-books-manager'], .ant-empty"
     )
-    await container.first().waitFor({ state: "visible", timeout: 20_000 }).catch(() => {})
+    try {
+      await container.first().waitFor({ state: "visible", timeout: 20_000 })
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error)
+      throw new Error(`WorldBooksPage.waitForReady timed out waiting for the world-books layout: ${details}`)
+    }
   }
 
   // ── Layout Containers ───────────────────────────────────────────────
@@ -78,6 +83,24 @@ export class WorldBooksPage {
     return this.page.getByRole("dialog", { name: title })
   }
 
+  private async expectWorldBookRowVisible(name: string): Promise<void> {
+    const row = this.page
+      .getByRole("row")
+      .filter({ hasText: new RegExp(escapeRegex(name), "i") })
+
+    await this.searchWorldBooks(name)
+    try {
+      await expect(row).toBeVisible({ timeout: 10_000 })
+      return
+    } catch {
+      await this.page.reload({ waitUntil: "domcontentloaded" })
+      await waitForConnection(this.page)
+      await this.waitForReady()
+      await this.searchWorldBooks(name)
+      await expect(row).toBeVisible({ timeout: 30_000 })
+    }
+  }
+
   async fillWorldBookForm(fields: {
     name: string
     description?: string
@@ -111,16 +134,34 @@ export class WorldBooksPage {
     const modal = this.worldBookDialog(title)
     await expect(modal).toBeVisible({ timeout: 10_000 })
     const btn = modal.getByRole("button", { name: /create|save|ok|submit/i })
+    await expect(btn).toBeEnabled({ timeout: 10_000 })
     await btn.click()
   }
 
   async createWorldBook(name: string, description?: string): Promise<void> {
     await this.clickNewWorldBook()
     await this.fillWorldBookForm({ name, description })
-    await this.submitWorldBookForm(/create world book/i)
-    await this.worldBookDialog(/create world book/i)
-      .waitFor({ state: "hidden", timeout: 10_000 })
-      .catch(() => {})
+    const dialogTitle = /create world book/i
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const [apiResult] = await Promise.all([
+        this.waitForApiCall(/\/api\/v1\/characters\/world-books\/?$/, "POST"),
+        this.submitWorldBookForm(dialogTitle)
+      ])
+
+      if (apiResult.status < 300) {
+        await this.worldBookDialog(dialogTitle).waitFor({ state: "hidden", timeout: 15_000 })
+        await this.expectWorldBookRowVisible(name)
+        return
+      }
+
+      if (apiResult.status !== 429 || attempt === 4) {
+        throw new Error(`World book creation failed with status ${apiResult.status}`)
+      }
+
+      await expect(this.worldBookDialog(dialogTitle)).toBeVisible({ timeout: 10_000 })
+      await this.page.waitForTimeout(1_000 * attempt)
+    }
   }
 
   async searchWorldBooks(query: string): Promise<void> {
@@ -191,6 +232,7 @@ export class WorldBooksPage {
     const panel = this.detailPanel()
     const btn = panel.getByRole("button", { name: /save|update|submit/i })
     await btn.click()
+    await expect(btn).not.toHaveClass(/ant-btn-loading/, { timeout: 30_000 })
   }
 
   // ── Row Edit Button (opens detail panel with edit focus) ────────────
@@ -207,7 +249,8 @@ export class WorldBooksPage {
   private async openRowOverflowMenu(name: string): Promise<Locator> {
     const row = await this.findWorldBookRow(name)
     const overflowBtn = row.getByRole("button", { name: /more actions/i })
-    await overflowBtn.click()
+    await overflowBtn.scrollIntoViewIfNeeded()
+    await overflowBtn.click({ force: true })
     // Wait for the dropdown menu to be visible
     const menu = this.page.locator(".ant-dropdown:visible .ant-dropdown-menu")
     await menu.waitFor({ state: "visible", timeout: 5_000 })
@@ -255,6 +298,14 @@ export class WorldBooksPage {
       this.page.locator(".ant-notification").getByText(/undo/i)
     )
     await undoBtn.first().click()
+  }
+
+  pendingDeleteBanner(): Locator {
+    return this.page.getByTestId("world-book-pending-delete-banner")
+  }
+
+  async cancelPendingDelete(): Promise<void> {
+    await this.pendingDeleteBanner().getByRole("button", { name: /cancel pending/i }).click()
   }
 
   async getWorldBookNames(): Promise<string[]> {
@@ -425,6 +476,11 @@ export class WorldBooksPage {
       panel.getByRole("tabpanel")
     )
     await statsContent.first().waitFor({ state: "visible", timeout: 10_000 })
+    await expect
+      .poll(async () => ((await statsContent.first().textContent()) ?? "").trim(), {
+        timeout: 10_000
+      })
+      .not.toBe("Loading statistics...")
     return (await statsContent.first().textContent()) ?? ""
   }
 }

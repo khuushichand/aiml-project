@@ -365,7 +365,14 @@ export const WorldBookEntryManager: React.FC<{
     () => estimateEntryTokens(editContentWatch),
     [editContentWatch]
   )
-  const editFormProjectedTotal = estimatedEntryTokens + editFormProjectedTokens
+  const editingEntryTokens = React.useMemo(
+    () => estimateEntryTokens(editingEntry?.content),
+    [editingEntry?.content]
+  )
+  const editFormProjectedTotal = Math.max(
+    0,
+    estimatedEntryTokens - editingEntryTokens + editFormProjectedTokens
+  )
   const { mutate: addEntry, mutateAsync: addEntryAsync, isPending: adding } = useMutation({
     mutationFn: (v: any) =>
       tldwClient.addWorldBookEntry(worldBookId, {

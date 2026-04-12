@@ -33,6 +33,8 @@ export type WorldBookDetailPanelProps = {
   attachedCharacters: any[]
   allWorldBooks: any[]
   allCharacters: any[]
+  activeTab: WorldBookDetailTabKey
+  onActiveTabChange: (tab: WorldBookDetailTabKey) => void
   onUpdateWorldBook: (values: any) => void
   onAttachCharacter: (characterId: number) => Promise<void>
   onDetachCharacter: (characterId: number) => Promise<void>
@@ -40,20 +42,34 @@ export type WorldBookDetailPanelProps = {
   maxRecursiveDepth: number
   updating: boolean
   entryFormInstance: any
+  settingsFormInstance: any
   entryFilterPreset?: EntryFilterPreset
+  settingsBanner?: React.ReactNode
+  statsData?: any | null
+  statsLoading?: boolean
+  statsError?: string | null
   onBack?: () => void
 }
+
+export type WorldBookDetailTabKey = "entries" | "attachments" | "stats" | "settings"
 
 // ---------------------------------------------------------------------------
 // Attachments tab content
 // ---------------------------------------------------------------------------
 
 const AttachmentsTabContent: React.FC<{
+  worldBookId: number
   attachedCharacters: any[]
   allCharacters: any[]
   onAttachCharacter: (characterId: number) => Promise<void>
   onDetachCharacter: (characterId: number) => Promise<void>
-}> = ({ attachedCharacters, allCharacters, onAttachCharacter, onDetachCharacter }) => {
+}> = ({
+  worldBookId,
+  attachedCharacters,
+  allCharacters,
+  onAttachCharacter,
+  onDetachCharacter
+}) => {
   const [selectedCharacterId, setSelectedCharacterId] = React.useState<number | null>(null)
   const [attaching, setAttaching] = React.useState(false)
 
@@ -94,7 +110,15 @@ const AttachmentsTabContent: React.FC<{
                 key={character.id}
                 className="flex items-center justify-between rounded border border-border px-3 py-2"
               >
-                <span className="text-sm">{character.name}</span>
+                <a
+                  href={`/characters?from=world-books&focusCharacterId=${encodeURIComponent(
+                    String(character.id)
+                  )}&focusWorldBookId=${encodeURIComponent(String(worldBookId))}`}
+                  className="text-sm text-primary hover:underline"
+                  aria-label={`Open character ${character.name || `Character ${character.id}`}`}
+                >
+                  {character.name}
+                </a>
                 <Button
                   danger
                   size="small"
@@ -148,10 +172,18 @@ const SettingsTabContent: React.FC<{
   allWorldBooks: any[]
   maxRecursiveDepth: number
   updating: boolean
+  form: any
+  banner?: React.ReactNode
   onUpdateWorldBook: (values: any) => void
-}> = ({ worldBook, allWorldBooks, maxRecursiveDepth, updating, onUpdateWorldBook }) => {
-  const [form] = Form.useForm()
-
+}> = ({
+  worldBook,
+  allWorldBooks,
+  maxRecursiveDepth,
+  updating,
+  form,
+  banner,
+  onUpdateWorldBook
+}) => {
   React.useEffect(() => {
     if (worldBook) {
       form.setFieldsValue({
@@ -166,15 +198,78 @@ const SettingsTabContent: React.FC<{
   }, [worldBook, form])
 
   return (
-    <WorldBookForm
-      mode="edit"
-      form={form}
-      worldBooks={allWorldBooks}
-      submitting={updating}
-      currentWorldBookId={worldBook?.id}
-      maxRecursiveDepth={maxRecursiveDepth}
-      onSubmit={onUpdateWorldBook}
-    />
+    <div className="space-y-3">
+      {banner}
+      <WorldBookForm
+        mode="edit"
+        form={form}
+        worldBooks={allWorldBooks}
+        submitting={updating}
+        currentWorldBookId={worldBook?.id}
+        maxRecursiveDepth={maxRecursiveDepth}
+        onSubmit={onUpdateWorldBook}
+      />
+    </div>
+  )
+}
+
+const StatsTabContent: React.FC<{
+  statsData?: any | null
+  loading?: boolean
+  error?: string | null
+}> = ({ statsData, loading, error }) => {
+  if (loading) {
+    return <div data-testid="stats-tab-content">Loading statistics...</div>
+  }
+
+  if (error) {
+    return (
+      <div data-testid="stats-tab-content" role="alert" className="text-sm text-danger">
+        Failed to load statistics: {error}
+      </div>
+    )
+  }
+
+  const metricRows = [
+    { label: "Entries", value: statsData?.total_entries },
+    { label: "Enabled entries", value: statsData?.enabled_entries },
+    { label: "Disabled entries", value: statsData?.disabled_entries },
+    { label: "Keywords", value: statsData?.total_keywords },
+    { label: "Regex entries", value: statsData?.regex_entries },
+    { label: "Average priority", value: statsData?.average_priority },
+    { label: "Estimated tokens", value: statsData?.estimated_tokens },
+    { label: "Content length", value: statsData?.total_content_length }
+  ].filter((row) => row.value != null)
+
+  const estimatorNote =
+    typeof statsData?.token_estimation_method === "string" &&
+    statsData.token_estimation_method.trim().length > 0
+      ? `Estimated using ${statsData.token_estimation_method}.`
+      : "Estimated using ~4 characters per token."
+
+  if (metricRows.length === 0) {
+    return (
+      <div data-testid="stats-tab-content" className="text-sm text-text-muted">
+        No statistics available yet.
+      </div>
+    )
+  }
+
+  return (
+    <div data-testid="stats-tab-content" className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {metricRows.map((row) => (
+          <div
+            key={row.label}
+            className="rounded border border-border px-3 py-2"
+          >
+            <div className="text-xs text-text-muted">{row.label}</div>
+            <div className="text-base font-semibold">{String(row.value)}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-text-muted">{estimatorNote}</p>
+    </div>
   )
 }
 
@@ -187,6 +282,8 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
   attachedCharacters,
   allWorldBooks,
   allCharacters,
+  activeTab,
+  onActiveTabChange,
   onUpdateWorldBook,
   onAttachCharacter,
   onDetachCharacter,
@@ -194,7 +291,12 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
   maxRecursiveDepth,
   updating,
   entryFormInstance,
+  settingsFormInstance,
   entryFilterPreset,
+  settingsBanner,
+  statsData,
+  statsLoading,
+  statsError,
   onBack
 }) => {
   const headingRef = React.useRef<HTMLHeadingElement>(null)
@@ -239,6 +341,7 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
       label: "Attachments",
       children: (
         <AttachmentsTabContent
+          worldBookId={worldBook.id}
           attachedCharacters={attachedCharacters}
           allCharacters={allCharacters}
           onAttachCharacter={onAttachCharacter}
@@ -250,9 +353,11 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
       key: "stats",
       label: "Stats",
       children: (
-        <div data-testid="stats-tab-content">
-          Statistics loading...
-        </div>
+        <StatsTabContent
+          statsData={statsData}
+          loading={statsLoading}
+          error={statsError}
+        />
       )
     },
     {
@@ -264,6 +369,8 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
           allWorldBooks={allWorldBooks}
           maxRecursiveDepth={maxRecursiveDepth}
           updating={updating}
+          form={settingsFormInstance}
+          banner={settingsBanner}
           onUpdateWorldBook={onUpdateWorldBook}
         />
       )
@@ -311,7 +418,11 @@ export const WorldBookDetailPanel: React.FC<WorldBookDetailPanelProps> = ({
 
       {/* Tabs */}
       <div className="flex-1 overflow-auto px-4">
-        <Tabs defaultActiveKey="entries" items={tabItems} />
+        <Tabs
+          activeKey={activeTab}
+          items={tabItems}
+          onChange={(key) => onActiveTabChange(key as WorldBookDetailTabKey)}
+        />
       </div>
     </main>
   )

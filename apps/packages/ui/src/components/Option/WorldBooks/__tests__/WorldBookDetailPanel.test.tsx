@@ -73,19 +73,27 @@ const TestWrapper: React.FC<{
   attachedCharacters?: any[]
   allWorldBooks?: any[]
   allCharacters?: any[]
+  activeTab?: "entries" | "attachments" | "stats" | "settings"
+  statsData?: any | null
 }> = ({
   worldBook = mockWorldBook,
   attachedCharacters = mockAttachedCharacters,
   allWorldBooks = [mockWorldBook],
-  allCharacters = mockAllCharacters
+  allCharacters = mockAllCharacters,
+  activeTab = "entries",
+  statsData = null
 }) => {
   const [entryForm] = Form.useForm()
+  const [settingsForm] = Form.useForm()
+  const [currentTab, setCurrentTab] = React.useState(activeTab)
   return (
     <WorldBookDetailPanel
       worldBook={worldBook}
       attachedCharacters={attachedCharacters}
       allWorldBooks={allWorldBooks}
       allCharacters={allCharacters}
+      activeTab={currentTab}
+      onActiveTabChange={setCurrentTab}
       onUpdateWorldBook={vi.fn()}
       onAttachCharacter={vi.fn().mockResolvedValue(undefined)}
       onDetachCharacter={vi.fn().mockResolvedValue(undefined)}
@@ -93,6 +101,10 @@ const TestWrapper: React.FC<{
       maxRecursiveDepth={10}
       updating={false}
       entryFormInstance={entryForm}
+      settingsFormInstance={settingsForm}
+      statsData={statsData}
+      statsLoading={false}
+      statsError={null}
     />
   )
 }
@@ -142,6 +154,35 @@ describe("WorldBookDetailPanel", () => {
 
     const entriesTab = screen.getByRole("tab", { name: /entries/i })
     expect(entriesTab).toHaveAttribute("aria-selected", "false")
+  })
+
+  it("renders attachment links in the attachments tab", () => {
+    render(<TestWrapper activeTab="attachments" />)
+
+    const characterLink = screen.getByRole("link", { name: "Open character Gandalf" })
+    expect(characterLink).toHaveAttribute(
+      "href",
+      "/characters?from=world-books&focusCharacterId=10&focusWorldBookId=1"
+    )
+  })
+
+  it("renders live stats content instead of the loading placeholder when stats data is provided", () => {
+    render(
+      <TestWrapper
+        activeTab="stats"
+        statsData={{
+          total_entries: 42,
+          enabled_entries: 40,
+          disabled_entries: 2,
+          estimated_tokens: 320,
+          token_estimation_method: "cl100k_base"
+        }}
+      />
+    )
+
+    expect(screen.getByTestId("stats-tab-content")).toHaveTextContent("42")
+    expect(screen.getByTestId("stats-tab-content")).toHaveTextContent("320")
+    expect(screen.getByText("Estimated using cl100k_base.")).toBeInTheDocument()
   })
 
   it("has correct landmark role (main with aria-label)", () => {
