@@ -669,12 +669,12 @@ def test_acp_sessions_db_webhook_trigger_crud(tmp_path):
 
 
 def test_acp_sessions_db_schema_version(tmp_path):
-    """Verify the schema version is bumped to 10."""
-    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB
+    """Verify the schema version matches the current ACP sessions DB migration level."""
+    from tldw_Server_API.app.core.DB_Management.ACP_Sessions_DB import ACPSessionsDB, _SCHEMA_VERSION
 
     db_path = str(tmp_path / "test_version.db")
     db = ACPSessionsDB(db_path=db_path)
     conn = db._get_conn()
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == 10
+    assert version == _SCHEMA_VERSION
     db.close()
