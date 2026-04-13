@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright"
 import { test, expect, seedAuth, getCriticalIssues } from "./smoke.setup"
 import { waitForAppShell } from "../utils/helpers"
+import { getRedirectDispositionForA11yScan } from "./stage4-axe-high-risk-routes.helpers"
 
 const LOAD_TIMEOUT = 30_000
 
@@ -50,6 +51,16 @@ const STAGE4_A11Y_RULES = [
   "aria-toggle-field-name"
 ]
 
+type A11yAnalysisResult =
+  | {
+      type: "results"
+      results: Awaited<ReturnType<AxeBuilder["analyze"]>>
+    }
+  | {
+      type: "skip"
+      message: string
+    }
+
 async function waitForRouteToSettle(
   page: Parameters<typeof seedAuth>[0],
   expectedPath: string,
@@ -73,24 +84,56 @@ async function waitForRouteToSettle(
 
 async function analyzeA11yWithRetry(
   page: Parameters<typeof seedAuth>[0],
-  routePath: string
-) {
+  routePath: string,
+  mayRedirectWhenUnavailable: boolean | undefined
+): Promise<A11yAnalysisResult> {
   let lastError: unknown
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    let navigationObservedDuringScan = false
+    const onFrameNavigated = (frame: unknown) => {
+      if (frame === page.mainFrame()) {
+        navigationObservedDuringScan = true
+      }
+    }
+    page.on("framenavigated", onFrameNavigated)
+
     try {
-      return await new AxeBuilder({ page })
+      const results = await new AxeBuilder({ page })
         .withRules(STAGE4_A11Y_RULES)
         .disableRules(["color-contrast"])
         .analyze()
+      return {
+        type: "results" as const,
+        results
+      }
     } catch (error) {
       lastError = error
       const message = error instanceof Error ? error.message : String(error)
-      if (!message.includes("Execution context was destroyed") || attempt === 1) {
+      if (!message.includes("Execution context was destroyed")) {
         throw error
       }
 
       await waitForAppShell(page, LOAD_TIMEOUT)
-      await waitForRouteToSettle(page, routePath, true)
+      await waitForRouteToSettle(page, routePath, mayRedirectWhenUnavailable)
+
+      const disposition = getRedirectDispositionForA11yScan({
+        routePath,
+        finalPath: new URL(page.url()).pathname,
+        mayRedirectWhenUnavailable,
+        navigationObservedDuringScan
+      })
+      if (disposition.shouldSkip) {
+        return {
+          type: "skip" as const,
+          message: disposition.message
+        }
+      }
+
+      if (attempt === 1) {
+        throw error
+      }
+    } finally {
+      page.off("framenavigated", onFrameNavigated)
     }
   }
 
@@ -150,10 +193,13 @@ test.describe("Stage 4 Axe high-risk routes", () => {
       test.skip(status >= 400, `Route unavailable in smoke runtime (status ${status})`)
 
       const finalPath = new URL(page.url()).pathname
-      if (route.mayRedirectWhenUnavailable && finalPath !== route.path) {
-        test.skip(
-          `Route ${route.path} redirected to ${finalPath}; feature is unavailable in this runtime`
-        )
+      const preScanDisposition = getRedirectDispositionForA11yScan({
+        routePath: route.path,
+        finalPath,
+        mayRedirectWhenUnavailable: route.mayRedirectWhenUnavailable
+      })
+      if (preScanDisposition.shouldSkip) {
+        test.skip(preScanDisposition.message)
       }
 
       const issues = getCriticalIssues(diagnostics)
@@ -162,7 +208,15 @@ test.describe("Stage 4 Axe high-risk routes", () => {
         `Uncaught page errors while scanning ${route.path}`
       ).toHaveLength(0)
 
-      const results = await analyzeA11yWithRetry(page, route.path)
+      const analysis = await analyzeA11yWithRetry(
+        page,
+        route.path,
+        route.mayRedirectWhenUnavailable
+      )
+      if (analysis.type === "skip") {
+        test.skip(analysis.message)
+      }
+      const results = analysis.results
 
       const blockingViolations = results.violations.filter((violation) =>
         violation.impact === "serious" || violation.impact === "critical"
