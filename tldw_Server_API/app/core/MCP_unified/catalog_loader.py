@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 from loguru import logger
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.archetype_schemas import MCPCatalogEntry
 
@@ -47,17 +48,17 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
     if not file_path.is_file():
         logger.warning("MCP catalog file does not exist: {}", file_path)
         _CATALOG_CACHE = []
-        return _CATALOG_CACHE
+        return []
 
     try:
         raw = file_path.read_text(encoding="utf-8")
         data = yaml.safe_load(raw)
-    except Exception:
+    except (FileNotFoundError, OSError, yaml.YAMLError, TypeError, ValueError):
         logger.opt(exception=True).warning(
             "Failed to read/parse MCP catalog file: {}", file_path
         )
         _CATALOG_CACHE = []
-        return _CATALOG_CACHE
+        return []
 
     if not isinstance(data, dict) or "catalog" not in data:
         logger.warning(
@@ -80,7 +81,7 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
             entry = MCPCatalogEntry(**entry_data)
             new_cache.append(entry)
             logger.debug("Loaded MCP catalog entry '{}'", entry.key)
-        except Exception:
+        except ValidationError:
             logger.opt(exception=True).warning(
                 "Skipping malformed MCP catalog entry at index {}", idx
             )
@@ -90,7 +91,7 @@ def load_mcp_catalog(path: str | Path) -> list[MCPCatalogEntry]:
     logger.info(
         "Loaded {} MCP catalog entry/entries from {}", len(_CATALOG_CACHE), file_path
     )
-    return _CATALOG_CACHE
+    return list(_CATALOG_CACHE)
 
 
 def list_catalog_entries(

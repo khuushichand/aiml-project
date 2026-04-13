@@ -90,6 +90,7 @@ describe("FirstRunGate", () => {
 
     fireEvent.click(screen.getByTestId("first-run-get-started"))
     expect(onStartSetup).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId("first-run-gate-overlay")).not.toBeInTheDocument()
   })
 
   it("dismisses the overlay and sets localStorage when Skip is clicked", () => {

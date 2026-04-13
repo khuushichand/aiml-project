@@ -36,8 +36,9 @@ export function useArchetypeCatalog(): UseArchetypeCatalogResult {
       setLoading(true)
       setError(null)
       try {
+        const path = "/api/v1/persona/archetypes" as const
         const res = await apiSend<ArchetypeSummary[]>({
-          path: "/api/v1/persona/archetypes" as any,
+          path,
           method: "GET"
         })
         if (cancelled) return

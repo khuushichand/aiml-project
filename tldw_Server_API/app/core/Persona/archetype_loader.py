@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 from loguru import logger
+from pydantic import ValidationError
 
 from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
     ArchetypeSummary,
@@ -49,7 +50,7 @@ def load_archetypes_from_directory(
     if not dir_path.is_dir():
         logger.warning("Archetype directory does not exist: {}", dir_path)
         _CACHE = {}
-        return _CACHE
+        return {}
 
     new_cache: dict[str, ArchetypeTemplate] = {}
     yaml_files = sorted(dir_path.glob("*.yaml"))
@@ -63,9 +64,16 @@ def load_archetypes_from_directory(
                 )
                 continue
             template = ArchetypeTemplate(**data["archetype"])
+            if template.key in new_cache:
+                logger.warning(
+                    "Skipping duplicate archetype '{}' from {}; entry already loaded",
+                    template.key,
+                    yaml_file.name,
+                )
+                continue
             new_cache[template.key] = template
             logger.debug("Loaded archetype '{}' from {}", template.key, yaml_file.name)
-        except Exception:
+        except (OSError, yaml.YAMLError, ValidationError, TypeError, ValueError):
             logger.opt(exception=True).warning(
                 "Skipping malformed archetype file: {}", yaml_file.name
             )
@@ -73,7 +81,7 @@ def load_archetypes_from_directory(
     # Atomic replacement — readers never see a half-populated cache.
     _CACHE = new_cache
     logger.info("Loaded {} archetype(s) from {}", len(_CACHE), dir_path)
-    return _CACHE
+    return dict(_CACHE)
 
 
 def list_archetypes() -> list[ArchetypeSummary]:

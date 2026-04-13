@@ -69,9 +69,7 @@ export const MCPAccessControlTier: React.FC<MCPAccessControlTierProps> = ({
         )
       })}
       <div className="text-xs text-text-subtle">
-        <span className="cursor-pointer underline underline-offset-2 hover:text-text-muted">
-          Fine-tune per-tool permissions
-        </span>
+        <span>Fine-tune per-tool permissions</span>
       </div>
     </div>
   )

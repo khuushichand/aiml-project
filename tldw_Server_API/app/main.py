@@ -2529,8 +2529,8 @@ async def lifespan(app: FastAPI):
         _config_dir = _ArchPath(__file__).resolve().parent.parent / "Config_Files"
         load_archetypes_from_directory(_config_dir / "persona_archetypes")
         load_mcp_catalog(_config_dir / "mcp_server_catalog.yaml")
-    except _STARTUP_GUARD_EXCEPTIONS as _archetype_err:
-        logger.debug(f"Archetype/catalog loading skipped: {_archetype_err}")
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _archetype_err:
+        logger.debug("Archetype/catalog loading skipped: {}", _archetype_err)
 
     # Initialize Chat Module Components (single log retained)
     logger.info("App Startup: Initializing Chat module components...")
@@ -6425,7 +6425,7 @@ elif _MINIMAL_TEST_APP:
 
         app.include_router(archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"])
     except _IMPORT_EXCEPTIONS as _archetype_min_err:
-        logger.debug(f"Skipping archetype router in minimal test app: {_archetype_min_err}")
+        logger.debug("Skipping archetype router in minimal test app: {}", _archetype_min_err)
     # Notes endpoints (health + CRUD)
     try:
         from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
@@ -7386,8 +7386,8 @@ else:
         include_router_idempotent(
             app, archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"]
         )
-    except _STARTUP_GUARD_EXCEPTIONS as _arch_full_err:
-        logger.debug(f"Archetype router unavailable in full app: {_arch_full_err}")
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _arch_full_err:
+        logger.debug("Archetype router unavailable in full app: {}", _arch_full_err)
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])

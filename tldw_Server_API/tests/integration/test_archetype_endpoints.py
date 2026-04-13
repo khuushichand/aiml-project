@@ -13,7 +13,7 @@ from tldw_Server_API.app.core.Persona.archetype_loader import (
     load_archetypes_from_directory,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.integration
 
 # Minimal app with just the archetype router
 _app = FastAPI()

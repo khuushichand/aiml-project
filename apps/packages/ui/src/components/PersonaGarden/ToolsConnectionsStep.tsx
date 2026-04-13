@@ -27,23 +27,45 @@ export const ToolsConnectionsStep: React.FC<ToolsConnectionsStepProps> = ({
   saving,
   error = null
 }) => {
+  const defaultEnabledModules = archetypeDefaults?.mcp_modules?.enabled ?? []
+  const defaultConfirmationMode =
+    archetypeDefaults?.policy?.confirmation_mode ?? "destructive_only"
+
   // Section A -- built-in module toggles
   const [enabledModules, setEnabledModules] = React.useState<string[]>(
-    () => archetypeDefaults?.mcp_modules?.enabled ?? []
+    () => defaultEnabledModules
   )
 
   // Section B -- external connections
   const [connections, setConnections] = React.useState<MCPConnectionDraft[]>([])
   const connectedServerKeys = React.useMemo(
-    () => connections.map((c) => c.name),
+    () =>
+      connections.flatMap((connection) =>
+        connection.serverKey ? [connection.serverKey] : []
+      ),
     [connections]
   )
 
   // Section C -- access control
   const [confirmationMode, setConfirmationMode] =
     React.useState<ConfirmationMode>(
-      () => archetypeDefaults?.policy?.confirmation_mode ?? "destructive_only"
+      () => defaultConfirmationMode
     )
+
+  React.useEffect(() => {
+    setEnabledModules((prev) => {
+      if (
+        prev.length === defaultEnabledModules.length &&
+        prev.every((moduleId, index) => moduleId === defaultEnabledModules[index])
+      ) {
+        return prev
+      }
+      return defaultEnabledModules
+    })
+    setConfirmationMode((prev) =>
+      prev === defaultConfirmationMode ? prev : defaultConfirmationMode
+    )
+  }, [defaultConfirmationMode, defaultEnabledModules])
 
   const handleModuleToggle = React.useCallback(
     (moduleId: string, enabled: boolean) => {

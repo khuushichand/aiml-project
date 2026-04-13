@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint import (
     MCPConnectionTestRequest,
@@ -86,3 +87,42 @@ async def test_connection_unreachable():
     assert resp.error is not None
     assert isinstance(resp.error, str)
     assert resp.tools_discovered == []
+
+
+@pytest.mark.asyncio
+async def test_connection_uses_api_key_header(monkeypatch: pytest.MonkeyPatch):
+    captured_headers: dict[str, str] = {}
+
+    async def _fake_probe(url: str, headers: dict[str, str]):
+        captured_headers.update(headers)
+        return None
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint._probe_mcp_connection",
+        _fake_probe,
+    )
+
+    req = MCPConnectionTestRequest(
+        url="https://8.8.8.8/mcp",
+        auth_type="api_key",
+        secret="secret-token",
+    )
+
+    resp = await check_mcp_connection(req)
+
+    assert resp.reachable is True
+    assert captured_headers == {"X-API-Key": "secret-token"}
+
+
+@pytest.mark.asyncio
+async def test_connection_rejects_unsupported_auth_type():
+    req = MCPConnectionTestRequest(
+        url="https://8.8.8.8/mcp",
+        auth_type="digest",
+        secret="secret-token",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await check_mcp_connection(req)
+
+    assert excinfo.value.status_code == 400

@@ -113,6 +113,13 @@ class TestLoadMcpCatalog:
         load_mcp_catalog(catalog_file)
         assert len(_catalog_mod._CATALOG_CACHE) == 1
 
+    def test_returns_a_copy_of_the_cache(self, catalog_file: Path):
+        result = load_mcp_catalog(catalog_file)
+
+        result.pop()
+
+        assert len(_catalog_mod._CATALOG_CACHE) == 2
+
 
 class TestListCatalogEntries:
     def test_returns_all_entries(self, catalog_file: Path):
@@ -187,6 +194,15 @@ class TestMalformedEntries:
         result = load_mcp_catalog(p)
 
         assert result == []
+
+    def test_unexpected_exceptions_propagate(self, catalog_file: Path, monkeypatch: pytest.MonkeyPatch):
+        def boom(_raw: str):
+            raise RuntimeError("unexpected parser failure")
+
+        monkeypatch.setattr(_catalog_mod.yaml, "safe_load", boom)
+
+        with pytest.raises(RuntimeError, match="unexpected parser failure"):
+            load_mcp_catalog(catalog_file)
 
     def test_missing_catalog_key(self, tmp_path: Path):
         p = tmp_path / "nokey.yaml"

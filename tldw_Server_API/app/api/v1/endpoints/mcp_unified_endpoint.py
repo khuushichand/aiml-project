@@ -1606,6 +1606,7 @@ class MCPConnectionTestRequest(BaseModel):
     url: str
     auth_type: str = "none"
     secret: str | None = None
+    auth_key_name: str | None = None
 
 
 class MCPConnectionTestResponse(BaseModel):
@@ -1628,19 +1629,34 @@ async def list_mcp_catalog(
 
 
 def _is_private_ip(host: str) -> bool:
-    """Return True if *host* resolves to a private/reserved IP address."""
-    import ipaddress
+    """Return True if *host* resolves to a non-public IP address."""
     import socket
 
     try:
         resolved = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
-        for family, _type, _proto, _canonname, sockaddr in resolved:
+        for _family, _type, _proto, _canonname, sockaddr in resolved:
             ip = ipaddress.ip_address(sockaddr[0])
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+                or ip.is_unspecified
+                or not ip.is_global
+            ):
                 return True
     except (socket.gaierror, ValueError):
         return True  # fail closed: unresolvable hosts are rejected
     return False
+
+
+async def _probe_mcp_connection(url: str, headers: dict[str, str]) -> None:
+    from tldw_Server_API.app.core.http_client import _get_httpx_async_client
+
+    http = _get_httpx_async_client()
+    resp = await http.get(url, headers=headers, timeout=10.0)
+    resp.raise_for_status()
 
 
 @router.post("/catalog/test-connection", response_model=MCPConnectionTestResponse)
@@ -1654,7 +1670,6 @@ async def check_mcp_connection(
     is reserved for a future enhancement that will parse the MCP server's
     tool listing response.
     """
-    import httpx
     from urllib.parse import urlparse
 
     # Validate URL scheme — only http/https allowed.
@@ -1662,6 +1677,13 @@ async def check_mcp_connection(
     if parsed.scheme not in ("http", "https"):
         return MCPConnectionTestResponse(
             reachable=False, error="Only http and https URLs are allowed"
+        )
+
+    supported_auth_types = {"none", "bearer", "api_key"}
+    if req.auth_type not in supported_auth_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported auth_type: {req.auth_type}",
         )
 
     # SSRF protection: reject private/reserved IP ranges.
@@ -1674,12 +1696,17 @@ async def check_mcp_connection(
     headers: dict[str, str] = {}
     if req.auth_type == "bearer" and req.secret:
         headers["Authorization"] = f"Bearer {req.secret}"
+    elif req.auth_type == "api_key" and req.secret:
+        headers[req.auth_key_name or "X-API-Key"] = req.secret
     try:
-        async with httpx.AsyncClient(timeout=10.0) as http:
-            resp = await http.get(req.url, headers=headers)
-            resp.raise_for_status()
-            return MCPConnectionTestResponse(reachable=True)
+        await _probe_mcp_connection(req.url, headers)
+        return MCPConnectionTestResponse(reachable=True)
+    except HTTPException:
+        raise
     except Exception:
+        logger.opt(exception=True).warning(
+            "MCP connection test failed for {}", req.url
+        )
         return MCPConnectionTestResponse(reachable=False, error="Connection failed")
 
 

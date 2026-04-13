@@ -22,10 +22,6 @@ const mockMessageApi = {
   destroy: vi.fn()
 }
 
-const mockWorkspaceStorageGetItem = vi.fn(async () => "1")
-const mockWorkspaceStorageSetItem = vi.fn(async () => undefined)
-const mockWorkspaceStorageRemoveItem = vi.fn(async () => undefined)
-
 const testState = {
   isMobile: false,
   storeHydrated: true,

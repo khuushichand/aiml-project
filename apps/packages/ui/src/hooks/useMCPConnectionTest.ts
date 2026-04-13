@@ -1,10 +1,10 @@
 import React from "react"
 
 import { apiSend } from "@/services/api-send"
-import type { MCPConnectionTestResult } from "@/types/archetype"
+import type { MCPAuthType, MCPConnectionTestResult } from "@/types/archetype"
 
 type UseMCPConnectionTestResult = {
-  test: (url: string, authType?: string, secret?: string) => Promise<void>
+  test: (url: string, authType?: MCPAuthType, secret?: string) => Promise<void>
   result: MCPConnectionTestResult | null
   loading: boolean
   error: string | null
@@ -23,7 +23,7 @@ export function useMCPConnectionTest(): UseMCPConnectionTestResult {
   const [error, setError] = React.useState<string | null>(null)
 
   const test = React.useCallback(
-    async (url: string, authType?: string, secret?: string) => {
+    async (url: string, authType?: MCPAuthType, secret?: string) => {
       setLoading(true)
       setError(null)
       setResult(null)
@@ -32,8 +32,9 @@ export function useMCPConnectionTest(): UseMCPConnectionTestResult {
         if (authType) body.auth_type = authType
         if (secret) body.secret = secret
 
+        const path = "/api/v1/mcp/catalog/test-connection" as const
         const res = await apiSend<MCPConnectionTestResult>({
-          path: "/api/v1/mcp/catalog/test-connection" as any,
+          path,
           method: "POST",
           body
         })

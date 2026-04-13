@@ -14,6 +14,23 @@ import type { TFunction } from "i18next"
 
 const CHAT_NUDGE_DISMISSED_KEY = "assistant_nudge_dismissed_chat"
 
+const readChatNudgeDismissedState = (): boolean => {
+  try {
+    return localStorage.getItem(CHAT_NUDGE_DISMISSED_KEY) === "true"
+  } catch (error) {
+    console.warn("Failed to read assistant chat nudge dismissal state", error)
+    return false
+  }
+}
+
+const persistChatNudgeDismissedState = (): void => {
+  try {
+    localStorage.setItem(CHAT_NUDGE_DISMISSED_KEY, "true")
+  } catch (error) {
+    console.warn("Failed to persist assistant chat nudge dismissal state", error)
+  }
+}
+
 export type PlaygroundComposerNoticesProps = {
   modeAnnouncement: string | null
   characterPendingApply: boolean
@@ -77,20 +94,10 @@ export type PlaygroundComposerNoticesProps = {
 function ChatFirstRunNudge() {
   const { shouldShowSetup, resumeStep, loading } = useFirstRunCheck()
   const navigate = useNavigate()
-  const [dismissed, setDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem(CHAT_NUDGE_DISMISSED_KEY) === "true"
-    } catch {
-      return false
-    }
-  })
+  const [dismissed, setDismissed] = React.useState(readChatNudgeDismissedState)
 
   const handleDismiss = React.useCallback(() => {
-    try {
-      localStorage.setItem(CHAT_NUDGE_DISMISSED_KEY, "true")
-    } catch {
-      // ignore
-    }
+    persistChatNudgeDismissedState()
     setDismissed(true)
   }, [])
 
@@ -98,7 +105,7 @@ function ChatFirstRunNudge() {
     navigate("/persona")
   }, [navigate])
 
-  if (loading || dismissed || !shouldShowSetup) {
+  if (loading || dismissed || (!shouldShowSetup && !resumeStep)) {
     return null
   }
 

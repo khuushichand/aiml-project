@@ -36,8 +36,9 @@ export function useMCPServerCatalog(): UseMCPServerCatalogResult {
       setLoading(true)
       setError(null)
       try {
+        const path = "/api/v1/mcp/catalog" as const
         const res = await apiSend<MCPCatalogEntry[]>({
-          path: "/api/v1/mcp/catalog" as any,
+          path,
           method: "GET"
         })
         if (cancelled) return

@@ -1,6 +1,8 @@
 import React from "react"
+import { Modal } from "antd"
 
 import type { PersonaSetupStep } from "@/hooks/usePersonaSetupWizard"
+import type { ArchetypePreview } from "@/types/archetype"
 import type { PersonaGardenTabKey } from "@/utils/persona-garden-route"
 
 import { ArchetypePickerStep } from "./ArchetypePickerStep"
@@ -14,7 +16,7 @@ type AssistantSetupWizardProps = {
   progressItems?: PersonaSetupProgressItem[]
   onResetSetup?: () => void
   archetypeKey?: string | null
-  archetypePreview?: Record<string, unknown> | null
+  archetypePreview?: ArchetypePreview | null
   onSelectArchetype?: (key: string) => void
   voiceStepContent?: React.ReactNode
   commandsStepContent?: React.ReactNode
@@ -46,27 +48,39 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
   onCreatePersona
 }) => {
   const [newPersonaName, setNewPersonaName] = React.useState("")
-  const [showArchetypeChangeWarning, setShowArchetypeChangeWarning] = React.useState(false)
-
-  const prevStepRef = React.useRef<PersonaSetupStep>(currentStep)
-  React.useEffect(() => {
-    const previousStep = prevStepRef.current
-    prevStepRef.current = currentStep
-
-    if (
-      currentStep === "archetype" &&
-      previousStep !== "archetype" &&
-      archetypeKey
-    ) {
-      setShowArchetypeChangeWarning(true)
-    }
-  }, [currentStep, archetypeKey])
 
   const handleCreatePersona = React.useCallback(() => {
     const normalizedName = String(newPersonaName || "").trim()
     if (!normalizedName) return
     onCreatePersona(normalizedName)
   }, [newPersonaName, onCreatePersona])
+
+  const handleSelectArchetype = React.useCallback(
+    (key: string) => {
+      if (!onSelectArchetype) return
+
+      const hasExistingArchetype =
+        typeof archetypeKey === "string" && archetypeKey.length > 0
+      const isChangingArchetype = hasExistingArchetype && archetypeKey !== key
+
+      if (isChangingArchetype) {
+        Modal.confirm({
+          title: "Change archetype?",
+          content: "Changing your archetype will reset your customizations.",
+          okText: "Continue",
+          cancelText: "Cancel",
+          onOk: () => {
+            onResetSetup?.()
+            onSelectArchetype(key)
+          }
+        })
+        return
+      }
+
+      onSelectArchetype(key)
+    },
+    [archetypeKey, onResetSetup, onSelectArchetype]
+  )
 
   return (
     <div
@@ -138,34 +152,10 @@ export const AssistantSetupWizard: React.FC<AssistantSetupWizardProps> = ({
         </div>
       ) : null}
       {currentStep === "archetype" ? (
-        <>
-          {showArchetypeChangeWarning && (
-            <div className="mb-3 flex items-center justify-between rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn">
-              <span>Changing your archetype will reset your customizations.</span>
-              <div className="flex gap-2">
-                <button
-                  className="rounded px-2 py-1 text-xs font-medium hover:bg-warn/20"
-                  onClick={() => {
-                    setShowArchetypeChangeWarning(false)
-                    onResetSetup?.()
-                  }}
-                >
-                  Go back
-                </button>
-                <button
-                  className="rounded px-2 py-1 text-xs font-medium hover:bg-warn/20"
-                  onClick={() => setShowArchetypeChangeWarning(false)}
-                >
-                  Continue anyway
-                </button>
-              </div>
-            </div>
-          )}
-          <ArchetypePickerStep
-            selectedKey={archetypeKey ?? null}
-            onSelect={(key) => onSelectArchetype?.(key)}
-          />
-        </>
+        <ArchetypePickerStep
+          selectedKey={archetypeKey ?? null}
+          onSelect={handleSelectArchetype}
+        />
       ) : currentStep === "persona" ? (
         <div className="space-y-3">
           <div>

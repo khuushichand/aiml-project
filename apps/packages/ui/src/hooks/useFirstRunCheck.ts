@@ -35,8 +35,9 @@ export function useFirstRunCheck(): UseFirstRunCheckResult {
     const check = async () => {
       setLoading(true)
       try {
+        const path = "/api/v1/persona/profiles" as const
         const res = await apiSend<any[]>({
-          path: "/api/v1/persona/profiles" as any,
+          path,
           method: "GET"
         })
         if (cancelled) return

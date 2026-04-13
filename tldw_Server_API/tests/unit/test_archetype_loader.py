@@ -41,6 +41,8 @@ _VALID_YAML_2 = textwrap.dedent("""\
       label: Creative Writer
       tagline: Craft stories and ideas
       icon: pen
+      persona:
+        name: Creative Writer
 """)
 
 
@@ -137,6 +139,35 @@ class TestLoadArchetypesFromDirectory:
         result = load_archetypes_from_directory(tmp_path)
 
         assert len(result) == 1
+
+    def test_duplicate_keys_keep_first_loaded_entry(self, tmp_path: Path):
+        (tmp_path / "01_researcher.yaml").write_text(_VALID_YAML, encoding="utf-8")
+        duplicate = _VALID_YAML.replace("Researcher", "Duplicate Researcher", 1)
+        (tmp_path / "02_duplicate.yaml").write_text(duplicate, encoding="utf-8")
+
+        result = load_archetypes_from_directory(tmp_path)
+
+        assert len(result) == 1
+        assert result["researcher"].label == "Researcher"
+
+    def test_returns_a_copy_of_the_cache(self, tmp_path: Path):
+        (tmp_path / "researcher.yaml").write_text(_VALID_YAML, encoding="utf-8")
+
+        result = load_archetypes_from_directory(tmp_path)
+        result.pop("researcher")
+
+        assert "researcher" in _loader_mod._CACHE
+
+    def test_unexpected_exceptions_propagate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        (tmp_path / "researcher.yaml").write_text(_VALID_YAML, encoding="utf-8")
+
+        def boom(_raw: str):
+            raise RuntimeError("unexpected parser failure")
+
+        monkeypatch.setattr(_loader_mod.yaml, "safe_load", boom)
+
+        with pytest.raises(RuntimeError, match="unexpected parser failure"):
+            load_archetypes_from_directory(tmp_path)
 
 
 class TestListArchetypes:

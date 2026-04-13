@@ -8,6 +8,7 @@ from tldw_Server_API.app.api.v1.schemas.archetype_schemas import (
     ArchetypeBuddyDefaults,
     ArchetypeMCPConfig,
     ArchetypePersonaDefaults,
+    ArchetypePreviewResponse,
     ArchetypePolicyDefaults,
     ArchetypeStarterCommand,
     ArchetypeSummary,
@@ -37,10 +38,16 @@ class TestArchetypeSummary:
 
 class TestArchetypeTemplate:
     def test_minimal_fields(self):
-        """Template with only required ArchetypeSummary fields; optional sections use defaults."""
-        tpl = ArchetypeTemplate(key="minimal", label="Minimal", tagline="Bare-bones template", icon="box")
+        """Template with required persona and summary fields; optional sections use defaults."""
+        tpl = ArchetypeTemplate(
+            key="minimal",
+            label="Minimal",
+            tagline="Bare-bones template",
+            icon="box",
+            persona=ArchetypePersonaDefaults(name="Minimal Assistant"),
+        )
         assert tpl.key == "minimal"
-        assert tpl.persona.name == ""
+        assert tpl.persona.name == "Minimal Assistant"
         assert tpl.mcp_modules.enabled == []
         assert tpl.mcp_modules.disabled == []
         assert tpl.suggested_external_servers == []
@@ -50,6 +57,15 @@ class TestArchetypeTemplate:
         assert tpl.scope_rules == []
         assert tpl.buddy.species is None
         assert tpl.starter_commands == []
+
+    def test_missing_persona_raises(self):
+        with pytest.raises(ValidationError):
+            ArchetypeTemplate(
+                key="minimal",
+                label="Minimal",
+                tagline="Bare-bones template",
+                icon="box",
+            )
 
     def test_full_fields(self):
         tpl = ArchetypeTemplate(
@@ -89,7 +105,13 @@ class TestArchetypeTemplate:
         assert dumped["scope_rules"][0]["rule_type"] == "media_tag"
 
     def test_inherits_summary_fields(self):
-        tpl = ArchetypeTemplate(key="k", label="L", tagline="T", icon="I")
+        tpl = ArchetypeTemplate(
+            key="k",
+            label="L",
+            tagline="T",
+            icon="I",
+            persona=ArchetypePersonaDefaults(name="K"),
+        )
         assert isinstance(tpl, ArchetypeSummary)
 
 
@@ -100,7 +122,7 @@ class TestMCPCatalogEntry:
             name="GitHub",
             description="Access GitHub repos",
             url_template="https://github.mcp.example.com/{org}",
-            auth_type="oauth2",
+            auth_type="bearer",
             category="developer",
         )
         assert entry.key == "github"
@@ -132,6 +154,30 @@ class TestMCPCatalogEntry:
         }
         entry = MCPCatalogEntry(**data)
         assert entry.model_dump() == {**data, "logo_key": None, "suggested_for": []}
+
+    def test_invalid_auth_type_raises(self):
+        with pytest.raises(ValidationError):
+            MCPCatalogEntry(
+                key="github",
+                name="GitHub",
+                description="Access GitHub repos",
+                url_template="https://github.mcp.example.com/{org}",
+                auth_type="oauth2",
+                category="developer",
+            )
+
+
+class TestArchetypePreviewResponse:
+    def test_creation_minimal(self):
+        preview = ArchetypePreviewResponse(
+            name="Research Assistant",
+            archetype_key="research_assistant",
+        )
+
+        assert preview.system_prompt is None
+        assert preview.voice_defaults == {}
+        assert preview.setup.status == "not_started"
+        assert preview.setup.current_step == "archetype"
 
 
 class TestArchetypeStarterCommand:

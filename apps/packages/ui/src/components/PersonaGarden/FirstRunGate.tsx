@@ -39,6 +39,11 @@ export const FirstRunGate: React.FC<FirstRunGateProps> = ({
     setDismissed(true)
   }
 
+  const handleStart = () => {
+    setDismissed(true)
+    onStartSetup()
+  }
+
   return (
     <div
       data-testid="first-run-gate-overlay"
@@ -59,7 +64,7 @@ export const FirstRunGate: React.FC<FirstRunGateProps> = ({
             type="button"
             data-testid="first-run-get-started"
             className="inline-flex items-center justify-center rounded-md bg-primary px-5 py-2 text-sm font-medium text-white transition-colors duration-150 hover:bg-primaryStrong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
-            onClick={onStartSetup}
+            onClick={handleStart}
           >
             Get Started
           </button>

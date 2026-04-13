@@ -1,3 +1,5 @@
+export type MCPAuthType = "none" | "bearer" | "api_key"
+
 export type ArchetypeSummary = {
   key: string
   label: string
@@ -54,12 +56,23 @@ export type ArchetypeTemplate = ArchetypeSummary & {
   starter_commands: ArchetypeStarterCommand[]
 }
 
+export type ArchetypePreview = {
+  name: string
+  system_prompt: string | null
+  archetype_key: string
+  voice_defaults: Record<string, unknown>
+  setup: {
+    status: "not_started"
+    current_step: "archetype"
+  }
+}
+
 export type MCPCatalogEntry = {
   key: string
   name: string
   description: string
   url_template: string
-  auth_type: string
+  auth_type: MCPAuthType
   category: string
   logo_key: string | null
   suggested_for: string[]
@@ -72,8 +85,9 @@ export type MCPConnectionTestResult = {
 }
 
 export type MCPConnectionDraft = {
+  serverKey?: string | null
   name: string
   baseUrl: string
-  authType: string
+  authType: MCPAuthType
   secret: string
 }

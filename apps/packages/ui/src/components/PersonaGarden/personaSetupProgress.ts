@@ -64,7 +64,7 @@ export function buildPersonaSetupProgress(
   setup: PersonaSetupState | null | undefined
 ): PersonaSetupProgressItem[] {
   const status = setup?.status ?? "not_started"
-  const currentStep = setup?.current_step ?? "persona"
+  const currentStep = setup?.current_step ?? "archetype"
   const completedSteps = new Set<PersonaSetupStep>(
     Array.isArray(setup?.completed_steps) ? setup.completed_steps : []
   )

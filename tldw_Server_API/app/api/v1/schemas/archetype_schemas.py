@@ -7,11 +7,13 @@ voice configuration.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
 from tldw_Server_API.app.api.v1.schemas.persona import PersonaConfirmationMode
+
+MCPAuthType = Literal["none", "bearer", "api_key"]
 
 
 class ArchetypePersonaDefaults(BaseModel):
@@ -81,9 +83,7 @@ class ArchetypeSummary(BaseModel):
 class ArchetypeTemplate(ArchetypeSummary):
     """Full archetype definition with all default configuration sections."""
 
-    persona: ArchetypePersonaDefaults = Field(
-        default_factory=lambda: ArchetypePersonaDefaults(name="")
-    )
+    persona: ArchetypePersonaDefaults
     mcp_modules: ArchetypeMCPConfig = Field(default_factory=ArchetypeMCPConfig)
     suggested_external_servers: list[str] = Field(default_factory=list)
     policy: ArchetypePolicyDefaults = Field(default_factory=ArchetypePolicyDefaults)
@@ -93,6 +93,23 @@ class ArchetypeTemplate(ArchetypeSummary):
     starter_commands: list[ArchetypeStarterCommand] = Field(default_factory=list)
 
 
+class ArchetypePreviewSetupState(BaseModel):
+    """Minimal setup state seeded by the archetype preview endpoint."""
+
+    status: Literal["not_started"] = "not_started"
+    current_step: Literal["archetype"] = "archetype"
+
+
+class ArchetypePreviewResponse(BaseModel):
+    """Preview payload used to pre-fill the assistant setup wizard."""
+
+    name: str
+    system_prompt: str | None = None
+    archetype_key: str
+    voice_defaults: dict[str, Any] = Field(default_factory=dict)
+    setup: ArchetypePreviewSetupState = Field(default_factory=ArchetypePreviewSetupState)
+
+
 class MCPCatalogEntry(BaseModel):
     """One entry in the external MCP server catalog shown during setup."""
 
@@ -100,7 +117,7 @@ class MCPCatalogEntry(BaseModel):
     name: str
     description: str
     url_template: str
-    auth_type: str
+    auth_type: MCPAuthType = "none"
     category: str
     logo_key: str | None = None
     suggested_for: list[str] = Field(default_factory=list)

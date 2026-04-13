@@ -1,9 +1,10 @@
-import React from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import { apiSend } from "@/services/api-send"
+import type { ArchetypePreview } from "@/types/archetype"
 
 type UseArchetypePreviewResult = {
-  preview: Record<string, unknown> | null
+  preview: ArchetypePreview | null
   loading: boolean
   error: string | null
 }
@@ -18,55 +19,28 @@ type UseArchetypePreviewResult = {
 export function useArchetypePreview(
   key: string | null
 ): UseArchetypePreviewResult {
-  const [preview, setPreview] = React.useState<Record<string, unknown> | null>(
-    null
-  )
-  const [loading, setLoading] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  React.useEffect(() => {
-    if (!key) {
-      setPreview(null)
-      setLoading(false)
-      setError(null)
-      return
-    }
-
-    let cancelled = false
-
-    const fetchPreview = async () => {
-      setLoading(true)
-      setError(null)
-      setPreview(null)
-      try {
-        const encodedKey = encodeURIComponent(key)
-        const res = await apiSend<Record<string, unknown>>({
-          path: `/api/v1/persona/archetypes/${encodedKey}/preview` as any,
-          method: "GET"
-        })
-        if (cancelled) return
-        if (res.ok && res.data && typeof res.data === "object") {
-          setPreview(res.data)
-        } else {
-          setError(res.error ?? "Failed to load archetype preview")
-        }
-      } catch {
-        if (!cancelled) {
-          setError("Failed to load archetype preview")
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
+  const query = useQuery({
+    queryKey: ["archetype-preview", key],
+    enabled: Boolean(key),
+    retry: false,
+    queryFn: async () => {
+      const encodedKey = encodeURIComponent(String(key))
+      const path: `/api/v1/persona/archetypes/${string}/preview` =
+        `/api/v1/persona/archetypes/${encodedKey}/preview`
+      const res = await apiSend<ArchetypePreview>({
+        path,
+        method: "GET"
+      })
+      if (res.ok && res.data) {
+        return res.data
       }
+      throw new Error(res.error ?? "Failed to load archetype preview")
     }
+  })
 
-    void fetchPreview()
-
-    return () => {
-      cancelled = true
-    }
-  }, [key])
-
-  return { preview, loading, error }
+  return {
+    preview: key ? query.data ?? null : null,
+    loading: key ? query.isLoading : false,
+    error: query.error instanceof Error ? query.error.message : null
+  }
 }

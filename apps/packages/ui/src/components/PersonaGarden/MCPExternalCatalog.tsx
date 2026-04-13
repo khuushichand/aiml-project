@@ -2,7 +2,7 @@ import React from "react"
 
 import { useMCPConnectionTest } from "@/hooks/useMCPConnectionTest"
 import { useMCPServerCatalog } from "@/hooks/useMCPServerCatalog"
-import type { MCPConnectionDraft } from "@/types/archetype"
+import type { MCPAuthType, MCPConnectionDraft } from "@/types/archetype"
 
 import { MCPServerCatalogCard } from "./MCPServerCatalogCard"
 
@@ -27,7 +27,7 @@ export const MCPExternalCatalog: React.FC<MCPExternalCatalogProps> = ({
   const [showCustom, setShowCustom] = React.useState(false)
   const [customName, setCustomName] = React.useState("")
   const [customUrl, setCustomUrl] = React.useState("")
-  const [customAuth, setCustomAuth] = React.useState("none")
+  const [customAuth, setCustomAuth] = React.useState<MCPAuthType>("none")
   const [customSecret, setCustomSecret] = React.useState("")
 
   // Track which card is actively being tested so we show the result on the right card
@@ -40,9 +40,9 @@ export const MCPExternalCatalog: React.FC<MCPExternalCatalogProps> = ({
   }, [entries, suggestedServers])
 
   const handleTestForCard = React.useCallback(
-    (key: string) => (url: string) => {
+    (key: string) => (url: string, authType?: MCPAuthType, secret?: string) => {
       setTestingKey(key)
-      void runTest(url)
+      void runTest(url, authType, secret)
     },
     [runTest]
   )
@@ -52,6 +52,7 @@ export const MCPExternalCatalog: React.FC<MCPExternalCatalogProps> = ({
     const url = customUrl.trim()
     if (!name || !url) return
     onConnect({
+      serverKey: null,
       name,
       baseUrl: url,
       authType: customAuth,

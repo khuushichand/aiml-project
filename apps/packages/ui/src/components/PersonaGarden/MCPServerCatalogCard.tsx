@@ -1,13 +1,18 @@
 import React from "react"
 
-import type { MCPCatalogEntry, MCPConnectionDraft, MCPConnectionTestResult } from "@/types/archetype"
+import type {
+  MCPAuthType,
+  MCPCatalogEntry,
+  MCPConnectionDraft,
+  MCPConnectionTestResult
+} from "@/types/archetype"
 
 export type MCPServerCatalogCardProps = {
   entry: MCPCatalogEntry
   isRecommended: boolean
   isConnected: boolean
   onConnect: (draft: MCPConnectionDraft) => void
-  onTestConnection: (url: string) => void
+  onTestConnection: (url: string, authType?: MCPAuthType, secret?: string) => void
   testResult?: MCPConnectionTestResult | null
   testLoading?: boolean
 }
@@ -37,29 +42,47 @@ export const MCPServerCatalogCard: React.FC<MCPServerCatalogCardProps> = ({
 }) => {
   const [expanded, setExpanded] = React.useState(false)
   const [baseUrl, setBaseUrl] = React.useState(entry.url_template || "")
-  const [authType, setAuthType] = React.useState(entry.auth_type || "none")
+  const [authType, setAuthType] = React.useState<MCPAuthType>(entry.auth_type || "none")
   const [secret, setSecret] = React.useState("")
 
   const urlError = React.useMemo(() => validateUrl(baseUrl), [baseUrl])
+  const trimmedSecret = secret.trim()
+  const secretRequired = authType === "bearer" || authType === "api_key"
+  const hasRequiredSecret = !secretRequired || trimmedSecret.length > 0
 
   const canConnect =
-    baseUrl.trim().length > 0 && urlError === null && !isConnected
+    baseUrl.trim().length > 0 &&
+    urlError === null &&
+    !isConnected &&
+    hasRequiredSecret
 
   const handleConnect = React.useCallback(() => {
     if (!canConnect) return
     onConnect({
+      serverKey: entry.key,
       name: entry.name,
       baseUrl: baseUrl.trim(),
       authType,
-      secret: secret.trim()
+      secret: trimmedSecret
     })
-  }, [authType, baseUrl, canConnect, entry.name, onConnect, secret])
+  }, [authType, baseUrl, canConnect, entry.key, entry.name, onConnect, trimmedSecret])
 
   const handleTest = React.useCallback(() => {
-    if (baseUrl.trim() && !urlError) {
-      onTestConnection(baseUrl.trim())
+    if (baseUrl.trim() && !urlError && hasRequiredSecret) {
+      onTestConnection(baseUrl.trim(), authType, trimmedSecret)
     }
-  }, [baseUrl, onTestConnection, urlError])
+  }, [authType, baseUrl, hasRequiredSecret, onTestConnection, trimmedSecret, urlError])
+
+  const handleAuthTypeChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLSelectElement>) => {
+      const nextAuthType = event.target.value as MCPAuthType
+      setAuthType(nextAuthType)
+      if (nextAuthType === "none") {
+        setSecret("")
+      }
+    },
+    []
+  )
 
   return (
     <div
@@ -121,7 +144,7 @@ export const MCPServerCatalogCard: React.FC<MCPServerCatalogCardProps> = ({
               aria-label="Authentication type"
               value={authType}
               className="mt-1 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text"
-              onChange={(e) => setAuthType(e.target.value)}
+              onChange={handleAuthTypeChange}
             >
               <option value="none">None</option>
               <option value="bearer">Bearer token</option>
@@ -151,7 +174,7 @@ export const MCPServerCatalogCard: React.FC<MCPServerCatalogCardProps> = ({
             </button>
             <button
               type="button"
-              disabled={!baseUrl.trim() || !!urlError || testLoading}
+              disabled={!baseUrl.trim() || !!urlError || testLoading || !hasRequiredSecret}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text disabled:cursor-not-allowed disabled:opacity-60"
               onClick={handleTest}
             >
@@ -173,7 +196,7 @@ export const MCPServerCatalogCard: React.FC<MCPServerCatalogCardProps> = ({
                   Reachable.{" "}
                   {testResult.tools_discovered.length > 0
                     ? `Discovered ${testResult.tools_discovered.length} tool(s): ${testResult.tools_discovered.join(", ")}`
-                    : "No tools discovered."}
+                    : "Tool discovery is not available for this connection test."}
                 </div>
               ) : (
                 <div>
