@@ -26,7 +26,7 @@ export class WorkspacePlaygroundPage {
   constructor(page: Page) {
     this.page = page
     this.headerTitle = page.locator("header h1").first()
-    this.workspacesButton = page.getByRole("button", { name: /workspaces/i })
+    this.workspacesButton = page.getByTestId("workspace-workspaces-button")
     this.sourcesPanel = page.locator("#workspace-sources-panel")
     this.chatPanel = page.locator("#workspace-main-content")
     this.studioPanel = page.locator("#workspace-studio-panel")

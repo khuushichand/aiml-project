@@ -254,34 +254,49 @@ export default function App({ Component, pageProps }: AppProps) {
   }, [authResolved, isAuthenticated, isPublicAuthRoute, routePath, router])
 
   const hideShellNav = !authResolved || !isAuthenticated
+  const shouldBypassFirstRunGate = isPublicAuthRoute || isSettingsRoute
 
   const handleStartSetup = React.useCallback(() => {
     void router.push("/persona")
   }, [router])
 
+  const appContent = (
+    <ConfigurationGuard>
+      <BackendRecoveryUiProvider routeRecoveryEnabled>
+        <ErrorBoundary>
+          {isPublicAuthRoute ? (
+            <Component {...pageProps} />
+          ) : shouldBypassFirstRunGate ? (
+            <OptionLayout
+              hideHeader={hideShellNav}
+              hideSidebar={hideShellNav || isSettingsRoute}
+              allowNestedHideHeader={!isSettingsRoute}
+            >
+              <Component {...pageProps} />
+            </OptionLayout>
+          ) : (
+            <FirstRunGate onStartSetup={handleStartSetup}>
+              <OptionLayout
+                hideHeader={hideShellNav}
+                hideSidebar={hideShellNav || isSettingsRoute}
+                allowNestedHideHeader={!isSettingsRoute}
+              >
+                <Component {...pageProps} />
+              </OptionLayout>
+            </FirstRunGate>
+          )}
+        </ErrorBoundary>
+      </BackendRecoveryUiProvider>
+    </ConfigurationGuard>
+  )
+
   return (
     <AppProviders>
-      <ServerReadinessGate>
-      <ConfigurationGuard>
-        <BackendRecoveryUiProvider routeRecoveryEnabled>
-          <ErrorBoundary>
-            {isPublicAuthRoute ? (
-              <Component {...pageProps} />
-            ) : (
-              <FirstRunGate onStartSetup={handleStartSetup}>
-                <OptionLayout
-                  hideHeader={hideShellNav}
-                  hideSidebar={hideShellNav || isSettingsRoute}
-                  allowNestedHideHeader={!isSettingsRoute}
-                >
-                  <Component {...pageProps} />
-                </OptionLayout>
-              </FirstRunGate>
-            )}
-          </ErrorBoundary>
-        </BackendRecoveryUiProvider>
-      </ConfigurationGuard>
-      </ServerReadinessGate>
+      {isPublicAuthRoute ? (
+        appContent
+      ) : (
+        <ServerReadinessGate>{appContent}</ServerReadinessGate>
+      )}
     </AppProviders>
   )
 }
