@@ -17,3 +17,12 @@ def test_sanitize_webhook_error_detail_hides_internal_failures() -> None:
 
     assert status_code == 503
     assert detail == {"status": "error", "error": "internal_error"}
+
+
+def test_sanitize_webhook_error_detail_hides_secret_decryption_failures() -> None:
+    status_code, detail = _sanitize_webhook_error_detail(
+        {"status": "error", "error": "secret_decryption_failed: decrypt failed"}
+    )
+
+    assert status_code == 503
+    assert detail == {"status": "error", "error": "internal_error"}

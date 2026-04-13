@@ -1227,9 +1227,11 @@ def _embedding_cache_key_secret() -> bytes:
     """Return a stable keyed-hash secret for embedding cache partitioning."""
     try:
         return derive_hmac_key()
-    except Exception:
-        # Keep cache keys deterministic in dev/test even when AuthNZ secrets are absent.
-        return b"tldw_embeddings_cache_hmac_fallback"
+    except ValueError:
+        if _is_test_context():
+            # Keep cache keys deterministic in test contexts when AuthNZ secrets are absent.
+            return b"tldw_embeddings_cache_hmac_fallback"
+        raise
 
 
 _SENSITIVE_QUERY_KEYS = frozenset({

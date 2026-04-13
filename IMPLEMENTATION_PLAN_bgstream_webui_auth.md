@@ -1,3 +1,5 @@
+# Implementation Plan: bgstream_webui_auth
+
 ## Stage 1: Reproduce Stream Auth Failure
 **Goal**: Capture the WebUI streaming fallback bug with a focused automated test.
 **Success Criteria**: A targeted test fails because direct stream fallback uses incorrect WebUI transport/auth behavior.

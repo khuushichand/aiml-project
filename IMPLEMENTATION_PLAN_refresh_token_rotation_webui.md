@@ -1,3 +1,5 @@
+# Implementation Plan: refresh_token_rotation_webui
+
 ## Stage 1: Reproduce Rotated Refresh Token Regression
 **Goal**: Capture the client bug where refresh responses rotate the refresh token but the WebUI keeps the stale one.
 **Success Criteria**: Focused tests fail because `TldwAuth.refreshToken()` and stream fallback do not persist returned `refresh_token` values.

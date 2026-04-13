@@ -167,6 +167,10 @@ def resolve_trusted_database_path(
         expanded_path = os.path.expanduser(raw_path)
     except Exception as exc:
         raise InvalidStoragePathError("invalid_path") from exc
+    if raw_path.startswith("~") and (
+        expanded_path == raw_path or expanded_path.startswith("~")
+    ):
+        raise InvalidStoragePathError("invalid_path")
 
     if os.path.isabs(expanded_path):
         normalized_absolute = os.path.normpath(expanded_path)

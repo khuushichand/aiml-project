@@ -1,3 +1,5 @@
+# Implementation Plan: playground_persistence_notification_spam
+
 ## Stage 1: Reproduce Notification Spam
 **Goal**: Capture the repeated Playground persistence notification in an automated hook test.
 **Success Criteria**: A focused test fails because the same unresolved server-chat persistence error emits multiple notifications across rerenders.

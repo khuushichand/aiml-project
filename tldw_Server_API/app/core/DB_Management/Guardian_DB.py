@@ -310,9 +310,15 @@ class ActivationRun:
 
 class GuardianDB:
     def __init__(self, db_path: str) -> None:
-        self.db_path = str(resolve_trusted_database_path(db_path, label="guardian database"))
+        if db_path == ":memory:":
+            self.db_path = db_path
+        else:
+            self.db_path = str(
+                resolve_trusted_database_path(db_path, label="guardian database")
+            )
         self._lock = threading.RLock()
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        if self.db_path != ":memory:":
+            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._ensure_schema()
         self._migrate_schema()
 

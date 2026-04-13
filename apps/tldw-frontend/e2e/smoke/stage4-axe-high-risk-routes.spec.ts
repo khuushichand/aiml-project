@@ -13,7 +13,12 @@ type HighRiskRoute = {
 
 const HIGH_RISK_ROUTES: HighRiskRoute[] = [
   { path: "/", name: "Home" },
-  { path: "/login", name: "Login", requiresSeededAuth: false },
+  {
+    path: "/login",
+    name: "Login",
+    requiresSeededAuth: false,
+    mayRedirectWhenUnavailable: true
+  },
   { path: "/chat", name: "Chat" },
   {
     path: "/persona",
@@ -44,6 +49,55 @@ const STAGE4_A11Y_RULES = [
   "aria-command-name",
   "aria-toggle-field-name"
 ]
+
+async function waitForRouteToSettle(
+  page: Parameters<typeof seedAuth>[0],
+  expectedPath: string,
+  mayRedirectWhenUnavailable: boolean | undefined
+): Promise<void> {
+  if (mayRedirectWhenUnavailable) {
+    try {
+      await page.waitForURL(
+        (url) => new URL(url.toString()).pathname !== expectedPath,
+        { timeout: 1_500 }
+      )
+    } catch {}
+  }
+
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 1_500 })
+  } catch {}
+
+  await page.waitForTimeout(250)
+}
+
+async function analyzeA11yWithRetry(
+  page: Parameters<typeof seedAuth>[0],
+  routePath: string
+) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await new AxeBuilder({ page })
+        .withRules(STAGE4_A11Y_RULES)
+        .disableRules(["color-contrast"])
+        .analyze()
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes("Execution context was destroyed") || attempt === 1) {
+        throw error
+      }
+
+      await waitForAppShell(page, LOAD_TIMEOUT)
+      await waitForRouteToSettle(page, routePath, true)
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`Axe scan failed for ${routePath}`)
+}
 
 async function clearSeededAuth(page: Parameters<typeof seedAuth>[0]): Promise<void> {
   await page.addInitScript(() => {
@@ -86,6 +140,11 @@ test.describe("Stage 4 Axe high-risk routes", () => {
         timeout: LOAD_TIMEOUT
       })
       await waitForAppShell(page, LOAD_TIMEOUT)
+      await waitForRouteToSettle(
+        page,
+        route.path,
+        route.mayRedirectWhenUnavailable
+      )
 
       const status = response?.status() ?? 0
       test.skip(status >= 400, `Route unavailable in smoke runtime (status ${status})`)
@@ -103,10 +162,7 @@ test.describe("Stage 4 Axe high-risk routes", () => {
         `Uncaught page errors while scanning ${route.path}`
       ).toHaveLength(0)
 
-      const results = await new AxeBuilder({ page })
-        .withRules(STAGE4_A11Y_RULES)
-        .disableRules(["color-contrast"])
-        .analyze()
+      const results = await analyzeA11yWithRetry(page, route.path)
 
       const blockingViolations = results.violations.filter((violation) =>
         violation.impact === "serious" || violation.impact === "critical"
