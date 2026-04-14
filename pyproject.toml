@@ -208,7 +208,7 @@ tooling = [
 
 # OpenTelemetry (optional, for metrics/tracing export)
 otel = [
-  "opentelemetry-distro>=0.48b0",
+  "opentelemetry-distro>=0.62b0",
   "opentelemetry-exporter-otlp>=1.24.0",
   "opentelemetry-exporter-prometheus>=0.49b0",
   "opentelemetry-instrumentation-fastapi>=0.48b0",
