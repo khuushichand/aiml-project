@@ -185,17 +185,17 @@ multiplayer = [
 
 # Development tools
 dev = [
-  "pytest>=7.4.0",
-  "pytest-asyncio>=0.21.0",
-  "pytest-cov>=4.1.0",
-  "pytest-xdist>=3.3.0",
-  "pytest-mock>=3.11.0",
-  "pytest-timeout>=2.1.0",
-  "pytest-benchmark>=4.0.0",
-  "black>=23.0.0",
-  "mypy>=1.5.0",
-  "ruff>=0.1.0",
-  "pre-commit>=3.3.0",
+  "pytest>=9.0.3",
+  "pytest-asyncio>=1.3.0",
+  "pytest-cov>=7.1.0",
+  "pytest-xdist>=3.8.0",
+  "pytest-mock>=3.15.1",
+  "pytest-timeout>=2.4.0",
+  "pytest-benchmark>=5.2.3",
+  "black>=26.3.1",
+  "mypy>=1.20.1",
+  "ruff>=0.15.10",
+  "pre-commit>=4.5.1",
   "websockets>=12.0",
   "locust>=2.20.0"
 ]
