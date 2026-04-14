@@ -267,6 +267,30 @@ const isExtensionTransportFailure = (error: unknown): boolean => {
   )
 }
 
+type RequestAbortError = Error & {
+  status?: number
+  code?: string
+  details?: unknown
+}
+
+const isAbortErrorMessage = (value?: string) =>
+  typeof value === "string" && value.toLowerCase().includes("abort")
+
+const createAbortError = (
+  message?: string,
+  status?: number,
+  details?: unknown
+): RequestAbortError => {
+  const abortError = new Error(message || "Aborted") as RequestAbortError
+  abortError.name = "AbortError"
+  abortError.status = typeof status === "number" ? status : 0
+  abortError.code = "REQUEST_ABORTED"
+  if (typeof details !== "undefined") {
+    abortError.details = sanitizeResponseData(details)
+  }
+  return abortError
+}
+
 const shouldNotifyBackendUnavailable = (entry: {
   method: string
   path: string
@@ -383,26 +407,13 @@ export async function bgRequest<
       // best-effort logging only
     }
   }
-  const isAbortErrorMessage = (value?: string) =>
-    typeof value === "string" && value.toLowerCase().includes("abort")
   const buildRequestError = (
     msg: string,
     status?: number,
     details?: unknown
   ): (Error & { status?: number; code?: string; details?: unknown }) => {
     if (isAbortErrorMessage(msg)) {
-      const abortError = new Error(msg || "Aborted") as Error & {
-        status?: number
-        code?: string
-        details?: unknown
-      }
-      abortError.name = "AbortError"
-      abortError.status = typeof status === "number" ? status : 0
-      abortError.code = "REQUEST_ABORTED"
-      if (typeof details !== "undefined") {
-        abortError.details = sanitizeResponseData(details)
-      }
-      return abortError
+      return createAbortError(msg, status, details)
     }
     const error = new Error(`${msg} (${method} ${path})`) as Error & {
       status?: number
@@ -999,7 +1010,9 @@ async function* bgStreamDirect<
       throw idleError
     }
     if (abortSignal?.aborted) {
-      throw new Error("Aborted")
+      throw createAbortError(
+        e instanceof Error && e.message ? e.message : "Aborted"
+      )
     }
     throw e
   } finally {
