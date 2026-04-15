@@ -2,6 +2,18 @@ import React from "react"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
 
+vi.mock("@web/lib/i18n-web", () => ({}))
+
+vi.mock("wxt/browser", () => ({
+  browser: {
+    storage: {
+      local: {
+        get: vi.fn(async () => ({}))
+      }
+    }
+  }
+}))
+
 import App from "@web/pages/_app"
 
 const mockRouter = {

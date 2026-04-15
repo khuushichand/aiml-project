@@ -40,6 +40,12 @@ export const ServerReadinessGate: React.FC<{
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
+    if (bypass) {
+      setGate((current) => (current === "ready" ? current : "checking"))
+      return
+    }
+
+    setGate((current) => (current === "ready" ? current : "checking"))
 
     let cancelled = false
     let retryTimer: number | undefined
@@ -71,7 +77,7 @@ export const ServerReadinessGate: React.FC<{
       cancelled = true
       if (retryTimer) window.clearTimeout(retryTimer)
     }
-  }, [])
+  }, [bypass])
 
   if (bypass || gate === "ready" || gate === "timeout") {
     return <>{children}</>

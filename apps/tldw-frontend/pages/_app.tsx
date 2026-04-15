@@ -13,6 +13,7 @@ import { AppProviders } from "@web/components/AppProviders"
 import ErrorBoundary from "@web/components/ErrorBoundary"
 import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
 import { ServerReadinessGate } from "@web/components/networking/ServerReadinessGate"
+import { hasEnvApiAuth } from "@web/lib/authStorage"
 import { loadTldwAuth, loadTldwClient } from "@web/lib/configured-auth-state"
 
 const OptionLayout = dynamic(
@@ -45,12 +46,6 @@ const PREFETCH_STEP_DELAY_MS = 250
 const PREFETCH_IDLE_TIMEOUT_MS = 2000
 const PREFETCH_FALLBACK_DELAY_MS = 1200
 const SLOW_EFFECTIVE_TYPES = new Set(["slow-2g", "2g"])
-
-const hasEnvAuth = () => {
-  const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim()
-  const envBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim()
-  return envApiKey.length > 0 || envBearer.length > 0
-}
 
 type ConfiguredAuthState = {
   hasConfig: boolean
@@ -131,7 +126,7 @@ export default function App({ Component, pageProps }: AppProps) {
 
     let cancelled = false
     const refreshAuthState = async () => {
-      const envAuthed = hasEnvAuth()
+      const envAuthed = hasEnvApiAuth()
       const configuredAuth = await getConfiguredAuthState()
       const authed = configuredAuth.hasConfig
         ? configuredAuth.authMode === "multi-user"

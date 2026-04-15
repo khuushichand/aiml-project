@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { addRequestHistory } from '@web/lib/history';
-import { getApiBearer, getApiKey } from '@web/lib/authStorage';
+import { getApiBearer, getApiKey, hasEnvApiAuth } from '@web/lib/authStorage';
 import { buildApiBaseUrl, resolvePublicApiOrigin } from '@web/lib/api-base';
 import { captureSessionIdFromHeaders, getOrCreateSessionId, SESSION_HEADER_NAME } from '@web/lib/session';
 import type { AxiosConfigWithMetadata, ApiErrorResponse } from '@web/types/common';
@@ -209,10 +209,9 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token');
         localStorage.removeItem('user');
         // Redirect to login only if not using env-based API auth
-        const hasEnvAuth = !!((process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || (process.env.NEXT_PUBLIC_API_BEARER || "").trim());
         const hasStoredAuth = !!(getApiKey() || getApiBearer());
         if (
-          !hasEnvAuth &&
+          !hasEnvApiAuth() &&
           !hasStoredAuth &&
           shouldRedirectUnauthorizedToLogin(window.location.pathname)
         ) {

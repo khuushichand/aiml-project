@@ -2,7 +2,12 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 
-import { clearRuntimeAuth, setRuntimeApiBearer, setRuntimeApiKey } from "../authStorage"
+import {
+  clearRuntimeAuth,
+  hasEnvApiAuth,
+  setRuntimeApiBearer,
+  setRuntimeApiKey
+} from "../authStorage"
 
 async function loadShouldIncludeBrowserCredentials() {
   process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:8000"
@@ -70,6 +75,15 @@ describe("shouldIncludeBrowserCredentials", () => {
     return loadShouldIncludeBrowserCredentials().then((shouldIncludeBrowserCredentials) => {
       expect(shouldIncludeBrowserCredentials()).toBe(true)
     })
+  })
+
+  it("normalizes env API auth detection through a shared helper", () => {
+    expect(hasEnvApiAuth()).toBe(false)
+
+    process.env.NEXT_PUBLIC_X_API_KEY = "   "
+    process.env.NEXT_PUBLIC_API_BEARER = "  Bearer env-token  "
+
+    expect(hasEnvApiAuth()).toBe(true)
   })
 
   it("reuses stored single-user api keys from localStorage config for browser requests", () => {
