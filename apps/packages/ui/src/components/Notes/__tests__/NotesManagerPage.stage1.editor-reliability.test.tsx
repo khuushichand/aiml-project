@@ -243,13 +243,25 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
       }
     )
 
-    const searchInput = screen.getByPlaceholderText("Search titles & content...")
+    const searchInput = screen.getByPlaceholderText("Search notes... (use quotes for exact match)")
     fireEvent.focus(searchInput)
     fireEvent.keyDown(searchInput, { key: "s", ctrlKey: true })
     fireEvent.keyDown(searchInput, { key: "s", metaKey: true })
 
     await waitFor(() => {
       expect(createCalls()).toHaveLength(0)
+    })
+  })
+
+  it("hides the welcome state after starting a new draft", async () => {
+    renderPage()
+
+    expect(screen.getByTestId("notes-editor-empty-state")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("notes-editor-empty-create"))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notes-editor-empty-state")).not.toBeInTheDocument()
     })
   })
 

@@ -8,6 +8,7 @@ import dynamic from "next/dynamic"
 import { useRouter } from "next/router"
 import React from "react"
 import { BackendRecoveryUiProvider } from "@/components/Common/BackendRecoveryUiContext"
+import { FirstRunGate } from "@/components/PersonaGarden/FirstRunGate"
 import { AppProviders } from "@web/components/AppProviders"
 import ErrorBoundary from "@web/components/ErrorBoundary"
 import { ConfigurationGuard } from "@web/components/networking/ConfigurationGuard"
@@ -254,6 +255,10 @@ export default function App({ Component, pageProps }: AppProps) {
 
   const hideShellNav = !authResolved || !isAuthenticated
 
+  const handleStartSetup = React.useCallback(() => {
+    void router.push("/persona")
+  }, [router])
+
   return (
     <AppProviders>
       <ServerReadinessGate>
@@ -263,13 +268,15 @@ export default function App({ Component, pageProps }: AppProps) {
             {isPublicAuthRoute ? (
               <Component {...pageProps} />
             ) : (
-              <OptionLayout
-                hideHeader={hideShellNav}
-                hideSidebar={hideShellNav || isSettingsRoute}
-                allowNestedHideHeader={!isSettingsRoute}
-              >
-                <Component {...pageProps} />
-              </OptionLayout>
+              <FirstRunGate onStartSetup={handleStartSetup}>
+                <OptionLayout
+                  hideHeader={hideShellNav}
+                  hideSidebar={hideShellNav || isSettingsRoute}
+                  allowNestedHideHeader={!isSettingsRoute}
+                >
+                  <Component {...pageProps} />
+                </OptionLayout>
+              </FirstRunGate>
             )}
           </ErrorBoundary>
         </BackendRecoveryUiProvider>

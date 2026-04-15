@@ -1445,6 +1445,11 @@ else:
     except _IMPORT_EXCEPTIONS as _acp_perm_err:
         logger.warning(f"ACP permissions endpoints unavailable at import time; deferring: {_acp_perm_err}")
         acp_permissions_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_multiplex import router as acp_multiplex_router
+    except _IMPORT_EXCEPTIONS as _acp_mpx_err:
+        logger.warning(f"ACP multiplex endpoints unavailable at import time; deferring: {_acp_mpx_err}")
+        acp_multiplex_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -2518,6 +2523,19 @@ async def lifespan(app: FastAPI):
         await _init_embeddings_dim_check(deferred=deferred)
         if deferred:
             logger.info("Deferred startup: completed non-critical initializations")
+
+    # Load persona archetypes and MCP server catalog (lightweight YAML reads).
+    try:
+        from pathlib import Path as _ArchPath
+
+        from tldw_Server_API.app.core.Persona.archetype_loader import load_archetypes_from_directory
+        from tldw_Server_API.app.core.MCP_unified.catalog_loader import load_mcp_catalog
+
+        _config_dir = _ArchPath(__file__).resolve().parent.parent / "Config_Files"
+        load_archetypes_from_directory(_config_dir / "persona_archetypes")
+        load_mcp_catalog(_config_dir / "mcp_server_catalog.yaml")
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _archetype_err:
+        logger.debug("Archetype/catalog loading skipped: {}", _archetype_err)
 
     # Initialize Chat Module Components (single log retained)
     logger.info("App Startup: Initializing Chat module components...")
@@ -6406,6 +6424,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
     except _IMPORT_EXCEPTIONS as _persona_min_err:
         logger.debug(f"Skipping persona router in minimal test app: {_persona_min_err}")
+    # Archetype template endpoints (list / detail / preview)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.archetype_endpoints import router as archetype_router
+
+        app.include_router(archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"])
+    except _IMPORT_EXCEPTIONS as _archetype_min_err:
+        logger.debug("Skipping archetype router in minimal test app: {}", _archetype_min_err)
     # Notes endpoints (health + CRUD)
     try:
         from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
@@ -6655,6 +6680,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"])
     except _IMPORT_EXCEPTIONS as _acp_perm_min_err:
         logger.debug(f"Skipping ACP permissions router in minimal test app: {_acp_perm_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_multiplex import router as acp_multiplex_router
+
+        app.include_router(acp_multiplex_router, prefix=f"{API_V1_PREFIX}", tags=["acp-multiplex"])
+    except _IMPORT_EXCEPTIONS as _acp_mpx_min_err:
+        logger.debug(f"Skipping ACP multiplex router in minimal test app: {_acp_mpx_min_err}")
     # Agent Orchestration endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
@@ -6914,6 +6945,8 @@ else:
         _include_if_enabled("acp", acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"], default_stable=False)
     if "acp_permissions_router" in locals() and acp_permissions_router is not None:
         _include_if_enabled("acp", acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"], default_stable=False)
+    if "acp_multiplex_router" in locals() and acp_multiplex_router is not None:
+        _include_if_enabled("acp", acp_multiplex_router, prefix=f"{API_V1_PREFIX}", tags=["acp-multiplex"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_memory_router" in locals():
@@ -7359,6 +7392,15 @@ else:
         _include_if_enabled(
             "persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=True
         )
+    # Archetype template endpoints are always available (read-only catalog data)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.archetype_endpoints import router as archetype_router  # noqa: F811
+
+        include_router_idempotent(
+            app, archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"]
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _arch_full_err:
+        logger.debug("Archetype router unavailable in full app: {}", _arch_full_err)
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
