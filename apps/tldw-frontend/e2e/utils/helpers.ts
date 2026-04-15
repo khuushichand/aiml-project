@@ -444,6 +444,32 @@ export function getVisibleAntdSelectOption(
     .first();
 }
 
+export async function dispatchKeyboardShortcut(
+  page: Page,
+  options: {
+    key: string;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+    shiftKey?: boolean;
+    metaKey?: boolean;
+  }
+): Promise<void> {
+  await page.evaluate((shortcut) => {
+    const eventInit: KeyboardEventInit = {
+      key: shortcut.key,
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: Boolean(shortcut.ctrlKey),
+      altKey: Boolean(shortcut.altKey),
+      shiftKey: Boolean(shortcut.shiftKey),
+      metaKey: Boolean(shortcut.metaKey)
+    }
+
+    window.dispatchEvent(new KeyboardEvent("keydown", eventInit))
+    document.dispatchEvent(new KeyboardEvent("keydown", eventInit))
+  }, options)
+}
+
 /**
  * Dismiss any connection/server error modals (Ant Design modals).
  * Also removes the modal backdrop via DOM manipulation to prevent

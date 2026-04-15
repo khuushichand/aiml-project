@@ -1,4 +1,12 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react"
+import React, {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState
+} from "react"
 import { useLocation } from "react-router-dom"
 
 import { useShortcut } from "@/hooks/useKeyboardShortcuts"
@@ -10,6 +18,9 @@ import type { CommandPaletteProps } from "./CommandPalette"
 const CommandPalette = lazy(() =>
   import("./CommandPalette").then((m) => ({ default: m.CommandPalette }))
 )
+
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
 
 type CommandPaletteHostProps = {
   commandPaletteProps?: CommandPaletteProps
@@ -74,7 +85,7 @@ export const CommandPaletteHost = ({
     [openPalette, shortcutEnabled]
   )
 
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     window.addEventListener("tldw:open-command-palette", openPalette)
     return () => {
       window.removeEventListener("tldw:open-command-palette", openPalette)
