@@ -84,6 +84,12 @@ export function shouldRedirectUnauthorizedToLogin(pathname?: string): boolean {
   return true;
 }
 
+export function hasEnvAuthConfigured(): boolean {
+  const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim();
+  const envBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim();
+  return envApiKey.length > 0 || envBearer.length > 0;
+}
+
 function resolveDefaultApiBaseUrl(): string {
   const pageOrigin = typeof window !== 'undefined' ? window.location?.origin : undefined;
   return buildApiBaseUrl(resolvePublicApiOrigin(deploymentEnv, pageOrigin), apiVersion);
@@ -209,10 +215,9 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token');
         localStorage.removeItem('user');
         // Redirect to login only if not using env-based API auth
-        const hasEnvAuth = !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
         const hasStoredAuth = !!(getApiKey() || getApiBearer());
         if (
-          !hasEnvAuth &&
+          !hasEnvAuthConfigured() &&
           !hasStoredAuth &&
           shouldRedirectUnauthorizedToLogin(window.location.pathname)
         ) {
