@@ -21,6 +21,10 @@ vi.mock("@/hooks/keyboard/useShortcutConfig", () => ({
   })
 }))
 
+vi.mock("@/components/Option/Prompt/usePromptPaletteCommands", () => ({
+  usePromptPaletteCommands: () => []
+}))
+
 describe("CommandPaletteHost", () => {
   beforeEach(() => {
     HTMLElement.prototype.scrollIntoView = vi.fn()

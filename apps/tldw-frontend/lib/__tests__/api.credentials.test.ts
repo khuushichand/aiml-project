@@ -103,6 +103,15 @@ describe("shouldIncludeBrowserCredentials", () => {
     })
   })
 
+  it("treats whitespace-only env auth values as unset", () => {
+    process.env.NEXT_PUBLIC_X_API_KEY = "   "
+    process.env.NEXT_PUBLIC_API_BEARER = "  "
+
+    return loadApiHelpers().then((apiModule) => {
+      expect(apiModule.hasEnvAuthConfigured()).toBe(false)
+    })
+  })
+
   it("keeps auth recovery routes out of the unauthorized login redirect loop", () => {
     return loadApiHelpers().then((apiModule) => {
       expect(apiModule.shouldRedirectUnauthorizedToLogin("/login")).toBe(false)

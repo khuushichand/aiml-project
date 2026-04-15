@@ -2,7 +2,7 @@
  * Page Object for Chat functionality
  */
 import { type Page, type Locator, expect } from "@playwright/test"
-import { waitForConnection } from "../helpers"
+import { dispatchKeyboardShortcut, waitForConnection } from "../helpers"
 
 export class ChatPage {
   readonly page: Page
@@ -480,9 +480,19 @@ export class ChatPage {
    * Open the command palette
    */
   async openCommandPalette(): Promise<void> {
-    await this.page.keyboard.press("Meta+k")
     const palette = this.page.getByRole("dialog", { name: /command/i })
-    await expect(palette).toBeVisible({ timeout: 5000 })
+    await expect
+      .poll(
+        async () => {
+          await dispatchKeyboardShortcut(this.page, { key: "k", ctrlKey: true })
+          return await palette.isVisible().catch(() => false)
+        },
+        {
+          timeout: 5_000,
+          message: "Expected Ctrl+K to open the command palette"
+        }
+      )
+      .toBe(true)
   }
 
   /**

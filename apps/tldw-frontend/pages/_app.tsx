@@ -255,11 +255,14 @@ export default function App({ Component, pageProps }: AppProps) {
     void router.push("/persona")
   }, [router])
 
-  const layoutProps = {
-    hideHeader: hideShellNav,
-    hideSidebar: hideShellNav || isSettingsRoute,
-    allowNestedHideHeader: !isSettingsRoute,
-  }
+  const layoutProps = React.useMemo(
+    () => ({
+      hideHeader: hideShellNav,
+      hideSidebar: hideShellNav || isSettingsRoute,
+      allowNestedHideHeader: !isSettingsRoute
+    }),
+    [hideShellNav, isSettingsRoute]
+  )
 
   const layoutContent = (
     <OptionLayout {...layoutProps}>

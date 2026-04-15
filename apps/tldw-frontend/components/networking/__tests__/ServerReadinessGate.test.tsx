@@ -45,16 +45,28 @@ describe("ServerReadinessGate", () => {
     const { ServerReadinessGate } = await import("../ServerReadinessGate")
 
     const { rerender } = render(
-      <ServerReadinessGate bypass>
-        <div>Settings ready</div>
+      <ServerReadinessGate>
+        <div>App ready</div>
       </ServerReadinessGate>
     )
 
-    expect(screen.getByText("Settings ready")).toBeInTheDocument()
+    expect(screen.getByText("Waiting for server...")).toBeInTheDocument()
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16_000)
     })
+
+    expect(screen.getByText("App ready")).toBeInTheDocument()
+
+    await act(async () => {
+      rerender(
+        <ServerReadinessGate bypass>
+          <div>Settings ready</div>
+        </ServerReadinessGate>
+      )
+    })
+
+    expect(screen.getByText("Settings ready")).toBeInTheDocument()
 
     await act(async () => {
       rerender(
@@ -66,5 +78,19 @@ describe("ServerReadinessGate", () => {
 
     expect(screen.getByText("Waiting for server...")).toBeInTheDocument()
     expect(screen.queryByText("App ready")).toBeNull()
+  })
+
+  it("bypasses health checks when bypass is enabled", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+    const { ServerReadinessGate } = await import("../ServerReadinessGate")
+
+    render(
+      <ServerReadinessGate bypass>
+        <div>Settings ready</div>
+      </ServerReadinessGate>
+    )
+
+    expect(screen.getByText("Settings ready")).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
