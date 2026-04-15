@@ -194,3 +194,15 @@ def test_resolve_trusted_database_path_rejects_symlink_escape(monkeypatch, tmp_p
 
     with pytest.raises(InvalidStoragePathError):
         db_path_utils.resolve_trusted_database_path(trusted_dir / "escape" / "users.db")
+
+
+def test_resolve_trusted_database_path_rejects_unresolved_home_prefix(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    monkeypatch.setattr(db_path_utils, "get_project_root", lambda: str(project_root))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    with pytest.raises(InvalidStoragePathError):
+        db_path_utils.resolve_trusted_database_path("~missing-user/app.db")

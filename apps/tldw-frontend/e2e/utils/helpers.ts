@@ -432,11 +432,6 @@ export function getAntdSelectTrigger(
   // render variants; the wrapper classes can disappear in some E2E builds.
   return page.getByRole('combobox', { name: options.ariaLabel }).first();
 }
-
-export function getVisibleAntdSelectDropdown(page: Page): Locator {
-  return page.locator('.ant-select-dropdown:visible').last();
-}
-
 export function getVisibleAntdSelectOption(
   page: Page,
   options: {
