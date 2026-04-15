@@ -322,7 +322,7 @@ describe("background proxy fallback safety", () => {
         return {
           serverUrl: "http://127.0.0.1:8000",
           authMode: "single-user",
-          apiKey: "test-key-not-placeholder"
+          apiKey: "not-a-real-key"
         }
       }
       return null
@@ -357,6 +357,88 @@ describe("background proxy fallback safety", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     expect(mocks.connect).toHaveBeenCalledTimes(1)
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
+  })
+
+  it("classifies direct stream aborts as AbortError", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: false })
+    mocks.storageGet.mockImplementation(async (key: string) => {
+      if (key === "tldwConfig") {
+        return {
+          serverUrl: "http://127.0.0.1:8000",
+          authMode: "single-user",
+          apiKey: "test-key-not-placeholder"
+        }
+      }
+      return null
+    })
+
+    let activeSignal: AbortSignal | null = null
+    let resolveReadStarted: (() => void) | null = null
+    const readStarted = new Promise<void>((resolve) => {
+      resolveReadStarted = resolve
+    })
+    const reader = {
+      read: vi.fn(() => {
+        resolveReadStarted?.()
+        return new Promise<never>((_, reject) => {
+          const signal = activeSignal
+          if (!signal) {
+            reject(new Error("Missing abort signal"))
+            return
+          }
+          const onAbort = () => {
+            signal.removeEventListener("abort", onAbort)
+            const abortError = new Error("The operation was aborted.")
+            abortError.name = "AbortError"
+            reject(abortError)
+          }
+          signal.addEventListener("abort", onAbort, { once: true })
+        })
+      }),
+      cancel: vi.fn()
+    }
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      activeSignal = (init?.signal as AbortSignal | undefined) || null
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => reader
+        }
+      } as Response
+    })
+    vi.stubGlobal("fetch", fetchSpy as any)
+
+    const { bgStream } = await importProxy()
+    const controller = new AbortController()
+    const consume = async () => {
+      for await (const _chunk of bgStream({
+        path: "/api/v1/chat/completions",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { stream: true, messages: [] },
+        abortSignal: controller.signal
+      })) {
+        // no-op
+      }
+    }
+
+    const pending = consume()
+
+    try {
+      await readStarted
+      controller.abort()
+
+      await expect(pending).rejects.toMatchObject({
+        name: "AbortError",
+        status: 0,
+        code: "REQUEST_ABORTED"
+      })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(reader.cancel).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it("treats post-first-chunk transport disconnect as graceful end", async () => {
@@ -777,7 +859,6 @@ describe("background proxy fallback safety", () => {
     )
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
-
   it("does not refresh or re-add auth for cross-origin absolute stream URLs", async () => {
     mocks.sendMessage.mockResolvedValue({ ok: false })
     mocks.storageGet.mockImplementation(async (key: string) => {

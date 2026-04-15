@@ -8,7 +8,7 @@ import {
 } from "./smoke.setup"
 import {
   dismissConnectionModals,
-  getVisibleAntdSelectDropdown,
+  getVisibleAntdSelectOption,
   getAntdSelectTrigger,
   stubNotificationsApi,
   waitForAppShell
@@ -75,10 +75,9 @@ async function openSpeechInputSourcePicker(page: Page) {
     }
   }
   await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
-  await inputSourcePicker.click({ force: true })
-  const dropdown = getVisibleAntdSelectDropdown(page)
-  await expect(dropdown).toBeVisible({ timeout: LOAD_TIMEOUT })
-  return dropdown
+  // Click the parent .ant-select-selector — the combobox input is covered by
+  // the ant-select-content-value overlay that intercepts pointer events.
+  await inputSourcePicker.locator('xpath=ancestor::div[contains(@class, "ant-select-selector")]').click()
 }
 
 test.describe("Stage 7 audio regression gate", () => {
@@ -340,16 +339,10 @@ test.describe("Stage 7 audio regression gate", () => {
     await waitForAppShell(page, LOAD_TIMEOUT)
     await dismissConnectionModals(page)
 
-    const dropdown = await openSpeechInputSourcePicker(page)
-    await expect(
-      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /Default microphone/i })
-    ).toBeVisible()
-    await expect(
-      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /Tab audio/i })
-    ).toHaveCount(0)
-    await expect(
-      dropdown.locator(".ant-select-item-option-content").filter({ hasText: /System audio/i })
-    ).toHaveCount(0)
+    await openSpeechInputSourcePicker(page)
+    await expect(getVisibleAntdSelectOption(page, { text: /Default microphone/i })).toBeVisible()
+    await expect(getVisibleAntdSelectOption(page, { text: /Tab audio/i })).toHaveCount(0)
+    await expect(getVisibleAntdSelectOption(page, { text: /System audio/i })).toHaveCount(0)
   })
 
   test("stt transcription-model timeout state shows retry and recovers", async ({
