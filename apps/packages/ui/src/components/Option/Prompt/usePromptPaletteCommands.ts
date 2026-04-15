@@ -52,7 +52,7 @@ export function usePromptPaletteCommands(
         includeDeleted: false
       }),
     enabled: enabled && isSearching && isOnline,
-    staleTime: 300
+    staleTime: 10_000
   })
 
   return useMemo(() => {

@@ -2027,14 +2027,18 @@ const NotesManagerPage: React.FC = () => {
     }
   }, [])
 
-  // Cleanup
+  const clearSearchQueryTimeout = list.clearSearchQueryTimeout
+  const keywordSearchTimeoutRef = kw.keywordSearchTimeoutRef
+  const clearAutosaveTimeout = ed.clearAutosaveTimeout
+
+  // Use stable cleanup handles so debounce timers survive normal re-renders.
   React.useEffect(() => {
     return () => {
-      list.clearSearchQueryTimeout()
-      if (kw.keywordSearchTimeoutRef.current != null) clearTimeout(kw.keywordSearchTimeoutRef.current)
-      ed.clearAutosaveTimeout()
+      clearSearchQueryTimeout()
+      if (keywordSearchTimeoutRef.current != null) clearTimeout(keywordSearchTimeoutRef.current)
+      clearAutosaveTimeout()
     }
-  }, [ed, kw, list])
+  }, [clearAutosaveTimeout, clearSearchQueryTimeout, keywordSearchTimeoutRef])
 
   const handleSkipLinkActivate = React.useCallback(
     (targetId: string) => (event: React.MouseEvent<HTMLAnchorElement>) => {

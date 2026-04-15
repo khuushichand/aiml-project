@@ -432,11 +432,6 @@ export function getAntdSelectTrigger(
   // render variants; the wrapper classes can disappear in some E2E builds.
   return page.getByRole('combobox', { name: options.ariaLabel }).first();
 }
-
-export function getVisibleAntdSelectDropdown(page: Page): Locator {
-  return page.locator('.ant-select-dropdown:visible').last();
-}
-
 export function getVisibleAntdSelectOption(
   page: Page,
   options: {
@@ -447,6 +442,32 @@ export function getVisibleAntdSelectOption(
     .locator('.ant-select-dropdown:visible .ant-select-item-option-content')
     .filter({ hasText: options.text })
     .first();
+}
+
+export async function dispatchKeyboardShortcut(
+  page: Page,
+  options: {
+    key: string;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+    shiftKey?: boolean;
+    metaKey?: boolean;
+  }
+): Promise<void> {
+  await page.evaluate((shortcut) => {
+    const eventInit: KeyboardEventInit = {
+      key: shortcut.key,
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: Boolean(shortcut.ctrlKey),
+      altKey: Boolean(shortcut.altKey),
+      shiftKey: Boolean(shortcut.shiftKey),
+      metaKey: Boolean(shortcut.metaKey)
+    }
+
+    window.dispatchEvent(new KeyboardEvent("keydown", eventInit))
+    document.dispatchEvent(new KeyboardEvent("keydown", eventInit))
+  }, options)
 }
 
 /**

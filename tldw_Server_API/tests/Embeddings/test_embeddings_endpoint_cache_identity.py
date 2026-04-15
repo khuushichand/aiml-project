@@ -73,6 +73,39 @@ def test_local_api_backend_identity_strips_sensitive_but_keeps_nonsensitive():
     assert "secret123" not in identity
 
 
+def test_embedding_cache_key_secret_uses_test_fallback_when_hmac_key_missing(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    mod._embedding_cache_key_secret.cache_clear()
+
+    def _raise_value_error() -> bytes:
+        raise ValueError("missing hmac secret")
+
+    monkeypatch.setattr(mod, "derive_hmac_key", _raise_value_error)
+    monkeypatch.setattr(mod, "_is_test_context", lambda: True)
+
+    assert mod._embedding_cache_key_secret() == b"tldw_embeddings_cache_hmac_fallback"
+
+    mod._embedding_cache_key_secret.cache_clear()
+
+
+def test_embedding_cache_key_secret_raises_outside_tests(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod
+
+    mod._embedding_cache_key_secret.cache_clear()
+
+    def _raise_value_error() -> bytes:
+        raise ValueError("missing hmac secret")
+
+    monkeypatch.setattr(mod, "derive_hmac_key", _raise_value_error)
+    monkeypatch.setattr(mod, "_is_test_context", lambda: False)
+
+    with pytest.raises(ValueError, match="missing hmac secret"):
+        mod._embedding_cache_key_secret()
+
+    mod._embedding_cache_key_secret.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_local_api_url_participates_in_cache_identity(monkeypatch):
     import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as mod

@@ -254,34 +254,49 @@ export default function App({ Component, pageProps }: AppProps) {
   }, [authResolved, isAuthenticated, isPublicAuthRoute, routePath, router])
 
   const hideShellNav = !authResolved || !isAuthenticated
+  const shouldBypassFirstRunGate = isPublicAuthRoute || isSettingsRoute
+  const optionLayoutProps = {
+    hideHeader: hideShellNav,
+    hideSidebar: hideShellNav || isSettingsRoute,
+    allowNestedHideHeader: !isSettingsRoute
+  }
 
   const handleStartSetup = React.useCallback(() => {
     void router.push("/persona")
   }, [router])
 
+  const layoutContent = isPublicAuthRoute ? (
+    <Component {...pageProps} />
+  ) : (
+    <OptionLayout {...optionLayoutProps}>
+      <Component {...pageProps} />
+    </OptionLayout>
+  )
+
+  const mainContent =
+    isPublicAuthRoute || shouldBypassFirstRunGate ? (
+      layoutContent
+    ) : (
+      <FirstRunGate onStartSetup={handleStartSetup}>
+        {layoutContent}
+      </FirstRunGate>
+    )
+
   return (
     <AppProviders>
-      <ServerReadinessGate>
       <ConfigurationGuard>
         <BackendRecoveryUiProvider routeRecoveryEnabled>
           <ErrorBoundary>
             {isPublicAuthRoute ? (
-              <Component {...pageProps} />
+              mainContent
             ) : (
-              <FirstRunGate onStartSetup={handleStartSetup}>
-                <OptionLayout
-                  hideHeader={hideShellNav}
-                  hideSidebar={hideShellNav || isSettingsRoute}
-                  allowNestedHideHeader={!isSettingsRoute}
-                >
-                  <Component {...pageProps} />
-                </OptionLayout>
-              </FirstRunGate>
+              <ServerReadinessGate bypass={isSettingsRoute}>
+                {mainContent}
+              </ServerReadinessGate>
             )}
           </ErrorBoundary>
         </BackendRecoveryUiProvider>
       </ConfigurationGuard>
-      </ServerReadinessGate>
     </AppProviders>
   )
 }

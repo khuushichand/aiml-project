@@ -75,17 +75,23 @@ export function usePlaygroundPersistence(deps: UsePlaygroundPersistenceDeps) {
 
   React.useEffect(() => {
     historyRef.current = history
+  }, [history])
+
+  React.useEffect(() => {
     selectedCharacterRef.current = selectedCharacter
+  }, [selectedCharacter])
+
+  React.useEffect(() => {
     serverChatStateRef.current = serverChatState
+  }, [serverChatState])
+
+  React.useEffect(() => {
     serverChatSourceRef.current = serverChatSource
+  }, [serverChatSource])
+
+  React.useEffect(() => {
     serverPersistenceHintSeenRef.current = serverPersistenceHintSeen
-  }, [
-    history,
-    selectedCharacter,
-    serverChatState,
-    serverChatSource,
-    serverPersistenceHintSeen
-  ])
+  }, [serverPersistenceHintSeen])
 
   const {
     persistenceTooltip,

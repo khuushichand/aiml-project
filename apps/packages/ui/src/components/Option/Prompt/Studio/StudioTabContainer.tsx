@@ -314,7 +314,9 @@ export const StudioTabContainer: React.FC = () => {
       if (ws && ws.readyState < WebSocket.CLOSING) {
         ws.close()
       }
-      setWsConnected(true)
+      // Don't reset wsConnected here — let onopen set it when the next
+      // connection attempt succeeds. Resetting to true in cleanup would
+      // flash-hide the disconnected banner between effect re-runs.
     }
   }, [isOnline, hasStudio, selectedProjectId, queryClient])
 

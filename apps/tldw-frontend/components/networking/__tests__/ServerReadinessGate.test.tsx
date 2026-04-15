@@ -31,4 +31,18 @@ describe("ServerReadinessGate", () => {
       expect.objectContaining({ method: "GET" })
     )
   })
+
+  it("bypasses health checks when bypass is enabled", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+    const { ServerReadinessGate } = await import("../ServerReadinessGate")
+
+    render(
+      <ServerReadinessGate bypass>
+        <div>Settings ready</div>
+      </ServerReadinessGate>
+    )
+
+    expect(screen.getByText("Settings ready")).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
