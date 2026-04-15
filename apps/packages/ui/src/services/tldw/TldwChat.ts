@@ -127,7 +127,6 @@ const isAbortLikeError = (error: unknown): boolean => {
     }
     current = (current as { cause?: unknown } | null)?.cause
   }
-
   return false
 }
 
@@ -658,6 +657,9 @@ export class TldwChatService {
         )
         if (timeoutError) {
           throw timeoutError
+        }
+        if (controller?.signal.aborted) {
+          throw createAbortError()
         }
       } finally {
         clearIdleTimer()

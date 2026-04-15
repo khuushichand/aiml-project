@@ -278,7 +278,6 @@ const isAbortErrorMessage = (value?: string) =>
 
 const readErrorMessage = (error: unknown, fallback = "Aborted") =>
   error instanceof Error && error.message ? error.message : fallback
-
 const createAbortError = (
   message?: string,
   status?: number,
