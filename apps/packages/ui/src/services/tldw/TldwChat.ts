@@ -643,6 +643,9 @@ export class TldwChatService {
         if (timeoutError) {
           throw timeoutError
         }
+        if (controller?.signal.aborted) {
+          throw createAbortError()
+        }
       } finally {
         clearIdleTimer()
         clearStartupTimer()

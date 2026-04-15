@@ -361,6 +361,40 @@ describe("TldwChatService message sanitization", () => {
     })
   })
 
+  it("rejects with AbortError when the stream exits cleanly after cancellation", async () => {
+    mocks.streamChatCompletion.mockImplementation(
+      async function* (
+        _request: unknown,
+        options?: { signal?: AbortSignal }
+      ) {
+        yield {
+          choices: [{ index: 0, delta: { content: "hello" }, finish_reason: null }]
+        }
+        while (!options?.signal?.aborted) {
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+      }
+    )
+
+    const service = new TldwChatService()
+    const streamRun = (async () => {
+      const tokens: string[] = []
+      for await (const token of service.streamMessage(
+        [{ role: "user", content: "stop after one token" }],
+        { model: "gpt-test" }
+      )) {
+        tokens.push(token)
+        service.cancelStream()
+      }
+      return tokens
+    })()
+
+    await expect(streamRun).rejects.toMatchObject({
+      name: "AbortError",
+      message: expect.stringMatching(/abort/i)
+    })
+  })
+
   it("uses dedicated startup timeout instead of chat request timeout", async () => {
     vi.useFakeTimers()
     mocks.getConfig.mockResolvedValue({

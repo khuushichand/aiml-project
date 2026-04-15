@@ -387,9 +387,7 @@ describe("background proxy fallback safety", () => {
             return
           }
           const onAbort = () => {
-            try {
-              signal.removeEventListener("abort", onAbort)
-            } catch {}
+            signal.removeEventListener("abort", onAbort)
             const abortError = new Error("The operation was aborted.")
             abortError.name = "AbortError"
             reject(abortError)
