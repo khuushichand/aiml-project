@@ -97,6 +97,41 @@ const hasReasoningProgress = (chunk: unknown): boolean => {
 const hasVisibleAssistantProgress = (chunk: unknown): boolean =>
   extractTokenFromChunk(chunk).length > 0 || hasReasoningProgress(chunk)
 
+const isAbortLikeError = (error: unknown): boolean => {
+  if (!error) return false
+  if (error instanceof Error) {
+    if (error.name === "AbortError") return true
+    if (error.message.toLowerCase().includes("abort")) return true
+  }
+  const cause = (error as { cause?: unknown } | null)?.cause
+  if (cause instanceof Error) {
+    return (
+      cause.name === "AbortError" ||
+      cause.message.toLowerCase().includes("abort")
+    )
+  }
+  return false
+}
+
+const createAbortError = (message = "Aborted"): Error => {
+  const abortError = new Error(message)
+  abortError.name = "AbortError"
+  return abortError
+}
+
+const resolveStreamTimeoutError = (
+  reason: "startup" | "idle" | null,
+  sawVisibleProgress: boolean
+): Error | null => {
+  if (reason === "startup" && !sawVisibleProgress) {
+    return new Error("Chat response timed out before any visible output arrived.")
+  }
+  if (reason === "idle") {
+    return new Error("Chat response stalled after visible output began.")
+  }
+  return null
+}
+
 const sanitizeUserContent = (
   content: string | ChatCompletionContentPart[]
 ): string | ChatCompletionContentPart[] | null => {
@@ -563,33 +598,50 @@ export class TldwChatService {
 
       try {
         armStartupTimer()
-        for await (const chunk of stream) {
-          if (hasVisibleAssistantProgress(chunk)) {
-            sawVisibleProgress = true
-            clearStartupTimer()
-            resetIdleTimer()
-          }
+        try {
+          for await (const chunk of stream) {
+            if (hasVisibleAssistantProgress(chunk)) {
+              sawVisibleProgress = true
+              clearStartupTimer()
+              resetIdleTimer()
+            }
 
-          // Check if stream was cancelled
-          if (controller?.signal.aborted) {
-            break
-          }
+            // Check if stream was cancelled
+            if (controller?.signal.aborted) {
+              break
+            }
 
-          // Call the onChunk callback if provided
-          if (onChunk) {
-            onChunk(chunk)
-          }
+            // Call the onChunk callback if provided
+            if (onChunk) {
+              onChunk(chunk)
+            }
 
-          const token = extractTokenFromChunk(chunk)
-          if (token) {
-            yield token
+            const token = extractTokenFromChunk(chunk)
+            if (token) {
+              yield token
+            }
           }
+        } catch (error) {
+          const timeoutError = resolveStreamTimeoutError(
+            timeoutReason,
+            sawVisibleProgress
+          )
+          if (timeoutError) {
+            throw timeoutError
+          }
+          if (controller?.signal.aborted && isAbortLikeError(error)) {
+            throw createAbortError(
+              error instanceof Error && error.message ? error.message : "Aborted"
+            )
+          }
+          throw error
         }
-        if (timeoutReason === "startup" && !sawVisibleProgress) {
-          throw new Error("Chat response timed out before any visible output arrived.")
-        }
-        if (timeoutReason === "idle") {
-          throw new Error("Chat response stalled after visible output began.")
+        const timeoutError = resolveStreamTimeoutError(
+          timeoutReason,
+          sawVisibleProgress
+        )
+        if (timeoutError) {
+          throw timeoutError
         }
       } finally {
         clearIdleTimer()
@@ -597,6 +649,11 @@ export class TldwChatService {
       }
     } catch (error) {
       console.error('Stream completion failed:', error)
+      if (isAbortLikeError(error)) {
+        throw createAbortError(
+          error instanceof Error && error.message ? error.message : "Aborted"
+        )
+      }
       throw new Error('Stream completion failed', { cause: error })
     } finally {
       this.currentController = null
