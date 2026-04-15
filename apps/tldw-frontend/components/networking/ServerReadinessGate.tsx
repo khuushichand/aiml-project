@@ -32,9 +32,10 @@ async function checkHealth(): Promise<boolean> {
   }
 }
 
-export const ServerReadinessGate: React.FC<{ children: React.ReactNode }> = ({
-  children
-}) => {
+export const ServerReadinessGate: React.FC<{
+  children: React.ReactNode
+  bypass?: boolean
+}> = ({ children, bypass }) => {
   const [gate, setGate] = React.useState<GateState>("checking")
 
   React.useEffect(() => {
@@ -72,7 +73,7 @@ export const ServerReadinessGate: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [])
 
-  if (gate === "ready" || gate === "timeout") {
+  if (bypass || gate === "ready" || gate === "timeout") {
     return <>{children}</>
   }
 

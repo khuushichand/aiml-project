@@ -209,7 +209,7 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token');
         localStorage.removeItem('user');
         // Redirect to login only if not using env-based API auth
-        const hasEnvAuth = !!(process.env.NEXT_PUBLIC_X_API_KEY || process.env.NEXT_PUBLIC_API_BEARER);
+        const hasEnvAuth = !!((process.env.NEXT_PUBLIC_X_API_KEY || "").trim() || (process.env.NEXT_PUBLIC_API_BEARER || "").trim());
         const hasStoredAuth = !!(getApiKey() || getApiBearer());
         if (
           !hasEnvAuth &&

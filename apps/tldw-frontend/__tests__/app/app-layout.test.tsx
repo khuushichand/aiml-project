@@ -106,9 +106,9 @@ describe("App layout routing", () => {
     expect(screen.getByTestId("page-content")).toBeInTheDocument()
   })
 
-  it("skips OptionLayout for /login", () => {
+  it("skips OptionLayout for /login but keeps ServerReadinessGate mounted", () => {
     renderApp("/login")
-    expect(screen.queryByTestId("server-readiness-gate")).toBeNull()
+    expect(screen.getByTestId("server-readiness-gate")).toBeInTheDocument()
     expect(screen.queryByTestId("first-run-gate")).toBeNull()
     expect(screen.queryByTestId("option-layout")).toBeNull()
     expect(screen.getByTestId("page-content")).toBeInTheDocument()
@@ -128,6 +128,7 @@ describe("App layout routing", () => {
 
     renderApp("/settings/tldw")
     const layout = await screen.findByTestId("option-layout")
+    expect(screen.getByTestId("server-readiness-gate")).toBeInTheDocument()
     expect(screen.queryByTestId("first-run-gate")).toBeNull()
     await waitFor(() => {
       expect(layout).toHaveAttribute("data-hide-header", "false")

@@ -92,6 +92,7 @@ describe("shouldIncludeBrowserCredentials", () => {
   it("keeps auth recovery routes out of the unauthorized login redirect loop", () => {
     return loadApiHelpers().then((apiModule) => {
       expect(apiModule.shouldRedirectUnauthorizedToLogin("/login")).toBe(false)
+      expect(apiModule.shouldRedirectUnauthorizedToLogin("/settings")).toBe(false)
       expect(apiModule.shouldRedirectUnauthorizedToLogin("/settings/tldw")).toBe(false)
       expect(apiModule.shouldRedirectUnauthorizedToLogin("/settings/health/")).toBe(false)
       expect(apiModule.shouldRedirectUnauthorizedToLogin("/auth/reset-password")).toBe(false)
