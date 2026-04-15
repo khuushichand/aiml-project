@@ -29,6 +29,7 @@ import {
   startQuickIngestSession,
   submitQuickIngestBatch
 } from "@/services/tldw/quick-ingest-batch"
+import { DUPLICATE_SKIP_MESSAGE } from "@/components/Common/QuickIngest/constants"
 
 describe("submitQuickIngestBatch", () => {
   beforeEach(() => {
@@ -93,6 +94,52 @@ describe("submitQuickIngestBatch", () => {
     expect(result.results?.[0]).toMatchObject({
       id: "entry-1",
       status: "ok"
+    })
+  })
+
+  it("marks duplicate remote file uploads as skipped with guidance", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-duplicate-file",
+      jobs: [{ id: 303 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: {
+          media_id: "m-duplicate-file",
+          db_message: "Media 'existing.pdf' already exists. Overwrite not enabled."
+        }
+      }
+    })
+
+    const result = await submitQuickIngestBatch({
+      entries: [],
+      files: [
+        {
+          id: "file-duplicate-1",
+          name: "existing.pdf",
+          type: "application/pdf",
+          data: [1, 2, 3]
+        }
+      ],
+      storeRemote: true,
+      processOnly: false,
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.results?.[0]).toMatchObject({
+      id: "file-duplicate-1",
+      status: "ok",
+      outcome: "skipped",
+      fileName: "existing.pdf",
+      message: DUPLICATE_SKIP_MESSAGE
     })
   })
 

@@ -493,11 +493,21 @@ export const WizardResultsStep: React.FC<WizardResultsStepProps> = ({
         <div className="border-t border-border px-4 py-3">
           {/* Summary line */}
           <p className="mb-3 text-center text-xs text-text-muted">
-            {qi(
-              "wizard.results.summary",
-              "Total: {{success}} succeeded, {{failed}} failed",
-              { success: successes.length, failed: errors.length }
-            )}
+            {skipped.length > 0
+              ? qi(
+                  "wizard.results.summaryWithSkipped",
+                  "Total: {{success}} succeeded, {{skipped}} skipped, {{failed}} failed",
+                  {
+                    success: successes.length,
+                    skipped: skipped.length,
+                    failed: errors.length,
+                  }
+                )
+              : qi(
+                  "wizard.results.summary",
+                  "Total: {{success}} succeeded, {{failed}} failed",
+                  { success: successes.length, failed: errors.length }
+                )}
             {elapsedLabel && (
               <>
                 {" \u00b7 "}
