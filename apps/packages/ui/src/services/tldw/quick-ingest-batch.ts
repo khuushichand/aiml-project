@@ -14,6 +14,10 @@ import {
   pollSingleIngestJob
 } from "@/services/tldw/ingest-jobs-orchestrator"
 import type { PersistedQuickIngestTracking } from "@/components/Common/QuickIngest/types"
+import {
+  DUPLICATE_SKIP_MESSAGE,
+  isDbMessageDuplicate
+} from "@/components/Common/QuickIngest/constants"
 
 type TypeDefaults = {
   audio?: { language?: string; diarize?: boolean }
@@ -61,11 +65,13 @@ type QuickIngestBatchInput = {
 type QuickIngestBatchResult = {
   id: string
   status: "ok" | "error"
+  outcome?: "skipped"
   url?: string
   fileName?: string
   type: string
   data?: unknown
   error?: string
+  message?: string
   persisted?: boolean
 }
 
@@ -745,13 +751,16 @@ const runDirectQuickIngestBatch = async (
             if (!pollResult.ok) {
               throw new Error(String(pollResult.error || "Upload failed"))
             }
+            const isDuplicate = isDbMessageDuplicate(pollResult.data)
             out.push({
               id,
               status: "ok",
+              outcome: isDuplicate ? "skipped" as const : undefined,
               fileName,
               type: mediaType,
               data: pollResult.data,
-              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
+              message: isDuplicate ? DUPLICATE_SKIP_MESSAGE : undefined,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(mediaType)
             })
           } catch (error) {
             if (!shouldFallbackToPersistentAdd(error)) {
@@ -761,13 +770,16 @@ const runDirectQuickIngestBatch = async (
               fields,
               file: uploadFile
             })
+            const fallbackDuplicate = isDbMessageDuplicate(data)
             out.push({
               id,
               status: "ok",
+              outcome: fallbackDuplicate ? "skipped" as const : undefined,
               fileName,
               type: mediaType,
               data,
-              persisted: shouldStoreRemote && shouldKeepOriginalFile(rawType)
+              message: fallbackDuplicate ? DUPLICATE_SKIP_MESSAGE : undefined,
+              persisted: shouldStoreRemote && shouldKeepOriginalFile(mediaType)
             })
           }
           continue
@@ -781,12 +793,15 @@ const runDirectQuickIngestBatch = async (
           timeoutMs: DIRECT_INGEST_TIMEOUT_MS
         })
 
+        const directDuplicate = isDbMessageDuplicate(data)
         out.push({
           id,
           status: "ok",
+          outcome: directDuplicate ? "skipped" as const : undefined,
           fileName,
           type: mediaType,
           data,
+          message: directDuplicate ? DUPLICATE_SKIP_MESSAGE : undefined,
           persisted: false
         })
       } catch (error) {
