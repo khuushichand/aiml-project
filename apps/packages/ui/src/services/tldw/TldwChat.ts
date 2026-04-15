@@ -97,19 +97,37 @@ const hasReasoningProgress = (chunk: unknown): boolean => {
 const hasVisibleAssistantProgress = (chunk: unknown): boolean =>
   extractTokenFromChunk(chunk).length > 0 || hasReasoningProgress(chunk)
 
+const readErrorMessage = (error: unknown, fallback = "Aborted"): string => {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  let firstMessage: string | null = null
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error && current.message) {
+      firstMessage ??= current.message
+      if (current.name === "AbortError") return current.message
+      if (current.message.toLowerCase().includes("abort")) return current.message
+    }
+    current = (current as { cause?: unknown } | null)?.cause
+  }
+
+  return firstMessage ?? fallback
+}
+
 const isAbortLikeError = (error: unknown): boolean => {
-  if (!error) return false
-  if (error instanceof Error) {
-    if (error.name === "AbortError") return true
-    if (error.message.toLowerCase().includes("abort")) return true
+  const seen = new Set<unknown>()
+  let current: unknown = error
+
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error) {
+      if (current.name === "AbortError") return true
+      if (current.message.toLowerCase().includes("abort")) return true
+    }
+    current = (current as { cause?: unknown } | null)?.cause
   }
-  const cause = (error as { cause?: unknown } | null)?.cause
-  if (cause instanceof Error) {
-    return (
-      cause.name === "AbortError" ||
-      cause.message.toLowerCase().includes("abort")
-    )
-  }
+
   return false
 }
 
@@ -630,9 +648,7 @@ export class TldwChatService {
             throw timeoutError
           }
           if (controller?.signal.aborted && isAbortLikeError(error)) {
-            throw createAbortError(
-              error instanceof Error && error.message ? error.message : "Aborted"
-            )
+            throw createAbortError(readErrorMessage(error))
           }
           throw error
         }
@@ -650,9 +666,7 @@ export class TldwChatService {
     } catch (error) {
       console.error('Stream completion failed:', error)
       if (isAbortLikeError(error)) {
-        throw createAbortError(
-          error instanceof Error && error.message ? error.message : "Aborted"
-        )
+        throw createAbortError(readErrorMessage(error))
       }
       throw new Error('Stream completion failed', { cause: error })
     } finally {
