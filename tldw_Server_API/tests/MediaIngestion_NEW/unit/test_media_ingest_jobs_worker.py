@@ -135,7 +135,7 @@ async def test_media_ingest_worker_returns_existing_media_id_for_skipped_dedupe_
                 "status": "Skipped",
                 "db_id": 321,
                 "media_uuid": "existing-media-uuid",
-                "message": "Media already exists.",
+                "db_message": "Media already exists.",
                 "warnings": None,
             }
         ]
@@ -171,7 +171,7 @@ async def test_media_ingest_worker_returns_existing_media_id_for_skipped_dedupe_
         "media_uuid": "existing-media-uuid",
         "error": None,
         "warnings": None,
-        "db_message": None,
+        "db_message": "Media already exists.",
     }
 
 

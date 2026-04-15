@@ -275,6 +275,7 @@ test.describe("Stage 4 Axe high-risk routes", () => {
       })
       if (preScanDisposition.shouldSkip) {
         test.skip(preScanDisposition.message)
+      }
       if (route.mayRedirectWhenUnavailable && !acceptablePaths.includes(finalPath)) {
         test.skip(
           `Route ${route.path} redirected to ${finalPath}; feature is unavailable in this runtime`

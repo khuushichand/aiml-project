@@ -40,6 +40,10 @@ import type {
   WizardQueueItem,
   WizardResultItem,
 } from "./QuickIngest/types"
+import {
+  DUPLICATE_SKIP_MESSAGE,
+  isDbMessageDuplicate,
+} from "./QuickIngest/constants"
 
 // ---------------------------------------------------------------------------
 // Props
@@ -163,15 +167,21 @@ const normalizeWizardResult = (
   if (!id) return null
   const status = normalizeResultStatus(item.status)
   const error = typeof item.error === "string" ? item.error : undefined
+  const dataRecord = item.data != null && typeof item.data === "object"
+    ? item.data as Record<string, unknown>
+    : undefined
+  const isDuplicate = status === "ok" && !item.outcome && isDbMessageDuplicate(dataRecord)
   return {
     id,
     status,
     outcome:
-      status === "ok"
-        ? item.outcome || "processed"
-        : isCancelledError(error)
-          ? "cancelled"
-          : item.outcome || "failed",
+      isDuplicate
+        ? "skipped"
+        : status === "ok"
+          ? item.outcome || "processed"
+          : isCancelledError(error)
+            ? "cancelled"
+            : item.outcome || "failed",
     url: item.url,
     fileName: item.fileName,
     type: String(item.type || "item"),
@@ -180,6 +190,9 @@ const normalizeWizardResult = (
     title: item.title,
     durationMs: item.durationMs,
     mediaId: item.mediaId,
+    message: isDuplicate
+      ? DUPLICATE_SKIP_MESSAGE
+      : typeof item.message === "string" ? item.message : undefined,
   }
 }
 
@@ -580,15 +593,18 @@ const buildResultsFromReattachedJobs = (
     )
     const jobStatus = String(job.status || "").trim().toLowerCase()
     const resultStatus = jobStatus === "completed" ? "ok" : "error"
+    const isDuplicate = resultStatus === "ok" && isDbMessageDuplicate(job.result)
     return {
       id: item?.id || `reattached-${job.jobId}`,
       status: resultStatus,
       outcome:
-        resultStatus === "ok"
-          ? "processed"
-          : jobStatus === "cancelled"
-            ? "cancelled"
-            : "failed",
+        isDuplicate
+          ? "skipped" as const
+          : resultStatus === "ok"
+            ? "processed"
+            : jobStatus === "cancelled"
+              ? "cancelled"
+              : "failed",
       url: item?.url,
       fileName: item?.fileName,
       type: mapDetectedTypeToEntryType(item?.detectedType || "unknown"),
@@ -599,6 +615,7 @@ const buildResultsFromReattachedJobs = (
       mediaId: job.result?.media_id ?? job.result?.mediaId ?? null,
       title: job.result?.title ?? null,
       data: job.result,
+      message: isDuplicate ? DUPLICATE_SKIP_MESSAGE : undefined,
     }
   })
 
