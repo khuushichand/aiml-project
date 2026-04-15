@@ -322,7 +322,7 @@ describe("background proxy fallback safety", () => {
         return {
           serverUrl: "http://127.0.0.1:8000",
           authMode: "single-user",
-          apiKey: "test-key-not-placeholder"
+          apiKey: "not-a-real-key"
         }
       }
       return null

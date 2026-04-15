@@ -74,6 +74,7 @@ async def test_media_ingest_worker_updates_progress_fields(monkeypatch, tmp_path
             "db_id": 123,
             "media_uuid": "media-uuid-123",
             "warnings": None,
+            "db_message": "Media added to database.",
         }
 
     monkeypatch.setattr(worker, "_create_db", _fake_create_db, raising=True)
@@ -102,6 +103,7 @@ async def test_media_ingest_worker_updates_progress_fields(monkeypatch, tmp_path
     result = await worker._handle_job(job, jm, progress)
 
     assert result.get("status") == "Success"
+    assert result.get("db_message") == "Media added to database."
     updated = jm.get_job(int(row.get("id")))
     assert updated is not None
     assert updated.get("progress_message") == "completed"
@@ -169,6 +171,7 @@ async def test_media_ingest_worker_returns_existing_media_id_for_skipped_dedupe_
         "media_uuid": "existing-media-uuid",
         "error": None,
         "warnings": None,
+        "db_message": None,
     }
 
 

@@ -276,6 +276,8 @@ type RequestAbortError = Error & {
 const isAbortErrorMessage = (value?: string) =>
   typeof value === "string" && value.toLowerCase().includes("abort")
 
+const readErrorMessage = (error: unknown, fallback = "Aborted") =>
+  error instanceof Error && error.message ? error.message : fallback
 const createAbortError = (
   message?: string,
   status?: number,
@@ -1010,9 +1012,7 @@ async function* bgStreamDirect<
       throw idleError
     }
     if (abortSignal?.aborted) {
-      throw createAbortError(
-        e instanceof Error && e.message ? e.message : "Aborted"
-      )
+      throw createAbortError(readErrorMessage(e))
     }
     throw e
   } finally {
