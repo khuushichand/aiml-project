@@ -1,6 +1,6 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { addRequestHistory } from '@web/lib/history';
-import { getApiBearer, getApiKey } from '@web/lib/authStorage';
+import { getApiBearer, getApiKey, hasEnvApiAuth } from '@web/lib/authStorage';
 import { buildApiBaseUrl, resolvePublicApiOrigin } from '@web/lib/api-base';
 import { captureSessionIdFromHeaders, getOrCreateSessionId, SESSION_HEADER_NAME } from '@web/lib/session';
 import type { AxiosConfigWithMetadata, ApiErrorResponse } from '@web/types/common';
@@ -85,9 +85,7 @@ export function shouldRedirectUnauthorizedToLogin(pathname?: string): boolean {
 }
 
 export function hasEnvAuthConfigured(): boolean {
-  const envApiKey = (process.env.NEXT_PUBLIC_X_API_KEY || "").trim();
-  const envBearer = (process.env.NEXT_PUBLIC_API_BEARER || "").trim();
-  return envApiKey.length > 0 || envBearer.length > 0;
+  return hasEnvApiAuth();
 }
 
 function resolveDefaultApiBaseUrl(): string {
