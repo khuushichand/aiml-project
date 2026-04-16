@@ -241,6 +241,12 @@ This becomes the primary management home for:
 
 The create drawer remains the fast-entry point for applying and saving templates, but deeper management belongs in the Templates tab.
 
+Routing and visibility rules:
+
+- add `templates` to flashcards tab parsing so `?tab=templates` opens the library directly
+- keep the Templates tab visible even when the user has zero decks, because templates are user-level and can be created before a first deck exists
+- keep the existing no-deck startup default unchanged unless later product work intentionally revisits flashcards FTUE; this feature should not broaden startup-routing scope unnecessarily
+
 ### 4. Review orientation becomes a deck-level study setting
 
 Extend the deck model with a new field such as:
@@ -273,7 +279,20 @@ Expected behavior:
 
 - changing the session override changes prompt/answer presentation only
 - it does not persist back to the deck automatically
-- it resets when the review scope meaningfully changes enough to start a new session, unless later product work intentionally makes it sticky
+- it resets when the existing review scope key changes, matching the current review-session lifecycle
+
+For implementation, `reviewScopeKey` should be treated as the concrete reset boundary. In current terms, the override resets when any of these change:
+
+- review mode (`due` vs `cram`)
+- selected deck
+- cram tag filter
+
+It should not reset for ordinary within-scope card progression such as:
+
+- moving to the next card in the same queue
+- revealing the answer
+- submitting a rating
+- using undo inside the same review scope
 
 ### 6. Scheduling and review semantics stay unchanged
 
@@ -297,7 +316,7 @@ This is critical because users are asking to reverse recall direction, not to cr
 
 Suggested API/resource shape:
 
-- `id` or stable identifier
+- `id`
 - `name`
 - `description`
 - `deck_id`
@@ -315,6 +334,12 @@ Suggested API/resource shape:
 - `version`
 
 `placeholder_definitions` should be structured JSON rather than inferred from raw template text.
+
+Identity rules:
+
+- `id` is the canonical stable identifier used by API routes and UI mutations
+- `name` is user-editable data, not the resource locator
+- `name` should remain unique per user among non-deleted flashcards templates
 
 Example conceptual shape:
 
@@ -361,16 +386,18 @@ Follow the existing flashcards endpoint structure with a dedicated templates res
 
 - `POST /api/v1/flashcards/templates`
 - `GET /api/v1/flashcards/templates`
-- `GET /api/v1/flashcards/templates/{id_or_name}`
-- `PATCH /api/v1/flashcards/templates/{id_or_name}`
-- `DELETE /api/v1/flashcards/templates/{id_or_name}`
+- `GET /api/v1/flashcards/templates/{template_id}`
+- `PATCH /api/v1/flashcards/templates/{template_id}`
+- `DELETE /api/v1/flashcards/templates/{template_id}`
 
 Behavioral expectations:
 
 - optimistic locking on update/delete
 - soft delete by default
 - names validated for non-empty input
+- names remain unique per user
 - payload validated server-side
+- rename is supported via `PATCH` without changing the resource identifier
 
 Deck APIs should be extended so deck create/update/read includes `review_prompt_side`.
 
@@ -419,6 +446,10 @@ The review card chrome should reflect the active prompt side clearly so `Front` 
 - missing default deck should not block application; warn and continue without applying that deck
 - template application never auto-creates a flashcard
 - template payload validation should reject malformed placeholder definitions
+- template save/update validation should cross-check scaffold tokens and definitions:
+  - every `{{token}}` referenced in scaffold text must have a matching placeholder definition
+  - every placeholder definition must target at least one supported template field
+  - every declared placeholder should be referenced in at least one targeted field so the fill step does not ask for dead inputs caused by typos or stale config
 
 ### Review orientation
 
@@ -448,6 +479,13 @@ The review card chrome should reflect the active prompt side clearly so `Front` 
 - cloze cards ignoring deck back-first defaults
 - session override precedence over deck default
 - no scheduling/regression differences caused by orientation changes
+
+### Extension
+
+- flashcards tab routing for `?tab=templates`
+- templates tab visibility when no decks exist
+- create drawer template apply/save flows where shared UI is reused by the extension
+- review orientation rendering regressions on extension flashcards study surfaces
 
 ### Regression focus
 
