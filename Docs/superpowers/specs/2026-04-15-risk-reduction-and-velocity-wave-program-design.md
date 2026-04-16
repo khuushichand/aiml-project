@@ -69,8 +69,9 @@ Primary evidence used:
 - Work proceeds in subsystem waves of about one week each.
 - Each wave should leave a subsystem safer, better tested, and easier to modify.
 - Implementation planning happens wave-by-wave, not program-wide.
-- Each implementation plan should cap the active wave to roughly `3-5` confirmed findings plus the regressions and local boundary cleanup needed to close them.
-- If a subsystem backlog is too large for that cap, planning must split it into an explicit follow-on wave or follow-on backlog before implementation begins.
+- Each implementation plan should define a bounded set of findings that can still be owned, reviewed, and verified coherently within the wave.
+- There is no fixed numeric cap on findings. Wave size is constrained by dependency coupling, verification burden, and reviewability rather than staffing budget alone.
+- If a subsystem backlog is too coupled or too large to verify coherently as one wave, planning must split it into an explicit follow-on wave or follow-on backlog before implementation begins.
 
 ### Non-Goals
 
@@ -186,8 +187,8 @@ Required outcome:
 Planning note:
 
 - This subsystem is too large to treat as one unlimited week-long backlog.
-- Wave 1 planning must cap itself to the highest-risk `3-5` confirmed DB/bootstrap findings across these targets.
-- Lower-priority DB-management cleanup that does not fit that cap becomes explicit follow-on backlog, not silent stretch scope.
+- Wave 1 planning may include as many confirmed DB/bootstrap findings as can still be executed, reviewed, and verified coherently as one wave.
+- If the Wave 1 backlog becomes too coupled, too broad, or too verification-heavy, planning must split the overflow into explicit follow-on DB/bootstrap work rather than hiding it as stretch scope.
 
 ### Wave 2: ChaChaNotes And Character/Chat Lifecycle
 
