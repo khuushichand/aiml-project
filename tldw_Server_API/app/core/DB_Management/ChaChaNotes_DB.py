@@ -43,6 +43,7 @@ import sqlite3  # noqa: E402
 import tempfile  # noqa: E402
 import threading  # noqa: E402
 import uuid  # noqa: E402
+from collections.abc import Mapping
 from configparser import ConfigParser  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -130,6 +131,8 @@ _FLASHCARD_REVIEW_SESSION_JSON_FIELDS = ["source_bundle_json"]
 _SUPPORTED_WEB_CLIPPER_DESTINATIONS = {"note", "workspace", "both"}
 _SUPPORTED_WEB_CLIPPER_OUTCOME_STATES = {"saved", "saved_with_warnings", "partially_saved", "failed"}
 _SUPPORTED_WEB_CLIPPER_ENRICHMENT_TYPES = {"ocr", "vlm"}
+_FLASHCARD_TEMPLATE_FIELD_NAMES = ("front_template", "back_template", "notes_template", "extra_template")
+_FLASHCARD_TEMPLATE_TOKEN_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 def _coerce_scheduler_type(value: Any) -> str:
@@ -1432,6 +1435,7 @@ CREATE TABLE IF NOT EXISTS decks(
   name          TEXT UNIQUE NOT NULL,
   description   TEXT,
   workspace_id  TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  review_prompt_side TEXT NOT NULL DEFAULT 'front',
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted       BOOLEAN  NOT NULL DEFAULT 0,
@@ -8160,6 +8164,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._verify_required_fts_tables_sqlite(conn)
                     self._ensure_workspace_subresource_schema_sqlite(conn)
                     self._ensure_flashcard_asset_schema_sqlite(conn)
+                    self._ensure_flashcard_template_schema_sqlite(conn)
                     self._ensure_flashcard_scheduler_schema_sqlite(conn)
                     self._ensure_study_pack_schema_sqlite(conn)
                     self._ensure_study_assistant_schema_sqlite(conn)
@@ -8770,6 +8775,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 self._ensure_workspace_subresource_schema_sqlite(conn)
                 self._ensure_workspace_study_material_schema_sqlite(conn)
                 self._ensure_flashcard_asset_schema_sqlite(conn)
+                self._ensure_flashcard_template_schema_sqlite(conn)
                 self._ensure_flashcard_scheduler_schema_sqlite(conn)
                 self._ensure_study_pack_schema_sqlite(conn)
                 self._ensure_study_assistant_schema_sqlite(conn)
@@ -9116,6 +9122,186 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except sqlite3.Error as exc:
             raise SchemaError(f"Failed backfilling flashcard search shadow columns: {exc}") from exc  # noqa: TRY003
 
+    def _ensure_flashcard_template_schema_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Ensure flashcard template storage exists for SQLite."""
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_templates(
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  name TEXT NOT NULL,
+                  model_type TEXT NOT NULL CHECK(model_type IN ('basic','basic_reverse','cloze')),
+                  front_template TEXT NOT NULL,
+                  back_template TEXT,
+                  notes_template TEXT,
+                  extra_template TEXT,
+                  placeholder_definitions_json TEXT NOT NULL DEFAULT '[]',
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT 0,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcard_templates_name_active "
+                "ON flashcard_templates(name) WHERE deleted = 0"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_templates_deleted ON flashcard_templates(deleted)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_templates_last_modified ON flashcard_templates(last_modified)"
+            )
+        except sqlite3.Error as exc:
+            raise SchemaError(f"Failed ensuring flashcard_templates table: {exc}") from exc  # noqa: TRY003
+
+    def _ensure_flashcard_template_schema_postgres(self, conn) -> None:
+        """Ensure flashcard template storage exists for PostgreSQL."""
+        try:
+            self.backend.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flashcard_templates(
+                  id SERIAL PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  model_type TEXT NOT NULL CHECK(model_type IN ('basic','basic_reverse','cloze')),
+                  front_template TEXT NOT NULL,
+                  back_template TEXT,
+                  notes_template TEXT,
+                  extra_template TEXT,
+                  placeholder_definitions_json TEXT NOT NULL DEFAULT '[]',
+                  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  last_modified TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  deleted BOOLEAN NOT NULL DEFAULT FALSE,
+                  client_id TEXT NOT NULL DEFAULT 'unknown',
+                  version INTEGER NOT NULL DEFAULT 1
+                )
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcard_templates_name_active "
+                "ON flashcard_templates(name) WHERE deleted = FALSE",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_templates_deleted ON flashcard_templates(deleted)",
+                connection=conn,
+            )
+            self.backend.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flashcard_templates_last_modified ON flashcard_templates(last_modified)",
+                connection=conn,
+            )
+        except BackendDatabaseError as exc:
+            raise SchemaError(f"Failed ensuring flashcard_templates table: {exc}") from exc  # noqa: TRY003
+
+        try:
+            self.backend.execute(
+                """
+                CREATE OR REPLACE FUNCTION flashcard_templates_sync_log_fn()
+                RETURNS trigger AS $$
+                BEGIN
+                  IF TG_OP = 'INSERT' THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_templates',
+                      CAST(NEW.id AS TEXT),
+                      'create',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'name', NEW.name,
+                        'model_type', NEW.model_type,
+                        'front_template', NEW.front_template,
+                        'back_template', NEW.back_template,
+                        'notes_template', NEW.notes_template,
+                        'extra_template', NEW.extra_template,
+                        'placeholder_definitions_json', NEW.placeholder_definitions_json,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  ELSIF OLD.deleted = FALSE AND NEW.deleted = TRUE THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_templates',
+                      CAST(NEW.id AS TEXT),
+                      'delete',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'deleted', NEW.deleted,
+                        'last_modified', NEW.last_modified,
+                        'version', NEW.version,
+                        'client_id', NEW.client_id
+                      )::text
+                    );
+                  ELSIF (
+                    OLD.deleted IS DISTINCT FROM NEW.deleted OR
+                    OLD.name IS DISTINCT FROM NEW.name OR
+                    OLD.model_type IS DISTINCT FROM NEW.model_type OR
+                    OLD.front_template IS DISTINCT FROM NEW.front_template OR
+                    OLD.back_template IS DISTINCT FROM NEW.back_template OR
+                    OLD.notes_template IS DISTINCT FROM NEW.notes_template OR
+                    OLD.extra_template IS DISTINCT FROM NEW.extra_template OR
+                    OLD.placeholder_definitions_json IS DISTINCT FROM NEW.placeholder_definitions_json OR
+                    OLD.last_modified IS DISTINCT FROM NEW.last_modified OR
+                    OLD.version IS DISTINCT FROM NEW.version
+                  ) THEN
+                    INSERT INTO sync_log(entity, entity_id, operation, timestamp, client_id, version, payload)
+                    VALUES(
+                      'flashcard_templates',
+                      CAST(NEW.id AS TEXT),
+                      'update',
+                      NEW.last_modified,
+                      NEW.client_id,
+                      NEW.version,
+                      json_build_object(
+                        'id', NEW.id,
+                        'name', NEW.name,
+                        'model_type', NEW.model_type,
+                        'front_template', NEW.front_template,
+                        'back_template', NEW.back_template,
+                        'notes_template', NEW.notes_template,
+                        'extra_template', NEW.extra_template,
+                        'placeholder_definitions_json', NEW.placeholder_definitions_json,
+                        'created_at', NEW.created_at,
+                        'last_modified', NEW.last_modified,
+                        'deleted', NEW.deleted,
+                        'client_id', NEW.client_id,
+                        'version', NEW.version
+                      )::text
+                    );
+                  END IF;
+                  RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql
+                """,
+                connection=conn,
+            )
+            self.backend.execute(
+                "DROP TRIGGER IF EXISTS flashcard_templates_sync_log ON flashcard_templates",
+                connection=conn,
+            )
+            self.backend.execute(
+                """
+                CREATE TRIGGER flashcard_templates_sync_log
+                AFTER INSERT OR UPDATE ON flashcard_templates
+                FOR EACH ROW EXECUTE FUNCTION flashcard_templates_sync_log_fn()
+                """,
+                connection=conn,
+            )
+        except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:
+            raise SchemaError(f"Failed ensuring PostgreSQL flashcard template sync triggers: {exc}") from exc  # noqa: TRY003
+
     def _infer_queue_state_for_row(self, row: Mapping[str, Any]) -> str:
         queue_state = str(row.get("queue_state") or "").strip().lower()
         if queue_state in ("new", "learning", "review", "relearning", "suspended"):
@@ -9134,9 +9320,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         decks_exists: bool = True,
         flashcards_exists: bool = True,
+        flashcard_templates_exists: bool = True,
         sync_log_exists: bool = True,
     ) -> None:
-        """Ensure deck and flashcard sync triggers include scheduler fields."""
+        """Ensure flashcard-domain SQLite sync triggers exist with scheduler/template fields."""
         if not sync_log_exists:
             return
 
@@ -9148,6 +9335,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'review_prompt_side',NEW.review_prompt_side,
                                      'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
@@ -9159,6 +9347,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 WHEN OLD.deleted = NEW.deleted AND (
                      OLD.name IS NOT NEW.name OR
                      OLD.description IS NOT NEW.description OR
+                     OLD.review_prompt_side IS NOT NEW.review_prompt_side OR
                      OLD.scheduler_type IS NOT NEW.scheduler_type OR
                      OLD.scheduler_settings_json IS NOT NEW.scheduler_settings_json OR
                      OLD.last_modified IS NOT NEW.last_modified OR
@@ -9167,6 +9356,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'review_prompt_side',NEW.review_prompt_side,
                                      'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
@@ -9190,6 +9380,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                   INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
                   VALUES('decks',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
                          json_object('id',NEW.id,'name',NEW.name,'description',NEW.description,
+                                     'review_prompt_side',NEW.review_prompt_side,
                                      'scheduler_type',NEW.scheduler_type,
                                      'scheduler_settings_json',NEW.scheduler_settings_json,
                                      'created_at',NEW.created_at,'last_modified',NEW.last_modified,
@@ -9291,6 +9482,69 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 END;
             """
 
+        flashcard_template_script = ""
+        if flashcard_templates_exists:
+            flashcard_template_script = """
+                CREATE TRIGGER flashcard_templates_sync_create
+                AFTER INSERT ON flashcard_templates BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_templates',CAST(NEW.id AS TEXT),'create',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'model_type',NEW.model_type,
+                                     'front_template',NEW.front_template,'back_template',NEW.back_template,
+                                     'notes_template',NEW.notes_template,'extra_template',NEW.extra_template,
+                                     'placeholder_definitions_json',NEW.placeholder_definitions_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_templates_sync_update
+                AFTER UPDATE ON flashcard_templates
+                WHEN OLD.deleted = NEW.deleted AND (
+                     OLD.name IS NOT NEW.name OR
+                     OLD.model_type IS NOT NEW.model_type OR
+                     OLD.front_template IS NOT NEW.front_template OR
+                     OLD.back_template IS NOT NEW.back_template OR
+                     OLD.notes_template IS NOT NEW.notes_template OR
+                     OLD.extra_template IS NOT NEW.extra_template OR
+                     OLD.placeholder_definitions_json IS NOT NEW.placeholder_definitions_json OR
+                     OLD.last_modified IS NOT NEW.last_modified OR
+                     OLD.version IS NOT NEW.version)
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'model_type',NEW.model_type,
+                                     'front_template',NEW.front_template,'back_template',NEW.back_template,
+                                     'notes_template',NEW.notes_template,'extra_template',NEW.extra_template,
+                                     'placeholder_definitions_json',NEW.placeholder_definitions_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+
+                CREATE TRIGGER flashcard_templates_sync_delete
+                AFTER UPDATE ON flashcard_templates
+                WHEN OLD.deleted = 0 AND NEW.deleted = 1
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_templates',CAST(NEW.id AS TEXT),'delete',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'deleted',NEW.deleted,'last_modified',NEW.last_modified,
+                                     'version',NEW.version,'client_id',NEW.client_id));
+                END;
+
+                CREATE TRIGGER flashcard_templates_sync_undelete
+                AFTER UPDATE ON flashcard_templates
+                WHEN OLD.deleted = 1 AND NEW.deleted = 0
+                BEGIN
+                  INSERT INTO sync_log(entity,entity_id,operation,timestamp,client_id,version,payload)
+                  VALUES('flashcard_templates',CAST(NEW.id AS TEXT),'update',NEW.last_modified,NEW.client_id,NEW.version,
+                         json_object('id',NEW.id,'name',NEW.name,'model_type',NEW.model_type,
+                                     'front_template',NEW.front_template,'back_template',NEW.back_template,
+                                     'notes_template',NEW.notes_template,'extra_template',NEW.extra_template,
+                                     'placeholder_definitions_json',NEW.placeholder_definitions_json,
+                                     'created_at',NEW.created_at,'last_modified',NEW.last_modified,
+                                     'deleted',NEW.deleted,'client_id',NEW.client_id,'version',NEW.version));
+                END;
+            """
+
         try:
             conn.executescript(
                 f"""
@@ -9304,6 +9558,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 DROP TRIGGER IF EXISTS flashcards_sync_delete;
                 DROP TRIGGER IF EXISTS flashcards_sync_undelete;
                 {flashcard_script}
+                DROP TRIGGER IF EXISTS flashcard_templates_sync_create;
+                DROP TRIGGER IF EXISTS flashcard_templates_sync_update;
+                DROP TRIGGER IF EXISTS flashcard_templates_sync_delete;
+                DROP TRIGGER IF EXISTS flashcard_templates_sync_undelete;
+                {flashcard_template_script}
                 """
             )
         except sqlite3.Error as exc:
@@ -9324,6 +9583,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         decks_exists = "decks" in existing_tables
         flashcards_exists = "flashcards" in existing_tables
+        flashcard_templates_exists = "flashcard_templates" in existing_tables
         flashcard_reviews_exists = "flashcard_reviews" in existing_tables
         sync_log_exists = "sync_log" in existing_tables
 
@@ -9339,6 +9599,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     )
                 if "scheduler_type" not in deck_cols:
                     conn.execute("ALTER TABLE decks ADD COLUMN scheduler_type TEXT NOT NULL DEFAULT 'sm2_plus'")
+                if "review_prompt_side" not in deck_cols:
+                    conn.execute("ALTER TABLE decks ADD COLUMN review_prompt_side TEXT NOT NULL DEFAULT 'front'")
                 conn.execute(
                     """
                     UPDATE decks
@@ -9354,8 +9616,15 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                      WHERE scheduler_type IS NULL OR trim(scheduler_type) = ''
                     """
                 )
+                conn.execute(
+                    """
+                    UPDATE decks
+                       SET review_prompt_side = 'front'
+                     WHERE review_prompt_side IS NULL OR trim(review_prompt_side) = ''
+                    """
+                )
         except sqlite3.Error as exc:
-            raise SchemaError(f"Failed ensuring decks.scheduler_settings_json: {exc}") from exc  # noqa: TRY003
+            raise SchemaError(f"Failed ensuring decks review-orientation schema: {exc}") from exc  # noqa: TRY003
 
         try:
             if flashcards_exists:
@@ -9527,6 +9796,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             conn,
             decks_exists=decks_exists,
             flashcards_exists=flashcards_exists,
+            flashcard_templates_exists=flashcard_templates_exists,
             sync_log_exists=sync_log_exists,
         )
 
@@ -9671,12 +9941,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 connection=conn,
             )
             self.backend.execute(
+                "ALTER TABLE decks ADD COLUMN IF NOT EXISTS review_prompt_side TEXT NOT NULL DEFAULT 'front'",
+                connection=conn,
+            )
+            self.backend.execute(
                 "UPDATE decks SET scheduler_settings_json = %s WHERE scheduler_settings_json IS NULL OR btrim(scheduler_settings_json) = ''",
                 (default_settings_json,),
                 connection=conn,
             )
             self.backend.execute(
                 "UPDATE decks SET scheduler_type = 'sm2_plus' WHERE scheduler_type IS NULL OR btrim(scheduler_type) = ''",
+                connection=conn,
+            )
+            self.backend.execute(
+                "UPDATE decks SET review_prompt_side = 'front' WHERE review_prompt_side IS NULL OR btrim(review_prompt_side) = ''",
                 connection=conn,
             )
             self.backend.execute(
@@ -12193,6 +12471,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 )
 
             self._ensure_flashcard_asset_schema_postgres(conn)
+            self._ensure_flashcard_template_schema_postgres(conn)
             self._ensure_flashcard_scheduler_schema_postgres(conn)
             self._ensure_study_pack_schema_postgres(conn)
             self._ensure_study_assistant_schema_postgres(conn)
@@ -25414,10 +25693,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         scheduler_type: str = "sm2_plus",
         workspace_id: str | None = None,
+        review_prompt_side: str | None = None,
     ) -> int:
         """Create a deck and return its id."""
         now = self._get_current_utc_timestamp_iso()
         scheduler_type = _coerce_scheduler_type(scheduler_type)
+        normalized_prompt_side = (
+            None
+            if review_prompt_side is None
+            else "back" if str(review_prompt_side).strip().lower() == "back" else "front"
+        )
+        prompt_side_for_insert = normalized_prompt_side or "front"
         scheduler_settings_json = scheduler_settings_to_json(scheduler_settings)
         try:
             with self.transaction() as conn:
@@ -25435,6 +25721,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             "UPDATE decks SET deleted = ?, last_modified = ?, version = ?, client_id = ?, "
                             "description = COALESCE(?, description), "
                             "workspace_id = ?, "
+                            "review_prompt_side = COALESCE(?, review_prompt_side), "
                             "scheduler_type = COALESCE(?, scheduler_type), "
                             "scheduler_settings_json = COALESCE(?, scheduler_settings_json) "
                             "WHERE id = ? AND version = ?"
@@ -25446,6 +25733,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                             self.client_id,
                             description,
                             workspace_id,
+                            normalized_prompt_side,
                             scheduler_type,
                             scheduler_settings_json,
                             deck_id,
@@ -25461,13 +25749,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     return deck_id
                 insert_sql = (
                     "INSERT INTO decks("
-                    "name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted"
-                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "name, description, workspace_id, review_prompt_side, scheduler_settings_json, scheduler_type, created_at, last_modified, client_id, version, deleted"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 )
                 params = (
                     name,
                     description,
                     workspace_id,
+                    prompt_side_for_insert,
                     scheduler_settings_json,
                     scheduler_type,
                     now,
@@ -25508,7 +25797,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         include_workspace_items: bool = False,
     ) -> list[dict[str, Any]]:
         select_sql = (
-            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, "
+            "SELECT id, name, description, workspace_id, review_prompt_side, scheduler_settings_json, scheduler_type, created_at, last_modified, "
             "deleted, client_id, version FROM decks "
         )
         if include_deleted:
@@ -25540,7 +25829,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_deck(self, deck_id: int) -> dict[str, Any] | None:
         """Fetch a single deck row by id."""
         query = (
-            "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
+            "SELECT id, name, description, workspace_id, review_prompt_side, scheduler_settings_json, scheduler_type, created_at, last_modified, deleted, client_id, version "
             "FROM decks WHERE id = ?"
         )
         try:
@@ -25554,13 +25843,13 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         """Fetch one deck row by name using the repository-wide unique-name invariant."""
         if include_deleted:
             query = (
-                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "SELECT id, name, description, workspace_id, review_prompt_side, scheduler_settings_json, scheduler_type, created_at, "
                 "last_modified, deleted, client_id, version FROM decks WHERE name = ? "
                 "ORDER BY id LIMIT 1"
             )
         else:
             query = (
-                "SELECT id, name, description, workspace_id, scheduler_settings_json, scheduler_type, created_at, "
+                "SELECT id, name, description, workspace_id, review_prompt_side, scheduler_settings_json, scheduler_type, created_at, "
                 "last_modified, deleted, client_id, version FROM decks WHERE name = ? AND deleted = 0 "
                 "ORDER BY id LIMIT 1"
             )
@@ -25577,6 +25866,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         name: str | None = None,
         description: str | None = None,
+        review_prompt_side: str | None = None,
         scheduler_settings: Mapping[str, Any] | str | None = None,
         scheduler_type: str | None = None,
         workspace_id: Any = ...,
@@ -25591,6 +25881,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if description is not None:
             set_parts.append("description = ?")
             params.append(description)
+        if review_prompt_side is not None:
+            set_parts.append("review_prompt_side = ?")
+            params.append("back" if str(review_prompt_side).strip().lower() == "back" else "front")
         if scheduler_settings is not None:
             set_parts.append("scheduler_settings_json = ?")
             params.append(scheduler_settings_to_json(scheduler_settings))
@@ -25636,6 +25929,489 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
         except sqlite3.Error as exc:
             raise CharactersRAGDBError(f"Failed to update deck: {exc}") from exc  # noqa: TRY003
+
+    def _flashcard_template_default_placeholders(self, raw_definitions: Any) -> list[dict[str, Any]]:
+        if raw_definitions in (None, ""):
+            return []
+        if not isinstance(raw_definitions, list):
+            raise InputError("placeholder_definitions must be a list")  # noqa: TRY003
+        normalized: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for raw_definition in raw_definitions:
+            if not isinstance(raw_definition, Mapping):
+                raise InputError("placeholder_definitions items must be objects")  # noqa: TRY003
+            key = str(raw_definition.get("key") or "").strip()
+            label = str(raw_definition.get("label") or "").strip()
+            help_text = self._normalize_nullable_text(raw_definition.get("help_text"))
+            default_value = self._normalize_nullable_text(raw_definition.get("default_value"))
+            required = bool(raw_definition.get("required", False))
+            targets_raw = raw_definition.get("targets") or []
+            if not key:
+                raise InputError("Placeholder definitions require a non-empty key")  # noqa: TRY003
+            if key in seen_keys:
+                raise InputError(f"Duplicate placeholder definition: {key}")  # noqa: TRY003
+            if not label:
+                raise InputError(f"Placeholder definition '{key}' requires a non-empty label")  # noqa: TRY003
+            if not isinstance(targets_raw, list) or not targets_raw:
+                raise InputError(f"Placeholder definition '{key}' requires at least one target")  # noqa: TRY003
+            targets: list[str] = []
+            for target in targets_raw:
+                target_name = str(target or "").strip()
+                if target_name not in _FLASHCARD_TEMPLATE_FIELD_NAMES:
+                    raise InputError(
+                        f"Placeholder definition '{key}' has unsupported target '{target_name}'"
+                    )  # noqa: TRY003
+                if target_name not in targets:
+                    targets.append(target_name)
+            seen_keys.add(key)
+            normalized.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "help_text": help_text,
+                    "default_value": default_value,
+                    "required": required,
+                    "targets": targets,
+                }
+            )
+        return normalized
+
+    def _flashcard_template_tokens(self, text: Any) -> set[str]:
+        raw = str(text or "")
+        return {match.group(1) for match in _FLASHCARD_TEMPLATE_TOKEN_RE.finditer(raw)}
+
+    def _flashcard_template_deleted_value(self, deleted: bool) -> bool | int:
+        if self.backend_type == BackendType.POSTGRESQL:
+            return bool(deleted)
+        return 1 if deleted else 0
+
+    def _validate_flashcard_template_contract(
+        self,
+        *,
+        model_type: str,
+        front_template: Any,
+        back_template: Any,
+        notes_template: Any,
+        extra_template: Any,
+        placeholder_definitions: Any,
+    ) -> tuple[str, str, str | None, str | None, str | None, list[dict[str, Any]]]:
+        normalized_model_type = str(model_type or "").strip().lower()
+        if normalized_model_type not in ("basic", "basic_reverse", "cloze"):
+            raise InputError("model_type must be one of 'basic', 'basic_reverse', or 'cloze'")  # noqa: TRY003
+
+        normalized_front = str(front_template or "").strip()
+        if not normalized_front:
+            raise InputError("front_template is required")  # noqa: TRY003
+
+        normalized_back = self._normalize_nullable_text(back_template)
+        if normalized_model_type in ("basic", "basic_reverse") and not normalized_back:
+            raise InputError("back_template is required for basic and basic_reverse templates")  # noqa: TRY003
+
+        normalized_notes = self._normalize_nullable_text(notes_template)
+        normalized_extra = self._normalize_nullable_text(extra_template)
+        normalized_definitions = self._flashcard_template_default_placeholders(placeholder_definitions)
+        definitions_by_key = {definition["key"]: definition for definition in normalized_definitions}
+
+        fields_by_name = {
+            "front_template": normalized_front,
+            "back_template": normalized_back or "",
+            "notes_template": normalized_notes or "",
+            "extra_template": normalized_extra or "",
+        }
+        for field_name, text in fields_by_name.items():
+            tokens = self._flashcard_template_tokens(text)
+            if not tokens:
+                continue
+            missing = sorted(token for token in tokens if token not in definitions_by_key)
+            if missing:
+                raise InputError(
+                    f"{field_name} references undefined placeholder(s): {', '.join(missing)}"
+                )  # noqa: TRY003
+
+        for definition in normalized_definitions:
+            targets = definition["targets"]
+            if not any(definition["key"] in self._flashcard_template_tokens(fields_by_name[target]) for target in targets):
+                raise InputError(
+                    f"Placeholder definition '{definition['key']}' must be referenced in at least one targeted field"
+                )  # noqa: TRY003
+
+        return (
+            normalized_model_type,
+            normalized_front,
+            normalized_back,
+            normalized_notes,
+            normalized_extra,
+            normalized_definitions,
+        )
+
+    def _serialize_flashcard_template_row(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        item = dict(row)
+        raw_definitions = item.get("placeholder_definitions_json")
+        if isinstance(raw_definitions, str):
+            try:
+                parsed = json.loads(raw_definitions)
+            except json.JSONDecodeError:
+                parsed = []
+        else:
+            parsed = raw_definitions
+        if not isinstance(parsed, list):
+            parsed = []
+        item["placeholder_definitions"] = self._flashcard_template_default_placeholders(parsed)
+        item.pop("placeholder_definitions_json", None)
+        return item
+
+    def add_flashcard_template(
+        self,
+        *,
+        name: str,
+        model_type: str,
+        front_template: str,
+        back_template: str | None = None,
+        notes_template: str | None = None,
+        extra_template: str | None = None,
+        placeholder_definitions: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Create or undelete a flashcard template and return its integer id."""
+        template_name = str(name or "").strip()
+        if not template_name:
+            raise InputError("name is required")  # noqa: TRY003
+
+        (
+            normalized_model_type,
+            normalized_front,
+            normalized_back,
+            normalized_notes,
+            normalized_extra,
+            normalized_definitions,
+        ) = self._validate_flashcard_template_contract(
+            model_type=model_type,
+            front_template=front_template,
+            back_template=back_template,
+            notes_template=notes_template,
+            extra_template=extra_template,
+            placeholder_definitions=placeholder_definitions,
+        )
+
+        now = self._get_current_utc_timestamp_iso()
+        definitions_json = json.dumps(normalized_definitions)
+        deleted_value = self._flashcard_template_deleted_value(True)
+        try:
+            with self.transaction() as conn:
+                deleted_row = conn.execute(
+                    """
+                    SELECT id, version
+                      FROM flashcard_templates
+                     WHERE name = ? AND deleted = ?
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """,
+                    (template_name, deleted_value),
+                ).fetchone()
+                if deleted_row:
+                    template_id = int(deleted_row[0])
+                    current_version = int(deleted_row[1])
+                    next_version = current_version + 1
+                    rc = conn.execute(
+                        """
+                        UPDATE flashcard_templates
+                           SET deleted = ?,
+                               name = ?,
+                               model_type = ?,
+                               front_template = ?,
+                               back_template = ?,
+                               notes_template = ?,
+                               extra_template = ?,
+                               placeholder_definitions_json = ?,
+                               last_modified = ?,
+                               version = ?,
+                               client_id = ?
+                         WHERE id = ? AND version = ?
+                        """,
+                        (
+                            self._flashcard_template_deleted_value(False),
+                            template_name,
+                            normalized_model_type,
+                            normalized_front,
+                            normalized_back,
+                            normalized_notes,
+                            normalized_extra,
+                            definitions_json,
+                            now,
+                            next_version,
+                            self.client_id,
+                            template_id,
+                            current_version,
+                        ),
+                    ).rowcount
+                    if rc == 0:
+                        raise ConflictError(
+                            "Failed to undelete flashcard template due to version mismatch",
+                            entity="flashcard_templates",
+                            identifier=template_name,
+                        )  # noqa: TRY003
+                    return template_id
+
+                insert_sql = """
+                    INSERT INTO flashcard_templates(
+                        name, model_type, front_template, back_template, notes_template, extra_template,
+                        placeholder_definitions_json, created_at, last_modified, deleted, client_id, version
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                params = (
+                    template_name,
+                    normalized_model_type,
+                    normalized_front,
+                    normalized_back,
+                    normalized_notes,
+                    normalized_extra,
+                    definitions_json,
+                    now,
+                    now,
+                    False,
+                    self.client_id,
+                    1,
+                )
+                if self.backend_type == BackendType.POSTGRESQL:
+                    cursor = conn.execute(insert_sql + " RETURNING id", params)
+                    row = cursor.fetchone()
+                    template_id = int(row["id"]) if row else None
+                else:
+                    cursor = conn.execute(insert_sql, params)
+                    template_id = int(cursor.lastrowid)
+                if template_id is None:
+                    raise CharactersRAGDBError("Failed to determine flashcard template ID after insert")  # noqa: TRY003
+                return template_id
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed: flashcard_templates.name" in str(exc):
+                raise ConflictError(
+                    "Flashcard template name already exists",
+                    entity="flashcard_templates",
+                    identifier=template_name,
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to create flashcard template: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Flashcard template name already exists",
+                    entity="flashcard_templates",
+                    identifier=template_name,
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to create flashcard template: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to create flashcard template: {exc}") from exc  # noqa: TRY003
+
+    def count_flashcard_templates(self) -> int:
+        try:
+            cursor = self.execute_query(
+                "SELECT COUNT(*) AS cnt FROM flashcard_templates WHERE deleted = ?",
+                (self._flashcard_template_deleted_value(False),),
+            )
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+        except CharactersRAGDBError:
+            raise
+
+    def list_flashcard_templates(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        query = (
+            "SELECT id, name, model_type, front_template, back_template, notes_template, extra_template, "
+            "placeholder_definitions_json, created_at, last_modified, deleted, client_id, version "
+            "FROM flashcard_templates WHERE deleted = ? ORDER BY name ASC LIMIT ? OFFSET ?"
+        )
+        try:
+            cursor = self.execute_query(
+                query,
+                (self._flashcard_template_deleted_value(False), limit, offset),
+            )
+            return [self._serialize_flashcard_template_row(dict(row)) for row in cursor.fetchall()]
+        except CharactersRAGDBError:
+            raise
+
+    def get_flashcard_template(self, template_id: int, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        query = (
+            "SELECT id, name, model_type, front_template, back_template, notes_template, extra_template, "
+            "placeholder_definitions_json, created_at, last_modified, deleted, client_id, version "
+            "FROM flashcard_templates WHERE id = ?"
+        )
+        params: list[Any] = [template_id]
+        if not include_deleted:
+            query += " AND deleted = ?"
+            params.append(self._flashcard_template_deleted_value(False))
+        try:
+            cursor = self.execute_query(query, tuple(params))
+            row = cursor.fetchone()
+            return self._serialize_flashcard_template_row(dict(row)) if row else None
+        except CharactersRAGDBError:
+            raise
+
+    def update_flashcard_template(
+        self,
+        template_id: int,
+        updates: dict[str, Any],
+        expected_version: int | None = None,
+    ) -> bool:
+        current = self.get_flashcard_template(template_id)
+        if not current:
+            return False
+        if not updates:
+            if expected_version is not None and int(current["version"]) != expected_version:
+                raise ConflictError(
+                    "Version mismatch updating flashcard template",
+                    entity="flashcard_templates",
+                    identifier=template_id,
+                )  # noqa: TRY003
+            return True
+
+        merged = {
+            "name": current["name"],
+            "model_type": current["model_type"],
+            "front_template": current["front_template"],
+            "back_template": current.get("back_template"),
+            "notes_template": current.get("notes_template"),
+            "extra_template": current.get("extra_template"),
+            "placeholder_definitions": current.get("placeholder_definitions") or [],
+        }
+        for key in ("name", "model_type", "front_template", "back_template", "notes_template", "extra_template", "placeholder_definitions"):
+            if key in updates:
+                merged[key] = updates[key]
+
+        (
+            normalized_model_type,
+            normalized_front,
+            normalized_back,
+            normalized_notes,
+            normalized_extra,
+            normalized_definitions,
+        ) = self._validate_flashcard_template_contract(
+            model_type=merged["model_type"],
+            front_template=merged["front_template"],
+            back_template=merged["back_template"],
+            notes_template=merged["notes_template"],
+            extra_template=merged["extra_template"],
+            placeholder_definitions=merged["placeholder_definitions"],
+        )
+        template_name = str(merged["name"] or "").strip()
+        if not template_name:
+            raise InputError("name is required")  # noqa: TRY003
+
+        now = self._get_current_utc_timestamp_iso()
+        definitions_json = json.dumps(normalized_definitions)
+        set_parts = [
+            "name = ?",
+            "model_type = ?",
+            "front_template = ?",
+            "back_template = ?",
+            "notes_template = ?",
+            "extra_template = ?",
+            "placeholder_definitions_json = ?",
+            "last_modified = ?",
+            "version = version + 1",
+            "client_id = ?",
+        ]
+        params: list[Any] = [
+            template_name,
+            normalized_model_type,
+            normalized_front,
+            normalized_back,
+            normalized_notes,
+            normalized_extra,
+            definitions_json,
+            now,
+            self.client_id,
+        ]
+        active_value = self._flashcard_template_deleted_value(False)
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT version FROM flashcard_templates WHERE id = ? AND deleted = ?",
+                    (template_id, active_value),
+                ).fetchone()
+                if not row:
+                    return False
+                current_version = int(row[0])
+                if expected_version is not None and current_version != expected_version:
+                    raise ConflictError(
+                        "Version mismatch updating flashcard template",
+                        entity="flashcard_templates",
+                        identifier=template_id,
+                    )  # noqa: TRY003
+
+                if expected_version is not None:
+                    params.extend([template_id, expected_version, active_value])
+                    query = f"UPDATE flashcard_templates SET {', '.join(set_parts)} WHERE id = ? AND version = ? AND deleted = ?"  # nosec B608
+                else:
+                    params.extend([template_id, active_value])
+                    query = f"UPDATE flashcard_templates SET {', '.join(set_parts)} WHERE id = ? AND deleted = ?"  # nosec B608
+                rc = conn.execute(query, tuple(params)).rowcount
+                return rc > 0
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE constraint failed: flashcard_templates.name" in str(exc):
+                raise ConflictError(
+                    "Flashcard template name already exists",
+                    entity="flashcard_templates",
+                    identifier=template_name,
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to update flashcard template: {exc}") from exc  # noqa: TRY003
+        except BackendDatabaseError as exc:
+            if self._is_unique_violation(exc):
+                raise ConflictError(
+                    "Flashcard template name already exists",
+                    entity="flashcard_templates",
+                    identifier=template_name,
+                ) from exc  # noqa: TRY003
+            raise CharactersRAGDBError(f"Failed to update flashcard template: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to update flashcard template: {exc}") from exc  # noqa: TRY003
+
+    def soft_delete_flashcard_template(self, template_id: int, expected_version: int) -> bool:
+        now = self._get_current_utc_timestamp_iso()
+        try:
+            with self.transaction() as conn:
+                row = conn.execute(
+                    "SELECT version, deleted FROM flashcard_templates WHERE id = ?",
+                    (template_id,),
+                ).fetchone()
+                if not row:
+                    return False
+                current_version = int(row[0])
+                deleted = bool(row[1])
+                if deleted:
+                    return False
+                if current_version != expected_version:
+                    raise ConflictError(
+                        "Version mismatch deleting flashcard template",
+                        entity="flashcard_templates",
+                        identifier=template_id,
+                    )  # noqa: TRY003
+                rc = conn.execute(
+                    """
+                    UPDATE flashcard_templates
+                       SET deleted = ?,
+                           last_modified = ?,
+                           version = ?,
+                           client_id = ?
+                     WHERE id = ? AND version = ? AND deleted = ?
+                    """,
+                    (
+                        self._flashcard_template_deleted_value(True),
+                        now,
+                        expected_version + 1,
+                        self.client_id,
+                        template_id,
+                        expected_version,
+                        self._flashcard_template_deleted_value(False),
+                    ),
+                ).rowcount
+                if rc == 0:
+                    raise ConflictError(
+                        "Version mismatch deleting flashcard template",
+                        entity="flashcard_templates",
+                        identifier=template_id,
+                    )  # noqa: TRY003
+                return rc > 0
+        except BackendDatabaseError as exc:
+            raise CharactersRAGDBError(f"Failed to delete flashcard template: {exc}") from exc  # noqa: TRY003
+        except sqlite3.Error as exc:
+            raise CharactersRAGDBError(f"Failed to delete flashcard template: {exc}") from exc  # noqa: TRY003
 
     def _get_flashcard_id_from_uuid(self, conn: sqlite3.Connection, card_uuid: str) -> int | None:
         row = conn.execute("SELECT id FROM flashcards WHERE uuid = ? AND deleted = 0", (card_uuid,)).fetchone()
@@ -29733,6 +30509,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         question_ids: list[int],
         target_deck_id: int | None = None,
         create_deck_name: str | None = None,
+        create_deck_review_prompt_side: str | None = None,
         create_deck_scheduler_type: str | None = None,
         create_deck_scheduler_settings: Mapping[str, Any] | str | None = None,
         replace_active: bool = False,
@@ -29799,6 +30576,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                         description=None,
                         scheduler_type=_coerce_scheduler_type(create_deck_scheduler_type),
                         scheduler_settings=create_deck_scheduler_settings,
+                        review_prompt_side=create_deck_review_prompt_side,
                     )
                     deck = self.get_deck(int(created_deck_id))
                     target_deck = {

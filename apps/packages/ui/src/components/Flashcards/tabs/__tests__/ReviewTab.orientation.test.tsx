@@ -1,25 +1,20 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { ReviewTab } from "../ReviewTab"
-import { clearSetting } from "@/services/settings/registry"
-import {
-  FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING,
-  FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING
-} from "@/services/settings/ui-settings"
 import {
   useDecksQuery,
   useCramQueueQuery,
   useReviewQuery,
   useReviewFlashcardMutation,
+  useRecentFlashcardReviewSessionsQuery,
   useGlobalFlashcardTagSuggestionsQuery,
   useFlashcardAssistantQuery,
   useFlashcardAssistantRespondMutation,
   useUpdateFlashcardMutation,
   useResetFlashcardSchedulingMutation,
   useDeleteFlashcardMutation,
-  useRecentFlashcardReviewSessionsQuery,
   useFlashcardShortcuts,
-  useDebouncedFormField,
   useDueCountsQuery,
   useDeckDueCountsQuery,
   useReviewAnalyticsSummaryQuery,
@@ -137,67 +132,57 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   })
 }
 
-describe("ReviewTab cram mode", () => {
-  const reviewMutateAsync = vi.fn()
+const makeDeck = (id: number, name: string, reviewPromptSide: "front" | "back" = "front") => ({
+  id,
+  name,
+  review_prompt_side: reviewPromptSide,
+  deleted: false,
+  client_id: "test",
+  version: 1
+})
 
-  beforeEach(async () => {
+const makeCard = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  uuid: "review-card-1",
+  deck_id: 1,
+  front: "ATP",
+  back: "Energy currency",
+  notes: null,
+  extra: null,
+  is_cloze: false,
+  tags: [],
+  ef: 2.5,
+  interval_days: 2,
+  repetitions: 1,
+  lapses: 0,
+  due_at: null,
+  last_reviewed_at: null,
+  last_modified: null,
+  deleted: false,
+  client_id: "test",
+  version: 2,
+  model_type: "basic",
+  reverse: false,
+  ...overrides
+})
+
+describe("ReviewTab orientation", () => {
+  const reviewMutateAsync = vi.fn()
+  let currentDecks: Array<ReturnType<typeof makeDeck>>
+  let currentCard: ReturnType<typeof makeCard>
+
+  beforeEach(() => {
     vi.clearAllMocks()
-    await clearSetting(FLASHCARDS_SHORTCUT_HINT_DENSITY_SETTING)
-    await clearSetting(FLASHCARDS_REVIEW_ONBOARDING_DISMISSED_SETTING)
-    vi.mocked(useDecksQuery).mockReturnValue({
-      data: [{ id: 1, name: "Biology" }],
+    currentDecks = [makeDeck(1, "Biology", "front"), makeDeck(2, "Physics", "front")]
+    currentCard = makeCard()
+
+    vi.mocked(useDecksQuery).mockImplementation(() => ({
+      data: currentDecks,
       isLoading: false
-    } as any)
-    vi.mocked(useReviewQuery).mockReturnValue({
-      data: {
-        uuid: "due-card-1",
-        deck_id: 1,
-        front: "Due front",
-        back: "Due back",
-        notes: null,
-        extra: null,
-        is_cloze: false,
-        tags: [],
-        ef: 2.5,
-        interval_days: 2,
-        repetitions: 1,
-        lapses: 0,
-        due_at: null,
-        last_reviewed_at: null,
-        last_modified: null,
-        deleted: false,
-        client_id: "test",
-        version: 2,
-        model_type: "basic",
-        reverse: false
-      }
-    } as any)
-    vi.mocked(useCramQueueQuery).mockReturnValue({
-      data: [
-        {
-          uuid: "cram-card-1",
-          deck_id: 1,
-          front: "Cram front",
-          back: "Cram back",
-          notes: null,
-          extra: null,
-          is_cloze: false,
-          tags: ["biology"],
-          ef: 2.5,
-          interval_days: 2,
-          repetitions: 1,
-          lapses: 0,
-          due_at: null,
-          last_reviewed_at: null,
-          last_modified: null,
-          deleted: false,
-          client_id: "test",
-          version: 2,
-          model_type: "basic",
-          reverse: false
-        }
-      ]
-    } as any)
+    } as any))
+    vi.mocked(useReviewQuery).mockImplementation(() => ({
+      data: currentCard
+    } as any))
+    vi.mocked(useCramQueueQuery).mockReturnValue({ data: [] } as any)
     vi.mocked(useReviewFlashcardMutation).mockReturnValue({
       mutateAsync: reviewMutateAsync
     } as any)
@@ -233,7 +218,6 @@ describe("ReviewTab cram mode", () => {
       isError: false
     } as any)
     vi.mocked(useFlashcardShortcuts).mockImplementation(() => undefined)
-    vi.mocked(useDebouncedFormField).mockReturnValue(undefined as any)
     vi.mocked(useDueCountsQuery).mockReturnValue({
       data: { due: 1, new: 0, learning: 0, total: 1 }
     } as any)
@@ -246,7 +230,7 @@ describe("ReviewTab cram mode", () => {
     vi.mocked(useNextDueQuery).mockReturnValue({ data: null } as any)
   })
 
-  it("shows cram controls and tag filter when cram mode is selected", () => {
+  const renderReviewTab = (props?: Partial<React.ComponentProps<typeof ReviewTab>>) =>
     render(
       <ReviewTab
         onNavigateToCreate={() => {}}
@@ -254,72 +238,133 @@ describe("ReviewTab cram mode", () => {
         reviewDeckId={1}
         onReviewDeckChange={() => {}}
         isActive
+        {...props}
       />
     )
 
-    fireEvent.click(screen.getByText("Cram"))
-    expect(screen.getByTestId("flashcards-review-cram-tag")).toBeInTheDocument()
-    expect(screen.getByTestId("flashcards-review-cram-update-schedule")).toBeInTheDocument()
-    expect(screen.getByText("Cram front")).toBeInTheDocument()
-  })
+  it("shows the front as the prompt by default", async () => {
+    renderReviewTab()
 
-  it("does not call review mutation when practicing in cram mode without schedule updates", async () => {
-    render(
-      <ReviewTab
-        onNavigateToCreate={() => {}}
-        onNavigateToImport={() => {}}
-        reviewDeckId={1}
-        onReviewDeckChange={() => {}}
-        isActive
-      />
-    )
-
-    fireEvent.click(screen.getByText("Cram"))
-    fireEvent.click(screen.getByTestId("flashcards-review-show-answer"))
-    fireEvent.click(screen.getByTestId("flashcards-review-rate-3"))
-
-    expect(reviewMutateAsync).not.toHaveBeenCalled()
-    expect(messageSpies.success).toHaveBeenCalledWith(
-      "Practice saved. Scheduling unchanged."
-    )
     await waitFor(() => {
-      expect(
-        screen.getByText("1 cards practiced in this cram session")
-      ).toBeInTheDocument()
+      expect(screen.getByText("Front")).toBeInTheDocument()
     })
+    expect(screen.getByText("ATP")).toBeInTheDocument()
+    expect(screen.queryByText("Back")).not.toBeInTheDocument()
   })
 
-  it("keeps cram queue progression unchanged when the prompt side flips", async () => {
-    render(
-      <ReviewTab
-        onNavigateToCreate={() => {}}
-        onNavigateToImport={() => {}}
-        reviewDeckId={1}
-        onReviewDeckChange={() => {}}
-        isActive
-      />
-    )
+  it("shows the back as the prompt when the deck default is back-first", async () => {
+    currentDecks = [makeDeck(1, "Biology", "back")]
 
-    fireEvent.click(screen.getByText("Cram"))
+    renderReviewTab()
+
+    await waitFor(() => {
+      expect(screen.getByText("Back")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Energy currency")).toBeInTheDocument()
+    expect(screen.queryByText("ATP")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("flashcards-review-show-answer"))
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Front").length).toBeGreaterThan(0)
+    })
+    expect(screen.getByText("ATP")).toBeInTheDocument()
+  })
+
+  it("ignores back-first orientation for cloze cards", async () => {
+    currentDecks = [makeDeck(1, "Biology", "back")]
+    currentCard = makeCard({
+      front: "The {{c1::ATP}} powers the cell.",
+      back: "ATP",
+      is_cloze: true,
+      model_type: "cloze"
+    })
+
+    renderReviewTab()
+
+    await waitFor(() => {
+      expect(screen.getByText("Front")).toBeInTheDocument()
+    })
+    expect(screen.getByText("The {{c1::ATP}} powers the cell.")).toBeInTheDocument()
+    expect(screen.queryByText("Back")).not.toBeInTheDocument()
+  })
+
+  it("locks the prompt-side control to front-first for cloze cards", async () => {
+    const { rerender } = renderReviewTab()
+
     fireEvent.click(screen.getByText("Back first"))
 
     await waitFor(() => {
       expect(screen.getByText("Back")).toBeInTheDocument()
     })
-    expect(screen.getByText("Cram back")).toBeInTheDocument()
 
-    fireEvent.click(screen.getByTestId("flashcards-review-show-answer"))
-    fireEvent.click(screen.getByTestId("flashcards-review-rate-3"))
-
-    expect(reviewMutateAsync).not.toHaveBeenCalled()
-    expect(messageSpies.success).toHaveBeenCalledWith(
-      "Practice saved. Scheduling unchanged."
-    )
-    await waitFor(() => {
-      expect(
-        screen.getByText("1 cards practiced in this cram session")
-      ).toBeInTheDocument()
+    currentCard = makeCard({
+      front: "The {{c1::ATP}} powers the cell.",
+      back: "ATP",
+      is_cloze: true,
+      model_type: "cloze"
     })
-    expect(screen.getByTestId("flashcards-review-empty-card")).toBeInTheDocument()
+
+    rerender(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={1}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Front")).toBeInTheDocument()
+    })
+
+    const promptSideToggle = screen.getByTestId("flashcards-review-prompt-side-toggle")
+    const frontOption = within(promptSideToggle).getByText("Front first").closest(
+      ".ant-segmented-item"
+    )
+    const backOption = within(promptSideToggle).getByText("Back first").closest(
+      ".ant-segmented-item"
+    )
+
+    expect(promptSideToggle).toHaveClass("ant-segmented-disabled")
+    expect(frontOption).toHaveClass("ant-segmented-item-selected")
+    expect(backOption).not.toHaveClass("ant-segmented-item-selected")
+  })
+
+  it("uses the session override instead of the deck default", async () => {
+    renderReviewTab()
+
+    fireEvent.click(screen.getByText("Back first"))
+
+    await waitFor(() => {
+      expect(screen.getByText("Back")).toBeInTheDocument()
+    })
+    expect(screen.getByText("Energy currency")).toBeInTheDocument()
+  })
+
+  it("resets the session override when the review scope changes", async () => {
+    const { rerender } = renderReviewTab()
+
+    fireEvent.click(screen.getByText("Back first"))
+
+    await waitFor(() => {
+      expect(screen.getByText("Back")).toBeInTheDocument()
+    })
+
+    rerender(
+      <ReviewTab
+        onNavigateToCreate={() => {}}
+        onNavigateToImport={() => {}}
+        reviewDeckId={2}
+        onReviewDeckChange={() => {}}
+        isActive
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText("Front")).toBeInTheDocument()
+    })
+    expect(screen.getByText("ATP")).toBeInTheDocument()
   })
 })
