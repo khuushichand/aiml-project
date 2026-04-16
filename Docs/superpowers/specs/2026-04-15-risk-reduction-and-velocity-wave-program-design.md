@@ -69,6 +69,8 @@ Primary evidence used:
 - Work proceeds in subsystem waves of about one week each.
 - Each wave should leave a subsystem safer, better tested, and easier to modify.
 - Implementation planning happens wave-by-wave, not program-wide.
+- Each implementation plan should cap the active wave to roughly `3-5` confirmed findings plus the regressions and local boundary cleanup needed to close them.
+- If a subsystem backlog is too large for that cap, planning must split it into an explicit follow-on wave or follow-on backlog before implementation begins.
 
 ### Non-Goals
 
@@ -121,7 +123,8 @@ Reason rejected:
 - Work is batched as subsystem waves, not tiny isolated fixes and not one mega-plan.
 - Each wave includes only the work needed to improve safety, determinism, and local maintainability in that subsystem.
 - Each wave must include regression coverage for the corrected contracts.
-- Implementation planning begins with Wave 1 only. Later waves get their own planning pass after the earlier wave is complete or stable enough to sequence the next one.
+- Implementation planning begins with Wave 1 only. Later waves get their own planning pass only after the active wave has a green targeted verification set and no unresolved high-severity regressions still attributed to that subsystem.
+- A wave cannot be used as a catch-all bucket. Shared follow-up waves must name a bounded contract surface before planning starts.
 
 ## 7. Wave Template
 
@@ -180,6 +183,12 @@ Required outcome:
 - trusted path enforcement is real rather than lexical-only
 - backend reset and replacement paths do not leak hidden state
 
+Planning note:
+
+- This subsystem is too large to treat as one unlimited week-long backlog.
+- Wave 1 planning must cap itself to the highest-risk `3-5` confirmed DB/bootstrap findings across these targets.
+- Lower-priority DB-management cleanup that does not fit that cap becomes explicit follow-on backlog, not silent stretch scope.
+
 ### Wave 2: ChaChaNotes And Character/Chat Lifecycle
 
 Primary targets:
@@ -227,9 +236,10 @@ Required outcome:
 
 Primary targets:
 
-- backend endpoint contract inconsistencies uncovered during earlier waves
+- backend endpoint contract inconsistencies that affect multiple frontend consumers or repeated client-call patterns across subsystems
 - `apps/packages/ui/src/services/tldw/TldwApiClient.ts`
 - directly affected frontend consumers and contract tests
+- explicitly exclude single-feature endpoint quirks that still belong to their owning subsystem waves
 
 Required outcome:
 
@@ -251,6 +261,23 @@ Required outcome:
 - the largest files have clearer internal boundaries
 - edit surfaces are smaller and side effects more local
 - maintainability improves without reopening previously stabilized behavior
+
+### Deferred But Tracked Areas
+
+This six-wave sequence is the first cleanup tranche, not the full long-term backlog for the repository.
+
+Reviewed or remediated areas not explicitly sequenced above are deferred unless they become blockers or escalate in severity during an active wave. Current examples include:
+
+- moderation follow-up
+- monitoring follow-up
+- metrics follow-up
+- embeddings follow-up
+- workflows follow-up
+- writing follow-up
+- audit and AuthNZ follow-up outside the Wave 1 bootstrap path
+- deeper MCP or RAG follow-up beyond the specific boundaries named in the six waves
+
+Deferral does not mean those areas are unimportant. It means they do not outrank the six-wave sequence for the current risk-reduction program unless new evidence changes their priority.
 
 ## 10. Execution Model
 
@@ -275,7 +302,7 @@ A wave is complete only when:
 
 - the top confirmed risks in that subsystem are fixed or explicitly downgraded with evidence
 - the touched subsystem has stronger regression coverage than before
-- mixed-suite or lifecycle failures in scope are fixed or isolated with a clear root cause and next action
+- mixed-suite or lifecycle failures in scope are fixed, or shown with evidence to originate outside the active subsystem and handed off to the owning subsystem backlog with an explicit next action
 - any behavior or contract changes are documented
 - the subsystem is easier to modify than before, not merely different
 
@@ -289,6 +316,10 @@ Implementation planning should proceed as follows:
 - use the wave template and intake rules in this spec as the planning guardrails
 - do not write one plan covering all six waves
 - after Wave 1 reaches a stable endpoint, repeat the same design-to-plan process for Wave 2
+- for planning purposes, `stable endpoint` means:
+  - targeted verification for the wave is green
+  - any remaining high-severity defects are proven out of scope for that subsystem or explicitly handed off
+  - the wave backlog is no longer carrying hidden stretch items
 
 ## 13. Success Criteria
 
