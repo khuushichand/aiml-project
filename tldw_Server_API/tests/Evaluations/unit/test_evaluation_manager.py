@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 from tldw_Server_API.tests.Evaluations.fixtures.sample_data import (
     SampleDataGenerator,
@@ -62,6 +63,24 @@ class TestEvaluationManagerInit:
                 assert ".." not in str(safe_path)
                 # Ensure path doesn't contain null bytes
                 assert "\x00" not in str(safe_path)
+
+    def test_explicit_db_path_outside_trusted_roots_falls_back_to_default(self, monkeypatch):
+        """Explicit paths should not bypass the manager's trusted-path rules."""
+        import tldw_Server_API.app.core.Evaluations.evaluation_manager as manager_module
+
+        monkeypatch.setattr(
+            manager_module.EvaluationManager,
+            "_init_database",
+            lambda self: None,
+            raising=False,
+        )
+
+        manager = manager_module.EvaluationManager(
+            db_path="/etc/escape-evals.db",
+            user_id="tenant-user",
+        )
+
+        assert manager.db_path == DatabasePaths.get_evaluations_db_path("tenant-user")
 
     def test_database_migration_on_init(self, temp_db_path):
 

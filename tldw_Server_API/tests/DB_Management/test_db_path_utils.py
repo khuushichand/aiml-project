@@ -196,6 +196,27 @@ def test_resolve_trusted_database_path_rejects_symlink_escape(monkeypatch, tmp_p
         db_path_utils.resolve_trusted_database_path(trusted_dir / "escape" / "users.db")
 
 
+def test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    real_temp_root = tmp_path / "private_tmp"
+    temp_alias = tmp_path / "var_alias"
+    project_root.mkdir()
+    real_temp_root.mkdir()
+    temp_alias.symlink_to(real_temp_root, target_is_directory=True)
+
+    monkeypatch.setattr(db_path_utils, "get_project_root", lambda: str(project_root))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: True)
+    monkeypatch.setattr(db_path_utils.tempfile, "gettempdir", lambda: str(temp_alias))
+
+    resolved = db_path_utils.resolve_trusted_database_path(temp_alias / "dbs" / "app.db")
+
+    _expect_equal(
+        resolved,
+        real_temp_root / "dbs" / "app.db",
+        "trusted temp paths should be compared using canonicalized paths",
+    )
+
+
 def test_resolve_trusted_database_path_rejects_unresolved_home_prefix(monkeypatch, tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()

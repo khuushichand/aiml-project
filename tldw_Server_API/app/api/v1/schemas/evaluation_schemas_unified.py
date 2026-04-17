@@ -14,6 +14,8 @@ from typing import Any, Literal, Optional, Union
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from tldw_Server_API.app.core.Evaluations.run_state import normalize_run_status
+
 try:
     import bleach
 except Exception:
@@ -327,6 +329,11 @@ class RunResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, value: Any) -> str:
+        return normalize_run_status(value)
+
 
 class RunResultsResponse(BaseModel):
     """Run results response"""
@@ -338,6 +345,11 @@ class RunResultsResponse(BaseModel):
     results: dict[str, Any]
     usage: Optional[dict[str, int]] = None
     duration_seconds: float
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, value: Any) -> str:
+        return normalize_run_status(value)
 
 
 class CreateDatasetRequest(BaseModel):

@@ -302,3 +302,36 @@ async def test_process_batch_honors_max_workers(tmp_path):
         timeout_seconds=1.0,
     )
     assert max_seen <= 2
+
+
+def test_cancel_run_does_not_overwrite_completed_status(monkeypatch, tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+
+    class _Task:
+        def __init__(self) -> None:
+            self.cancel_called = False
+
+        def cancel(self) -> None:
+            self.cancel_called = True
+
+    task = _Task()
+    runner.running_tasks["run_terminal"] = task
+
+    monkeypatch.setattr(
+        runner.db,
+        "get_run",
+        lambda run_id: {"id": run_id, "status": "completed"},
+    )
+
+    status_updates: list[tuple[str, str, str | None]] = []
+
+    def _record_status(run_id: str, status: str, error_message: str | None = None) -> bool:
+        status_updates.append((run_id, status, error_message))
+        return True
+
+    monkeypatch.setattr(runner.db, "update_run_status", _record_status)
+
+    assert runner.cancel_run("run_terminal") is False
+    assert status_updates == []
+    assert task.cancel_called is False
+    assert runner.running_tasks["run_terminal"] is task

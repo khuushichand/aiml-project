@@ -50,6 +50,10 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
+from tldw_Server_API.app.core.Evaluations.run_state import (
+    can_transition_run_status,
+    normalize_run_status,
+)
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
@@ -2364,6 +2368,10 @@ class EvaluationRunner:
     def cancel_run(self, run_id: str) -> bool:
         """Cancel a running evaluation"""
         if run_id in self.running_tasks:
+            run = self.db.get_run(run_id)
+            current_status = normalize_run_status(run.get("status") if run else None)
+            if not can_transition_run_status(current_status, "cancelled"):
+                return False
             task = self.running_tasks[run_id]
             task.cancel()
             self.db.update_run_status(run_id, "cancelled")
@@ -2375,7 +2383,7 @@ class EvaluationRunner:
         """Get the status of a run"""
         run = self.db.get_run(run_id)
         if run:
-            return run["status"]
+            return normalize_run_status(run.get("status"))
         return None
 
     async def shutdown(self) -> None:
