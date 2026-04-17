@@ -250,7 +250,7 @@ git commit -m "fix: enforce shared outbound policy across scrape paths"
 - Test: `tldw_Server_API/tests/Security/test_websearch_egress_guard.py`
 - Test: `tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py`
 
-- [ ] **Step 1: Write the failing websearch and research regressions**
+- [x] **Step 1: Write the failing websearch and research regressions**
 
 ```python
 def test_websearch_provider_strict_returns_shared_policy_reason(monkeypatch):
@@ -269,12 +269,12 @@ async def test_research_agent_scrape_url_surfaces_strict_policy_block(monkeypatc
     assert result.error == "Blocked by outbound policy"
 ```
 
-- [ ] **Step 2: Run the websearch and research regressions to verify they fail**
+- [x] **Step 2: Run the websearch and research regressions to verify they fail**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebSearch/test_websearch_core.py tldw_Server_API/tests/Security/test_websearch_egress_guard.py tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py -v`
 Expected: FAIL on missing shared mode behavior and missing shared reason propagation.
 
-- [ ] **Step 3: Implement the minimal websearch migration**
+- [x] **Step 3: Implement the minimal websearch migration**
 
 ```python
 decision = decide_web_outbound_policy_sync(
@@ -291,8 +291,9 @@ Implementation requirements:
 - provider API calls use the shared helper for raw egress-mode evaluation and reason normalization
 - robots policy is only applied to scrape-style URL fetches and follow-up page retrieval, not synthesized for provider API endpoints
 - keep `research_agent.py` untouched unless the focused test proves an explicit error-shape bridge is required
+- migrate the remaining raw provider-like egress sites in `WebSearch_APIs.py` that share the same contract, including 4chan catalog/archive/thread fetches and provider stubs, instead of leaving mixed helper and non-helper seams in one file
 
-- [ ] **Step 4: Re-run the websearch and research tests**
+- [x] **Step 4: Re-run the websearch and research tests**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebSearch/test_websearch_core.py tldw_Server_API/tests/Security/test_websearch_egress_guard.py tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py -v`
 Expected: PASS

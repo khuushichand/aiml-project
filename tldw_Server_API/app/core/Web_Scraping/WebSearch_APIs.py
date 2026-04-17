@@ -38,6 +38,9 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
+from tldw_Server_API.app.core.Web_Scraping.outbound_policy import (
+    decide_web_outbound_policy_sync,
+)
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
@@ -91,6 +94,34 @@ def _websearch_browser_headers(
 def get_loaded_config() -> dict[str, Any]:
     """Lazy, cached config loader to avoid import-time I/O and duplicate logs."""
     return load_and_log_configs()
+
+
+def _provider_outbound_policy_decision(
+    url: str,
+    *,
+    source: str,
+    stage: str = "provider_request",
+):
+    try:
+        return decide_web_outbound_policy_sync(
+            url,
+            respect_robots=False,
+            source=source,
+            stage=stage,
+        )
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+        raise ValueError(f"Outbound policy evaluation failed: {exc}") from exc
+
+
+def _enforce_provider_outbound_policy(
+    url: str,
+    *,
+    source: str,
+    stage: str = "provider_request",
+) -> None:
+    decision = _provider_outbound_policy_decision(url, source=source, stage=stage)
+    if not decision.allowed:
+        raise ValueError(f"Blocked by outbound policy: {decision.reason}")
 
 
 def _get_relevance_jitter_ms() -> int:
@@ -1777,14 +1808,10 @@ def parse_html_search_results_generic(soup):
 # https://oxylabs.io/blog/how-to-scrape-baidu-search-results
 def search_web_baidu(arg1, arg2, arg3):
     """Baidu provider stub with egress policy check."""
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        # Use canonical host for policy; actual API endpoint TBD
-        pol = evaluate_url_policy("https://www.baidu.com")
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(
+        "https://www.baidu.com",
+        source="websearch_baidu",
+    )
     return {"error": "Baidu provider not implemented"}
 
 
@@ -1882,14 +1909,7 @@ def search_web_brave(
 
     filtered_params = {key: value for key, value in params.items() if value is not None}
 
-    # Enforce SSRF/egress policy
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(search_url)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(search_url, source="websearch_brave")
 
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     response = brave_http_get(search_url, headers=headers, params=filtered_params)
@@ -2020,8 +2040,11 @@ def search_web_duckduckgo(
 
     ddg_url = "https://html.duckduckgo.com/html"
     try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        if not evaluate_url_policy(ddg_url).allowed:
+        decision = _provider_outbound_policy_decision(
+            ddg_url,
+            source="websearch_duckduckgo_html",
+        )
+        if not decision.allowed:
             return results
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
         return results
@@ -2321,14 +2344,7 @@ def search_web_google(
 
         logging.info(f"Prepared parameters for Google Search: {params}")
 
-        # Enforce SSRF/egress policy
-        try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(search_url)
-            if not getattr(pol, 'allowed', False):
-                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-            raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+        _enforce_provider_outbound_policy(search_url, source="websearch_google")
 
         # Make the API call with centralized client
         from tldw_Server_API.app.core.http_client import fetch_json
@@ -2519,14 +2535,7 @@ def search_web_kagi(query: str, limit: int = 10) -> dict:
     endpoint = search_url
     params = {"q": query, "limit": limit}
 
-    # Enforce SSRF/egress policy
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(endpoint)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(endpoint, source="websearch_kagi")
 
     from tldw_Server_API.app.core.http_client import fetch_json
     data = fetch_json(method="GET", url=endpoint, headers=headers, params=params, timeout=15.0)
@@ -2656,14 +2665,7 @@ def search_web_searx(
 
     # Perform the search request
     try:
-        # Enforce SSRF/egress policy for Searx endpoint
-        try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(search_url)
-            if not getattr(pol, 'allowed', False):
-                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-            raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+        _enforce_provider_outbound_policy(search_url, source="websearch_searx")
 
         # Mimic browser headers via centralized UA builder
         headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5", restrict_encodings_for_requests=True)
@@ -2873,13 +2875,7 @@ def search_web_serper(
     if tbs:
         payload["tbs"] = tbs
 
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(serper_api_url)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(serper_api_url, source="websearch_serper")
 
     headers = {
         "Content-Type": "application/json",
@@ -2967,15 +2963,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
     if site_blacklist:
         payload["exclude_domains"] = site_blacklist
 
-    # Enforce SSRF/egress policy
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(tavily_api_url)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        # Surface policy evaluation failure in a consistent way
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(tavily_api_url, source="websearch_tavily")
 
     # Perform the search request
     try:
@@ -3067,14 +3055,7 @@ def search_web_exa(
     if site_blacklist:
         payload["excludeDomains"] = site_blacklist
 
-    # Enforce SSRF/egress policy
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(exa_api_url)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(exa_api_url, source="websearch_exa")
 
     headers = {"Content-Type": "application/json", "x-api-key": exa_api_key}
     from tldw_Server_API.app.core.http_client import fetch_json
@@ -3145,14 +3126,10 @@ def search_web_firecrawl(
     if date_range:
         payload["tbs"] = date_range
 
-    # Enforce SSRF/egress policy
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy(firecrawl_api_url)
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(
+        firecrawl_api_url,
+        source="websearch_firecrawl",
+    )
 
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {firecrawl_api_key}"}
     from tldw_Server_API.app.core.http_client import fetch_json
@@ -3560,10 +3537,11 @@ def search_web_4chan(
         catalog_url = f"https://a.4cdn.org/{board}/catalog.json"
 
         try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(catalog_url)
-            if not getattr(pol, "allowed", False):
-                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+            _enforce_provider_outbound_policy(
+                catalog_url,
+                source="websearch_4chan_catalog",
+                stage="board_catalog_request",
+            )
             catalog_payload = fetch_json(method="GET", url=catalog_url, headers=headers, timeout=15.0)
             pages = catalog_payload if isinstance(catalog_payload, list) else []
             successful_boards.add(board)
@@ -3600,10 +3578,11 @@ def search_web_4chan(
         if include_archived:
             archive_url = f"https://a.4cdn.org/{board}/archive.json"
             try:
-                from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-                pol = evaluate_url_policy(archive_url)
-                if not getattr(pol, "allowed", False):
-                    raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+                _enforce_provider_outbound_policy(
+                    archive_url,
+                    source="websearch_4chan_archive",
+                    stage="board_archive_request",
+                )
                 archive_payload = fetch_json(method="GET", url=archive_url, headers=headers, timeout=15.0)
                 archive_ids = archive_payload if isinstance(archive_payload, list) else []
                 successful_boards.add(board)
@@ -3616,9 +3595,12 @@ def search_web_4chan(
 
                     thread_api_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
                     try:
-                        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-                        pol = evaluate_url_policy(thread_api_url)
-                        if not getattr(pol, "allowed", False):
+                        decision = _provider_outbound_policy_decision(
+                            thread_api_url,
+                            source="websearch_4chan_thread",
+                            stage="thread_request",
+                        )
+                        if not decision.allowed:
                             continue
                     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
                         continue
@@ -3739,13 +3721,10 @@ def parse_4chan_results(fourchan_search_results, web_search_results_dict):
 # https://github.com/yandex-cloud/cloudapi/blob/master/yandex/cloud/searchapi/v2/search_query.proto
 def search_web_yandex():
     """Yandex provider stub with egress policy check."""
-    try:
-        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-        pol = evaluate_url_policy("https://yandex.cloud")
-        if not getattr(pol, 'allowed', False):
-            raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
+    _enforce_provider_outbound_policy(
+        "https://yandex.cloud",
+        source="websearch_yandex",
+    )
     return {"error": "Yandex provider not implemented"}
 
 
