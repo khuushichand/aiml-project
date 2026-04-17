@@ -46,7 +46,7 @@ import uuid  # noqa: E402
 from configparser import ConfigParser  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, Protocol, TypeAlias  # noqa: E402
 
 from loguru import logger  # noqa: E402
 
@@ -459,6 +459,21 @@ class BackendConnectionWrapper:
 
     def __getattr__(self, item):
         return getattr(self._connection, item)
+
+
+class SupportsRawBackendConnection(Protocol):
+    """Protocol for pooled backend connections handled outside sqlite3."""
+
+    def close(self) -> Any: ...
+
+    def commit(self) -> Any: ...
+
+    def rollback(self) -> Any: ...
+
+    def cursor(self) -> Any: ...
+
+
+RawBackendConnection: TypeAlias = sqlite3.Connection | SupportsRawBackendConnection
 
 
 class BackendManagedTransaction:
@@ -5321,7 +5336,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return transform_sqlite_query_for_postgres(query)
 
 
-    def _open_new_connection(self, backend: DatabaseBackend | None = None) -> Any:
+    def _open_new_connection(self, backend: DatabaseBackend | None = None) -> RawBackendConnection:
         active_backend = backend or self.backend
         try:
             pool = active_backend.get_pool()
@@ -5333,7 +5348,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc  # noqa: TRY003
 
-    def _apply_postgres_client_scope(self, conn, pool):
+    def _apply_postgres_client_scope(
+        self,
+        conn: RawBackendConnection,
+        pool,
+    ) -> RawBackendConnection:
         """Best-effort helper to set session-scoped client_id in PostgreSQL.
 
         Ensures failed SET/COMMIT attempts do not leave pooled connections in a
@@ -5354,7 +5373,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     (user_value,),
                 )
 
-        def _replace_connection(bad_conn) -> Any:
+        def _replace_connection(bad_conn: RawBackendConnection) -> RawBackendConnection:
             with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
                 bad_conn.close()
             with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
@@ -5411,7 +5430,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     _safe_rollback(conn, "retry failure")
         return conn
 
-    def _release_connection(self, connection: Any, backend: DatabaseBackend | None = None) -> None:
+    def _release_connection(
+        self,
+        connection: RawBackendConnection,
+        backend: DatabaseBackend | None = None,
+    ) -> None:
         active_backend = backend or self._get_pinned_backend() or self._backend
         try:
             if active_backend.backend_type == BackendType.SQLITE:
