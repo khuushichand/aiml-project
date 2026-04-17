@@ -39,8 +39,15 @@ def test_benchmark_helper_uses_canonical_string_scope(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(benchmarks_ep, "EvaluationManager", _Manager)
 
+    identity = EvaluationIdentity(
+        user_scope="tenant-user",
+        created_by="tenant-user",
+        rate_limit_subject="tenant-user",
+        webhook_user_id="user_tenant-user",
+    )
+
     benchmarks_ep._get_evaluation_manager_for_user(
-        User(id="tenant-user", username="tenant", email=None, is_active=True)
+        identity
     )
 
     assert captured["user_id"] == "tenant-user"

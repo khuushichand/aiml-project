@@ -331,15 +331,15 @@ class RunResponse(BaseModel):
 
     @field_validator("status", mode="before")
     @classmethod
-    def _normalize_status(cls, value: Any) -> str:
-        return normalize_run_status(value)
+    def _normalize_status(cls, value: Any) -> RunStatus:
+        return RunStatus(normalize_run_status(value))
 
 
 class RunResultsResponse(BaseModel):
     """Run results response"""
     id: str
     eval_id: str
-    status: str
+    status: RunStatus
     started_at: int
     completed_at: int
     results: dict[str, Any]
@@ -348,8 +348,8 @@ class RunResultsResponse(BaseModel):
 
     @field_validator("status", mode="before")
     @classmethod
-    def _normalize_status(cls, value: Any) -> str:
-        return normalize_run_status(value)
+    def _normalize_status(cls, value: Any) -> RunStatus:
+        return RunStatus(normalize_run_status(value))
 
 
 class CreateDatasetRequest(BaseModel):

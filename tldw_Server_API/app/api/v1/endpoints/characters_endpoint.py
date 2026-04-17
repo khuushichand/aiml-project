@@ -2149,7 +2149,6 @@ async def delete_world_book(
         delete_type = "permanently deleted" if hard_delete else "soft-deleted"
         return WorldBookDeletionResponse(
             message=f"World book '{book_name}' (ID: {world_book_id}) {delete_type}",
-            character_id=world_book_id,
             world_book_id=world_book_id,
         )
 
@@ -2450,7 +2449,6 @@ async def delete_world_book_entry(
 
         return WorldBookEntryDeletionResponse(
             message=f"World book entry (ID: {entry_id}) deleted",
-            character_id=entry_id,
             entry_id=entry_id,
         )
 
@@ -2553,7 +2551,6 @@ async def detach_world_book_from_character(
 
         return CharacterWorldBookDetachDeletionResponse(
             message=f"World book {world_book_id} detached from character {character_id}",
-            character_id=world_book_id,
             world_book_id=world_book_id,
             detached_from_character_id=character_id,
         )

@@ -19,7 +19,7 @@ The March 2026 characters-backend review is no longer a safe list of assumed-liv
 Command:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+source .venv/bin/activate
 python -m pytest \
   tldw_Server_API/tests/Character_Chat/test_character_chat_endpoints.py \
   tldw_Server_API/tests/Character_Chat_NEW/integration/test_character_chat_auto_routing.py \
@@ -54,7 +54,7 @@ Failure shape:
 Command:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+source .venv/bin/activate
 python -m pytest tldw_Server_API/tests/Streaming/test_character_chat_sse_unified_flag.py -v
 ```
 
@@ -73,7 +73,7 @@ Interpretation:
 Command:
 
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate
+source .venv/bin/activate
 python -m pytest \
   tldw_Server_API/tests/Character_Chat/test_world_book_and_limits.py \
   tldw_Server_API/tests/Character_Chat/test_world_book_negatives.py \

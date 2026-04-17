@@ -567,9 +567,15 @@ class UnifiedEvaluationService:
             # Cancellation path: persist cancelled status and notify listeners
             run = self.db.get_run(run_id, created_by=created_by)
             current_status = normalize_run_status(run.get("status") if run else None)
-            if can_transition_run_status(current_status, "cancelled"):
+            transitioned_to_cancelled = can_transition_run_status(current_status, "cancelled")
+            if transitioned_to_cancelled:
                 self.db.update_run_status(run_id, "cancelled")
-            if eval_config.get("webhook_url") and self.enable_webhooks and getattr(self, "webhook_manager", None):
+            if (
+                transitioned_to_cancelled
+                and eval_config.get("webhook_url")
+                and self.enable_webhooks
+                and getattr(self, "webhook_manager", None)
+            ):
                 effective_webhook_user = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(created_by) or created_by
                 await self.webhook_manager.send_webhook(
                     user_id=effective_webhook_user,
@@ -1613,6 +1619,9 @@ def get_unified_evaluation_service_for_user(user_id: str | int) -> UnifiedEvalua
                 pass
             _service_instances_by_user[uid_key] = svc
             return svc
+        # Temporary migration path: older in-process callers cached services under numeric
+        # user ids before canonical string scopes landed. Remove this branch after all
+        # callers and long-lived workers have been restarted on the string-scope contract.
         if legacy_numeric_key is not None and legacy_numeric_key in _service_instances_by_user:  # type: ignore[operator]
             svc = _service_instances_by_user.pop(legacy_numeric_key)  # type: ignore[arg-type]
             _service_instances_by_user[uid_key] = svc

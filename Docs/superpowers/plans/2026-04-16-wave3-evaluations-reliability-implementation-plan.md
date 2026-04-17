@@ -13,7 +13,7 @@
 ## Current-Tree Evidence
 
 - `2026-04-16` focused Wave 3 smoke slice:
-  - Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py`
+  - Run: `source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py`
   - Result: `21 passed, 1 failed, 33 warnings in 17.74s`
   - Live failure:
     - `tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py::test_batch_parallel_strict_fail_fast_cancels_remaining`
@@ -141,7 +141,7 @@ def test_explicit_db_path_outside_trusted_roots_falls_back_to_default(monkeypatc
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py::TestEvaluationManagerInit::test_explicit_db_path_outside_trusted_roots_falls_back_to_default tldw_Server_API/tests/DB_Management/test_db_path_utils.py::test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py::TestEvaluationManagerInit::test_explicit_db_path_outside_trusted_roots_falls_back_to_default tldw_Server_API/tests/DB_Management/test_db_path_utils.py::test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root
 ```
 
 Expected: FAIL because one or more current behaviors still coerce tenant-style ids to numeric/single-user state, fail open without an explicit fallback, or allow manager/trusted-path drift to escape the intended storage roots.
@@ -238,7 +238,7 @@ def get_evaluation_identity(current_user: User = Depends(get_eval_request_user))
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py::TestEvaluationManagerInit::test_explicit_db_path_outside_trusted_roots_falls_back_to_default tldw_Server_API/tests/DB_Management/test_db_path_utils.py::test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py::TestEvaluationManagerInit::test_explicit_db_path_outside_trusted_roots_falls_back_to_default tldw_Server_API/tests/DB_Management/test_db_path_utils.py::test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root
 ```
 
 Expected: PASS
@@ -309,7 +309,7 @@ Follow-on route coverage added after the first pass:
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/integration/test_embeddings_abtest_multi_user_api.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/integration/test_embeddings_abtest_multi_user_api.py
 ```
 
 Expected: FAIL because one or more routes or Jobs paths still bind services through `current_user.id`, raw `user_ctx`, or numeric-only owner coercion.
@@ -361,7 +361,7 @@ Keep docs aligned:
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/integration/test_embeddings_abtest_multi_user_api.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/integration/test_embeddings_abtest_multi_user_api.py
 ```
 
 Expected: PASS
@@ -420,7 +420,7 @@ Add route-level regressions:
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
 ```
 
 Expected: FAIL on at least the currently reproduced strict fail-fast test and one or more lifecycle/status normalization gaps.
@@ -476,7 +476,7 @@ Close the batch route/regression drift explicitly:
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
 ```
 
 Expected: PASS
@@ -497,7 +497,7 @@ git commit -m "fix: stabilize evaluations lifecycle and status contracts"
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/DB_Management/test_db_path_utils.py tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py tldw_Server_API/tests/Evaluations/unit/test_eval_runner.py tldw_Server_API/tests/Evaluations/unit/test_unified_evaluation_service_mapping.py tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/DB_Management/test_db_path_utils.py tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity.py tldw_Server_API/tests/Evaluations/unit/test_evaluation_manager.py tldw_Server_API/tests/Evaluations/unit/test_eval_runner.py tldw_Server_API/tests/Evaluations/unit/test_unified_evaluation_service_mapping.py tldw_Server_API/tests/Evaluations/unit/test_eval_run_state.py tldw_Server_API/tests/Evaluations/unit/test_evaluations_identity_route_bindings.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_evaluations_stage4_auth_policy_and_dataset_permissions.py tldw_Server_API/tests/Evaluations/integration/test_webhook_multi_user_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py tldw_Server_API/tests/Evaluations/test_abtest_events_sse_stream.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_run_api.py
 ```
 
 Expected: PASS
@@ -510,7 +510,7 @@ Observed:
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py
+source .venv/bin/activate && python -m pytest -v tldw_Server_API/tests/AuthNZ/unit/test_evaluations_auth_runtime_guards.py tldw_Server_API/tests/Evaluations/test_evaluations_stage1_route_and_error_regressions.py tldw_Server_API/tests/Evaluations/test_evaluations_stage3_batch_failfast_and_metrics_none.py tldw_Server_API/tests/Evaluations/test_evaluations_benchmarks_api.py tldw_Server_API/tests/Evaluations/test_embeddings_abtest_jobs_worker.py
 ```
 
 Expected: PASS
@@ -519,7 +519,7 @@ Expected: PASS
 
 Run:
 ```bash
-source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py tldw_Server_API/app/core/DB_Management/db_path_utils.py tldw_Server_API/app/core/Evaluations/identity.py tldw_Server_API/app/core/Evaluations/run_state.py tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py tldw_Server_API/app/core/Evaluations/user_rate_limiter.py tldw_Server_API/app/core/Evaluations/evaluation_manager.py tldw_Server_API/app/core/Evaluations/webhook_identity.py tldw_Server_API/app/core/Evaluations/eval_runner.py tldw_Server_API/app/core/Evaluations/embeddings_abtest_jobs_worker.py -f json -o /tmp/bandit_wave3_evals_reliability.json
+source .venv/bin/activate && python -m bandit -r tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_auth.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_crud.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_datasets.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_benchmarks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_unified.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_webhooks.py tldw_Server_API/app/api/v1/endpoints/evaluations/evaluations_embeddings_abtest.py tldw_Server_API/app/core/DB_Management/db_path_utils.py tldw_Server_API/app/core/Evaluations/identity.py tldw_Server_API/app/core/Evaluations/run_state.py tldw_Server_API/app/core/Evaluations/unified_evaluation_service.py tldw_Server_API/app/core/Evaluations/user_rate_limiter.py tldw_Server_API/app/core/Evaluations/evaluation_manager.py tldw_Server_API/app/core/Evaluations/webhook_identity.py tldw_Server_API/app/core/Evaluations/eval_runner.py tldw_Server_API/app/core/Evaluations/embeddings_abtest_jobs_worker.py -f json -o /tmp/bandit_wave3_evals_reliability.json
 ```
 
 Result: `/tmp/bandit_wave3_evals_reliability.json`

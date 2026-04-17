@@ -49,6 +49,17 @@ def test_canonical_evaluations_user_scope_requires_explicit_fallback_when_missin
 
 
 @pytest.mark.unit
+def test_canonical_evaluations_user_scope_retries_id_when_id_str_is_blank():
+    from tldw_Server_API.app.core.Evaluations.identity import canonical_evaluations_user_scope
+
+    class _UserLike:
+        id_str = ""
+        id = "tenant-user"
+
+    assert canonical_evaluations_user_scope(_UserLike()) == "tenant-user"
+
+
+@pytest.mark.unit
 def test_unified_service_cache_uses_canonical_string_scope(monkeypatch: pytest.MonkeyPatch):
     import tldw_Server_API.app.core.Evaluations.unified_evaluation_service as service_module
 

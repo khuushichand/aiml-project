@@ -471,7 +471,7 @@ async def get_embeddings_abtest_significance(
 ):
     identity = get_evaluation_identity(current_user)
     svc = get_unified_evaluation_service_for_user(identity.user_scope)
-    _ = svc.db.get_abtest(test_id, created_by=identity.created_by) or (
-        _ for _ in ()
-    ).throw(HTTPException(404, "abtest not found"))
+    abtest = svc.db.get_abtest(test_id, created_by=identity.created_by)
+    if abtest is None:
+        raise HTTPException(404, "abtest not found")
     return compute_significance(svc.db, test_id, metric=metric)

@@ -1048,9 +1048,9 @@ class TestCharacterAPIIntegration:
         )
         assert detach_response.status_code == 200, detach_response.text
         detach_payload = detach_response.json()
-        assert int(detach_payload["character_id"]) == world_book_id
         assert int(detach_payload["world_book_id"]) == world_book_id
         assert int(detach_payload["detached_from_character_id"]) == character_id
+        assert "character_id" not in detach_payload
 
         detached_list_response = client.get(
             f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books"
@@ -1101,16 +1101,16 @@ class TestCharacterAPIIntegration:
         )
         assert entry_delete_response.status_code == 200, entry_delete_response.text
         entry_delete_payload = entry_delete_response.json()
-        assert int(entry_delete_payload["character_id"]) == entry_id
         assert int(entry_delete_payload["entry_id"]) == entry_id
+        assert "character_id" not in entry_delete_payload
 
         world_book_delete_response = client.delete(
             f"{CHARACTERS_ENDPOINT_PREFIX}/world-books/{world_book_id}"
         )
         assert world_book_delete_response.status_code == 200, world_book_delete_response.text
         world_book_delete_payload = world_book_delete_response.json()
-        assert int(world_book_delete_payload["character_id"]) == world_book_id
         assert int(world_book_delete_payload["world_book_id"]) == world_book_id
+        assert "character_id" not in world_book_delete_payload
 
     def test_character_world_book_attachment_missing_references_integration(
         self, client: TestClient

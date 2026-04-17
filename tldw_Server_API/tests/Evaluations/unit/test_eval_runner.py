@@ -304,7 +304,7 @@ async def test_process_batch_honors_max_workers(tmp_path):
     assert max_seen <= 2
 
 
-def test_cancel_run_does_not_overwrite_completed_status(monkeypatch, tmp_path):
+def test_cancel_run_cleans_up_local_task_without_overwriting_completed_status(monkeypatch, tmp_path):
     runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
 
     class _Task:
@@ -333,5 +333,5 @@ def test_cancel_run_does_not_overwrite_completed_status(monkeypatch, tmp_path):
 
     assert runner.cancel_run("run_terminal") is False
     assert status_updates == []
-    assert task.cancel_called is False
-    assert runner.running_tasks["run_terminal"] is task
+    assert task.cancel_called is True
+    assert "run_terminal" not in runner.running_tasks

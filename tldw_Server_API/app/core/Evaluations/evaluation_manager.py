@@ -37,12 +37,17 @@ from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 class EvaluationManager:
     """Manages evaluation operations and persistence."""
 
-    def __init__(self, db_path: Optional[Union[str, Path]] = None, *, user_id: Optional[int | str] = None):
+    def __init__(self, db_path: Optional[Union[str, Path]] = None, *, user_id: Optional[int | str] = None) -> None:
         self.config = load_comprehensive_config()
-        self._user_id = canonical_evaluations_user_scope(
-            user_id,
-            fallback=DatabasePaths.get_single_user_id(),
-        )
+        if user_id is None:
+            self._user_id = canonical_evaluations_user_scope(
+                user_id,
+                fallback=DatabasePaths.get_single_user_id(),
+            )
+        elif isinstance(user_id, str) and not user_id.strip():
+            raise ValueError("Evaluations user scope is required")
+        else:
+            self._user_id = canonical_evaluations_user_scope(user_id)
         self.db_path = self._get_db_path(explicit_path=db_path)
         self._init_database()
         # Session identifier to isolate list operations within the lifetime of this manager

@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
 from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.Evaluations.identity import EvaluationIdentity
 
 from .evaluations_auth import (
     check_evaluation_rate_limit,
@@ -28,8 +29,7 @@ from .evaluations_auth import (
 benchmarks_router = APIRouter()
 
 
-def _get_evaluation_manager_for_user(current_user: User) -> EvaluationManager:
-    identity = get_evaluation_identity(current_user)
+def _get_evaluation_manager_for_user(identity: EvaluationIdentity) -> EvaluationManager:
     return EvaluationManager(user_id=identity.user_scope)
 
 
@@ -105,7 +105,7 @@ async def run_benchmark(
 ):
     try:
         identity = get_evaluation_identity(current_user)
-        evaluation_manager = _get_evaluation_manager_for_user(current_user)
+        evaluation_manager = _get_evaluation_manager_for_user(identity)
         stable_user_id = identity.created_by
         registry = get_registry()
         config = registry.get(benchmark_name)

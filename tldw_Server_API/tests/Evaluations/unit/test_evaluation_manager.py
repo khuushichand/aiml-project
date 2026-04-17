@@ -82,6 +82,20 @@ class TestEvaluationManagerInit:
 
         assert manager.db_path == DatabasePaths.get_evaluations_db_path("tenant-user")
 
+    def test_blank_string_user_id_is_rejected(self, monkeypatch):
+        """Blank string user IDs must fail closed instead of falling back to the shared DB."""
+        import tldw_Server_API.app.core.Evaluations.evaluation_manager as manager_module
+
+        monkeypatch.setattr(
+            manager_module.EvaluationManager,
+            "_init_database",
+            lambda self: None,
+            raising=False,
+        )
+
+        with pytest.raises(ValueError, match="Evaluations user scope is required"):
+            manager_module.EvaluationManager(user_id="   ")
+
     def test_database_migration_on_init(self, temp_db_path):
 
         """Test that database migrations are applied on initialization."""

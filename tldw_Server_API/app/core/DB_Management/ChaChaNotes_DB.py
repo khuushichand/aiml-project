@@ -17940,6 +17940,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         normalized: list[str] = []
         seen: set[str] = set()
         for tag in raw_tags:
+            if tag is None:
+                continue
             tag_str = str(tag).strip()
             if not tag_str or tag_str in seen:
                 continue
