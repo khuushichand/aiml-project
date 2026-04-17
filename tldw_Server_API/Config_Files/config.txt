@@ -1420,6 +1420,8 @@ custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
 web_scraper_default_backend = auto
 web_scraper_ua_mode = fixed
 web_scraper_respect_robots = True
+# Shared outbound safety mode for scraping and websearch data-plane callers: compat|strict
+web_outbound_policy_mode = compat
 web_scraper_preflight_analyzers = False
 web_scraper_preflight_timeout_s = 0
 web_scraper_preflight_scan_depth = default

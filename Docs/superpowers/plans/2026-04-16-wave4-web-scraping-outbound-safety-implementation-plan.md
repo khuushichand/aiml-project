@@ -87,7 +87,7 @@
 - Test: `tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py`
 - Test: `tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py`
 
-- [ ] **Step 1: Write the failing shared-policy tests**
+- [x] **Step 1: Write the failing shared-policy tests**
 
 ```python
 @pytest.mark.asyncio
@@ -117,12 +117,12 @@ async def test_web_outbound_policy_strict_blocks_when_robots_fetch_errors(monkey
     assert decision.reason == "robots_unreachable"
 ```
 
-- [ ] **Step 2: Run the new helper tests to verify they fail**
+- [x] **Step 2: Run the new helper tests to verify they fail**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Web_Scraping/test_outbound_policy.py tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py -v`
 Expected: FAIL with missing shared helper imports and/or missing strict-mode config wiring.
 
-- [ ] **Step 3: Implement the minimal shared helper and config wiring**
+- [x] **Step 3: Implement the minimal shared helper and config wiring**
 
 ```python
 @dataclass(slots=True)
@@ -155,8 +155,9 @@ Implementation requirements:
 - reuse `RobotsFilter` or the existing filter helpers instead of re-implementing robots fetch/cache behavior
 - keep provider-call integration synchronous when `respect_robots=False`; do not force the existing sync websearch adapters through ad hoc event-loop shims
 - emit structured labels or fields that later tests can assert for compat-allow versus strict-block outcomes
+- `filters.py` changes remain unnecessary unless later caller migration exposes a real seam gap
 
-- [ ] **Step 4: Re-run the shared-policy tests**
+- [x] **Step 4: Re-run the shared-policy tests**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Web_Scraping/test_outbound_policy.py tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py -v`
 Expected: PASS

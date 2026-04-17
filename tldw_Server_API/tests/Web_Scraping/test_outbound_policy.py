@@ -7,6 +7,27 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def test_web_outbound_policy_mode_reads_config_when_env_unset(monkeypatch):
+    monkeypatch.delenv("WEB_OUTBOUND_POLICY_MODE", raising=False)
+
+    config_mod = importlib.import_module("tldw_Server_API.app.core.config")
+
+    class _ConfigStub:
+        def get(self, section, option, fallback=None):
+            if section == "Web-Scraper" and option == "web_outbound_policy_mode":
+                return "strict"
+            return fallback
+
+    monkeypatch.setattr(
+        config_mod,
+        "load_comprehensive_config",
+        lambda: _ConfigStub(),
+        raising=False,
+    )
+
+    assert config_mod.web_outbound_policy_mode() == "strict"
+
+
 def test_web_outbound_policy_sync_denies_provider_request(monkeypatch):
     monkeypatch.delenv("WEB_OUTBOUND_POLICY_MODE", raising=False)
     policy = importlib.import_module(
@@ -32,6 +53,52 @@ def test_web_outbound_policy_sync_denies_provider_request(monkeypatch):
     assert decision.reason == "deny_test"
     assert decision.stage == "provider_request"
     assert decision.source == "websearch_provider"
+
+
+def test_web_outbound_policy_sync_emits_decision_metric(monkeypatch):
+    monkeypatch.delenv("WEB_OUTBOUND_POLICY_MODE", raising=False)
+    policy = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.outbound_policy"
+    )
+
+    metric_calls: list[tuple[str, float, dict[str, str]]] = []
+
+    monkeypatch.setattr(
+        policy,
+        "evaluate_url_policy",
+        lambda _url: SimpleNamespace(allowed=False, reason="deny_test"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        policy,
+        "increment_counter",
+        lambda name, value=1, labels=None: metric_calls.append(
+            (name, value, dict(labels or {}))
+        ),
+        raising=False,
+    )
+
+    decision = policy.decide_web_outbound_policy_sync(
+        "https://example.com/search",
+        respect_robots=False,
+        source="websearch_provider",
+        stage="provider_request",
+    )
+
+    assert decision.allowed is False
+    assert metric_calls == [
+        (
+            "web_outbound_policy_decisions_total",
+            1,
+            {
+                "mode": "compat",
+                "source": "websearch_provider",
+                "stage": "provider_request",
+                "outcome": "blocked",
+                "reason": "deny_test",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

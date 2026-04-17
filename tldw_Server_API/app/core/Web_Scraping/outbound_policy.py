@@ -6,9 +6,10 @@ from typing import Any, Literal
 
 from loguru import logger
 
+from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 from tldw_Server_API.app.core.Web_Scraping.filters import RobotsFilter
-from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.config import web_outbound_policy_mode
 
 
 _Mode = Literal["compat", "strict"]
@@ -27,13 +28,28 @@ class WebOutboundPolicyDecision:
 def get_web_outbound_policy_mode(config: dict[str, Any] | None = None) -> _Mode:
     raw_mode = os.getenv("WEB_OUTBOUND_POLICY_MODE")
     if raw_mode is None:
-        loaded = config if config is not None else (load_and_log_configs() or {})
-        raw_mode = str(
-            ((loaded.get("web_scraper", {}) or {}).get("web_outbound_policy_mode", "compat"))
-        )
+        if config is not None:
+            raw_mode = str(
+                ((config.get("web_scraper", {}) or {}).get("web_outbound_policy_mode", "compat"))
+            )
+        else:
+            raw_mode = web_outbound_policy_mode()
 
     mode = str(raw_mode or "compat").strip().lower()
     return "strict" if mode == "strict" else "compat"
+
+
+def _record_decision_metric(decision: WebOutboundPolicyDecision) -> None:
+    increment_counter(
+        "web_outbound_policy_decisions_total",
+        labels={
+            "mode": decision.mode,
+            "source": decision.source,
+            "stage": decision.stage,
+            "outcome": "allowed" if decision.allowed else "blocked",
+            "reason": decision.reason,
+        },
+    )
 
 
 def _decision(
@@ -45,7 +61,7 @@ def _decision(
     source: str,
     details: dict[str, Any] | None = None,
 ) -> WebOutboundPolicyDecision:
-    return WebOutboundPolicyDecision(
+    decision = WebOutboundPolicyDecision(
         allowed=allowed,
         mode=mode,
         reason=reason,
@@ -53,6 +69,8 @@ def _decision(
         source=source,
         details=details,
     )
+    _record_decision_metric(decision)
+    return decision
 
 
 def decide_web_outbound_policy_sync(
