@@ -75,9 +75,7 @@ async function openSpeechInputSourcePicker(page: Page) {
     }
   }
   await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
-  // Click the parent .ant-select-selector — the combobox input is covered by
-  // the ant-select-content-value overlay that intercepts pointer events.
-  await inputSourcePicker.locator('xpath=ancestor::div[contains(@class, "ant-select-selector")]').click()
+  await inputSourcePicker.click({ force: true })
 }
 
 test.describe("Stage 7 audio regression gate", () => {

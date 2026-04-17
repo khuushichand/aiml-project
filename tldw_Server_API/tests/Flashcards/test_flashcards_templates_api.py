@@ -1,4 +1,3 @@
-import os
 import uuid
 
 import pytest
@@ -6,11 +5,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from loguru import logger
 
-os.environ.setdefault("READING_DIGEST_JOBS_WORKER_ENABLED", "0")
-os.environ.setdefault("READING_DIGEST_SCHEDULER_ENABLED", "0")
-os.environ.setdefault("TEST_MODE", "1")
-
-from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.tests.test_config import TestConfig
@@ -18,7 +12,16 @@ from tldw_Server_API.tests.test_config import TestConfig
 AUTH_HEADERS = {"X-API-KEY": TestConfig.TEST_API_KEY}
 
 
+@pytest.fixture(autouse=True)
+def flashcards_template_test_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("READING_DIGEST_JOBS_WORKER_ENABLED", "0")
+    monkeypatch.setenv("READING_DIGEST_SCHEDULER_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "1")
+
+
 def _build_test_app() -> FastAPI:
+    from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+
     app = FastAPI()
     app.include_router(flashcards_router, prefix="/api/v1")
     return app

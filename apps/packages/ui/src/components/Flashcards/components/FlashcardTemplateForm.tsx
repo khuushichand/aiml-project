@@ -30,6 +30,7 @@ interface FlashcardTemplateFormProps {
   submitting?: boolean
   onSubmit: (values: FlashcardTemplateCreate) => Promise<void> | void
   onCancel?: () => void
+  cancelDisabled?: boolean
   onDelete?: () => void
   deleteDisabled?: boolean
   onDirtyChange?: (dirty: boolean) => void
@@ -154,6 +155,7 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
   submitting = false,
   onSubmit,
   onCancel,
+  cancelDisabled = false,
   onDelete,
   deleteDisabled = false,
   onDirtyChange
@@ -303,12 +305,13 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
         </Form.Item>
 
         <Form.Item
+          dependencies={["model_type"]}
           label={t("option:flashcards.templatesBackTemplate", { defaultValue: "Back template" })}
           name="back_template"
           rules={[
-            {
+            ({ getFieldValue }) => ({
               validator: async (_rule, value: string | undefined) => {
-                if (selectedModelType === "cloze") {
+                if (getFieldValue("model_type") === "cloze") {
                   return
                 }
                 if ((value ?? "").trim().length === 0) {
@@ -319,7 +322,7 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
                   )
                 }
               }
-            }
+            })
           ]}
           extra={
             selectedModelType === "cloze"
@@ -562,7 +565,7 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
                 })}
           </Button>
           {onCancel ? (
-            <Button onClick={onCancel}>
+            <Button onClick={onCancel} disabled={cancelDisabled}>
               {t("common:cancel", { defaultValue: "Cancel" })}
             </Button>
           ) : null}

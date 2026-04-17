@@ -111,6 +111,10 @@ describe("TemplatesTab", () => {
   })
 
   beforeEach(() => {
+    vi.restoreAllMocks()
+    createMutateAsync.mockReset()
+    updateMutateAsync.mockReset()
+    deleteMutateAsync.mockReset()
     vi.clearAllMocks()
 
     vi.mocked(useFlashcardTemplatesQuery).mockReturnValue({
@@ -181,6 +185,39 @@ describe("TemplatesTab", () => {
       expect(screen.getByRole("button", { name: "Save template" })).toBeInTheDocument()
     })
     expect(screen.getByLabelText("Template name")).toHaveValue("")
+  })
+
+  it("revalidates back template requirements when the card type changes to cloze", async () => {
+    render(<TemplatesTab />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Create template" }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Save template" })).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText("Template name"), {
+      target: { value: "Cloze scaffold" }
+    })
+    fireEvent.change(screen.getByLabelText("Front template"), {
+      target: { value: "{{c1::{{term}}}}" }
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save template" }))
+
+    await waitFor(() => {
+      expect(screen.getByText("Enter a back template.")).toBeInTheDocument()
+    })
+
+    fireEvent.mouseDown(screen.getByLabelText("Card type"))
+    fireEvent.click(
+      await screen.findByText("Fill-in-blank", {
+        selector: ".ant-select-item-option-content"
+      })
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText("Enter a back template.")).not.toBeInTheDocument()
+    })
   })
 
   it("lets an empty library return from create mode without saving", async () => {
@@ -326,6 +363,40 @@ describe("TemplatesTab", () => {
 
     expect(screen.getByPlaceholderText("Search templates")).toHaveValue("")
     expect(screen.getByDisplayValue("Renamed template")).toBeInTheDocument()
+  })
+
+  it("disables template navigation controls while a mutation is pending", () => {
+    vi.mocked(useFlashcardTemplatesQuery).mockReturnValue({
+      data: {
+        items: [
+          buildTemplate(),
+          buildTemplate({
+            id: 2,
+            name: "Chemistry facts",
+            front_template: "Element: {{prompt}}",
+            back_template: "Symbol: {{answer}}",
+            version: 1
+          })
+        ],
+        count: 2,
+        total: 2
+      },
+      isLoading: false,
+      error: null
+    } as any)
+    vi.mocked(useUpdateFlashcardTemplateMutation).mockReturnValue({
+      mutateAsync: updateMutateAsync,
+      isPending: true
+    } as any)
+
+    render(<TemplatesTab />)
+
+    expect(screen.getByRole("button", { name: "Create template" })).toBeDisabled()
+    expect(screen.getByPlaceholderText("Search templates")).toBeDisabled()
+    expect(screen.getByRole("button", { name: /^Basic facts/i })).toBeDisabled()
+    expect(screen.getByRole("button", { name: /^Chemistry facts/i })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Delete template" })).toBeDisabled()
   })
 
   it("deletes the selected template from the editor", async () => {

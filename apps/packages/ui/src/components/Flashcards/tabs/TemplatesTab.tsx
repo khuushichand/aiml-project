@@ -43,6 +43,8 @@ export const TemplatesTab: React.FC = () => {
   const updateMutation = useUpdateFlashcardTemplateMutation()
   const deleteMutation = useDeleteFlashcardTemplateMutation()
   const templates = templatesQuery.data?.items ?? []
+  const isMutating =
+    createMutation.isPending || updateMutation.isPending || deleteMutation.isPending
   const [searchValue, setSearchValue] = React.useState("")
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<number | null>(() => templates[0]?.id ?? null)
   const [isCreating, setIsCreating] = React.useState(false)
@@ -109,14 +111,20 @@ export const TemplatesTab: React.FC = () => {
   }, [isTemplateDirty, t])
 
   const handleStartCreate = React.useCallback(() => {
+    if (isMutating) {
+      return
+    }
     if (!confirmDiscardTemplateChanges()) {
       return
     }
     setIsCreating(true)
     setSelectedTemplateId(null)
-  }, [confirmDiscardTemplateChanges])
+  }, [confirmDiscardTemplateChanges, isMutating])
 
   const handleSelectTemplate = React.useCallback((templateId: number) => {
+    if (isMutating) {
+      return
+    }
     if (!isCreating && templateId === selectedTemplateId) {
       return
     }
@@ -125,16 +133,19 @@ export const TemplatesTab: React.FC = () => {
     }
     setSelectedTemplateId(templateId)
     setIsCreating(false)
-  }, [confirmDiscardTemplateChanges, isCreating, selectedTemplateId])
+  }, [confirmDiscardTemplateChanges, isCreating, isMutating, selectedTemplateId])
 
   const handleCancelCreate = React.useCallback(() => {
+    if (isMutating) {
+      return
+    }
     if (!confirmDiscardTemplateChanges()) {
       return
     }
     setIsCreating(false)
     setIsTemplateDirty(false)
     setSelectedTemplateId(filteredTemplates[0]?.id ?? templates[0]?.id ?? null)
-  }, [confirmDiscardTemplateChanges, filteredTemplates, templates])
+  }, [confirmDiscardTemplateChanges, filteredTemplates, isMutating, templates])
 
   const handleCreate = React.useCallback(
     async (values: FlashcardTemplateCreate) => {
@@ -281,6 +292,7 @@ export const TemplatesTab: React.FC = () => {
             type="primary"
             icon={<Plus className="size-4" />}
             onClick={handleStartCreate}
+            disabled={isMutating}
           >
             {t("option:flashcards.templatesCreateCta", {
               defaultValue: "Create template"
@@ -291,6 +303,7 @@ export const TemplatesTab: React.FC = () => {
         <Input
           value={searchValue}
           onChange={(event) => setSearchValue(event.target.value)}
+          disabled={isMutating}
           placeholder={t("option:flashcards.templatesSearchPlaceholder", {
             defaultValue: "Search templates"
           })}
@@ -305,6 +318,7 @@ export const TemplatesTab: React.FC = () => {
                 <button
                   key={template.id}
                   type="button"
+                  disabled={isMutating}
                   className={`w-full rounded border p-3 text-left transition ${
                     isSelected
                       ? "border-primary bg-surface2"
@@ -347,6 +361,7 @@ export const TemplatesTab: React.FC = () => {
             submitting={createMutation.isPending}
             onSubmit={handleCreate}
             onCancel={handleCancelCreate}
+            cancelDisabled={isMutating}
             onDirtyChange={setIsTemplateDirty}
           />
         ) : activeTemplate ? (
@@ -356,7 +371,9 @@ export const TemplatesTab: React.FC = () => {
             submitting={updateMutation.isPending}
             onSubmit={handleUpdate}
             onDelete={handleDelete}
-            deleteDisabled={deleteMutation.isPending}
+            onCancel={handleCancelCreate}
+            cancelDisabled={isMutating}
+            deleteDisabled={isMutating}
             onDirtyChange={setIsTemplateDirty}
           />
         ) : templates.length > 0 && filteredTemplates.length === 0 ? (

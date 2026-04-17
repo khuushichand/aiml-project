@@ -103,6 +103,37 @@ const template: FlashcardTemplate = {
   version: 1
 }
 
+const reverseTemplate: FlashcardTemplate = {
+  ...template,
+  id: 12,
+  name: "Reverse vocabulary",
+  model_type: "basic_reverse",
+  front_template: "{{term}}",
+  back_template: "{{definition}}",
+  notes_template: null,
+  placeholder_definitions: template.placeholder_definitions.slice(0, 2)
+}
+
+const clozeTemplate: FlashcardTemplate = {
+  ...template,
+  id: 13,
+  name: "Cloze scaffold",
+  model_type: "cloze",
+  front_template: "{{c1::{{term}}}} powers the cell",
+  back_template: null,
+  notes_template: null,
+  placeholder_definitions: [
+    {
+      key: "term",
+      label: "Term",
+      help_text: null,
+      default_value: null,
+      required: true,
+      targets: ["front_template"]
+    }
+  ]
+}
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (
@@ -240,6 +271,9 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 
 describe("FlashcardCreateDrawer template flows", () => {
   beforeEach(() => {
+    createFlashcardMutateAsync.mockReset()
+    createDeckMutateAsync.mockReset()
+    createTemplateMutateAsync.mockReset()
     vi.clearAllMocks()
     currentTemplates = [template]
     vi.mocked(useDecksQuery).mockReturnValue({
@@ -405,6 +439,63 @@ describe("FlashcardCreateDrawer template flows", () => {
 
     expect(screen.getByPlaceholderText("Optional hints or explanations...")).toHaveValue("")
     expect(screen.getByPlaceholderText("Internal notes (not shown during review)...")).toHaveValue("")
+  })
+
+  it("applies a basic reverse template and preserves the reverse model selection", async () => {
+    currentTemplates = [reverseTemplate]
+
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    const modal = await openTemplateModal()
+
+    fireEvent.change(within(modal).getByLabelText("Term"), {
+      target: { value: "ATP" }
+    })
+    fireEvent.change(within(modal).getByLabelText("Definition"), {
+      target: { value: "The cell's energy currency" }
+    })
+    await waitFor(() => {
+      expect(within(modal).getByRole("button", { name: "Apply" })).not.toBeDisabled()
+    })
+    fireEvent.click(within(modal).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("ATP")).toBeInTheDocument()
+    })
+
+    const modelField = screen.getByText("Card model").closest(".ant-form-item")
+    expect(modelField).not.toBeNull()
+    expect(
+      within(modelField as HTMLElement).getAllByText("Basic + Reverse (Both directions)").length
+    ).toBeGreaterThan(0)
+    expect(screen.getByDisplayValue("The cell's energy currency")).toBeInTheDocument()
+  })
+
+  it("applies a cloze template and enables the cloze-specific draft state", async () => {
+    currentTemplates = [clozeTemplate]
+
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    const modal = await openTemplateModal()
+
+    fireEvent.change(within(modal).getByLabelText("Term"), {
+      target: { value: "ATP" }
+    })
+    await waitFor(() => {
+      expect(within(modal).getByRole("button", { name: "Apply" })).not.toBeDisabled()
+    })
+    fireEvent.click(within(modal).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("{{c1::ATP}} powers the cell")).toBeInTheDocument()
+    })
+
+    const modelField = screen.getByText("Card model").closest(".ant-form-item")
+    expect(modelField).not.toBeNull()
+    expect(within(modelField as HTMLElement).getAllByText("Cloze (Fill in the blank)").length).toBeGreaterThan(0)
+    expect(
+      screen.getByText("Cloze syntax: add at least one deletion like {{c1::answer}} in Front text.")
+    ).toBeInTheDocument()
   })
 
   it("saves the current draft as a template using the supported template payload", async () => {
