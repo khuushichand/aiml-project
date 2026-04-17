@@ -17940,8 +17940,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         normalized: list[str] = []
         seen: set[str] = set()
         for tag in raw_tags:
-            tag_str = str(tag)
-            if not tag_str.strip() or tag_str in seen:
+            tag_str = str(tag).strip()
+            if not tag_str or tag_str in seen:
                 continue
             seen.add(tag_str)
             normalized.append(tag_str)

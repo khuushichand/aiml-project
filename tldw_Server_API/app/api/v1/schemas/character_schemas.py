@@ -238,7 +238,20 @@ class CharacterImportResponse(BaseModel):
 
 class DeletionResponse(BaseModel):
     message: str
-    character_id: int
+    character_id: int = Field(gt=0)
+
+
+class WorldBookDeletionResponse(DeletionResponse):
+    world_book_id: int = Field(gt=0)
+
+
+class WorldBookEntryDeletionResponse(DeletionResponse):
+    entry_id: int = Field(gt=0)
+
+
+class CharacterWorldBookDetachDeletionResponse(DeletionResponse):
+    world_book_id: int = Field(gt=0)
+    detached_from_character_id: int = Field(gt=0)
 
 
 class CharacterExemplarSource(BaseModel):
