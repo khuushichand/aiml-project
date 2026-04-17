@@ -26,6 +26,7 @@ The data-plane paths are in scope. The management surface is only in scope where
 - Cover all user-facing paths that share the same outbound fetch stack rather than only the ingest route.
 - Prove strict-mode behavior with focused tests across scrape, search-provider, and URL-scrape action branches.
 - Preserve a compatibility mode so rollout can happen without forcing an immediate global behavior change.
+- Emit enough structured reason and metric data to compare `compat` and `strict` behavior during rollout instead of treating strict-mode enablement as a blind switch.
 
 ## Non-Goals
 
@@ -34,6 +35,7 @@ The data-plane paths are in scope. The management surface is only in scope where
 - Flipping strict enforcement on by default for all deployments in this wave.
 - General outbound hardening for unrelated subsystems that do not share the same scrape and websearch data-plane.
 - Redesigning the public request schemas unless a contract change is required to express the new strict-mode behavior.
+- Folding in other raw-`evaluate_url_policy()` consumers such as document file download or workflow webhook DLQ delivery when they do not share the same scrape and websearch robots or fetch contract.
 
 ## Current State
 
@@ -61,6 +63,15 @@ The `/web-scraping` management endpoints live in:
 - `tldw_Server_API/app/api/v1/endpoints/web_scraping.py`
 
 They mainly expose service status, progress, cookies, and job control. They do not appear to introduce separate outbound fetch branches on their own, so they should remain secondary to the data-plane paths above.
+
+### Explicit Exclusions
+
+There are other user-visible services that call `evaluate_url_policy()` directly, but they should stay out of Wave 4 unless implementation proves they actually share the same scrape and websearch policy contract:
+
+- `tldw_Server_API/app/services/document_processing_service.py`
+- `tldw_Server_API/app/services/workflows_webhook_dlq_service.py`
+
+Those paths share raw egress enforcement, but they do not currently share the scrape-side robots semantics, result-shape contract, or websearch fetch flow that this wave is tightening. Naming them explicitly prevents “same egress helper” from turning Wave 4 into a generic outbound-policy rewrite.
 
 ### Current Evidence On `main`
 
@@ -208,13 +219,14 @@ They should only change if needed to expose or document the policy mode or if te
 
 ### Shared Outbound Policy Layer
 
-Add one shared scraping and websearch outbound-policy module above raw `evaluate_url_policy()`. This layer should live close to the scraping and websearch code, not as a generic catch-all security abstraction for unrelated subsystems.
+Add one shared scraping and websearch outbound-policy layer above raw `evaluate_url_policy()`. This layer should live close to the scraping and websearch code, not as a generic catch-all security abstraction for unrelated subsystems.
 
 Recommended shape:
 
 - raw egress/IP/redirect enforcement remains in `app/core/Security/egress.py` and `app/core/http_client.py`
-- scrape and websearch policy mode handling moves into one new shared helper, for example:
+- reuse the existing `tldw_Server_API/app/core/Web_Scraping/filters.py` and `RobotsFilter` machinery where practical, or add one thin sibling helper such as:
   - `tldw_Server_API/app/core/Web_Scraping/outbound_policy.py`
+- do not duplicate robots fetch, cache, and parser behavior in parallel helpers unless the implementation first proves the existing `filters.py` layer cannot carry the strict-mode contract cleanly
 
 That helper should be responsible for:
 
@@ -222,6 +234,7 @@ That helper should be responsible for:
 - normalizing policy decisions into one result shape
 - handling robots behavior consistently
 - exposing one small decision API that scrape and websearch callers can reuse
+- resolving mode at call time, or through an injectable resolver, rather than capturing configuration once at import time where tests and rollout toggles become brittle
 
 Suggested result contract:
 
@@ -233,6 +246,10 @@ Suggested result contract:
 - optional `details`
 
 The important part is not the exact field names. The important part is that scrape and websearch callers stop inventing their own local policy outcomes.
+
+Implementation guardrail:
+
+- the implementation plan should enumerate the exact in-scope direct `evaluate_url_policy()` call sites and either migrate them to the shared helper or explicitly justify why a remaining direct call is still required
 
 ### Policy Modes
 
@@ -287,6 +304,11 @@ The design goal is one policy story across:
 
 This avoids ending up with strict semantics in ingest while research mode still behaves as best-effort.
 
+Clarification:
+
+- robots enforcement is relevant for scrape-style URL fetching and follow-up page retrieval, not for every provider API endpoint call in `WebSearch_APIs.py`
+- provider API requests should still use the shared helper for raw egress-mode evaluation and consistent reason handling, but strict-mode robots failures should not be synthesized for provider endpoints that are not performing page scraping
+
 ### Error And Response Model
 
 This wave should keep user-facing behavior boring and explicit.
@@ -333,6 +355,7 @@ Add explicit tests for:
 - browser-backed scrape path refusing navigation under strict mode before Playwright fetch work starts
 - websearch provider calls honoring the same strict-mode contract
 - `research_agent` `scrape_url` action inheriting the same strict-mode behavior rather than bypassing it
+- focused coverage proving the existing `RobotsFilter` path and any new shared helper do not diverge on the same URL and mode inputs
 
 ### Regression Focus
 
@@ -341,6 +364,7 @@ Tests should prove:
 - current compatibility behavior still works when the mode is `compat`
 - stricter behavior really changes the outcome when the mode is `strict`
 - no in-scope branch skips the shared policy helper
+- every remaining in-scope direct `evaluate_url_policy()` call is either removed or deliberately documented as a raw preflight that still feeds the shared result contract
 
 This wave should not rely on indirect confidence like “it probably goes through the same helper.”
 
@@ -351,7 +375,8 @@ Wave 4 should deliver:
 1. one explicit shared policy mode
 2. migration of the in-scope data-plane call sites to that contract
 3. focused tests proving compat and strict behavior
-4. documentation describing the strict mode as the supported hardening path
+4. structured counters or logs that distinguish compat-allow versus strict-block decisions at the shared policy layer
+5. documentation describing the strict mode as the supported hardening path
 
 Wave 4 should not automatically change the default mode for all deployments. That should be a later operational decision once strict mode is field-tested.
 
