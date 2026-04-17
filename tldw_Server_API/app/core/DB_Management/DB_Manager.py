@@ -269,6 +269,10 @@ def reset_content_backend(
       reconfiguration at runtime (useful in tests or dynamic reloads).
     - Recomputes module-level settings and paths derived from config.
     - Optionally rebuilds the backend immediately when reload=True.
+
+    This API is intended for controlled reconfiguration windows. Callers
+    should only rotate the shared backend after in-flight operations have been
+    allowed to finish or are prepared to retry against a refreshed backend.
     """
     global _CONTENT_DB_BACKEND
     global single_user_backup_path, single_user_backup_dir
