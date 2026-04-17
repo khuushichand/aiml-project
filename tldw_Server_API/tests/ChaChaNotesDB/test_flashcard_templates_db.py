@@ -203,6 +203,34 @@ def test_flashcard_template_empty_update_is_noop():
         assert after["last_modified"] == before["last_modified"]
 
 
+def test_flashcard_template_serialize_logs_invalid_placeholder_json(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "ChaChaNotes.db")
+        db = CharactersRAGDB(db_path, client_id="test")
+        warnings: list[str] = []
+
+        def _capture_warning(message, *args):
+            warnings.append(str(message).format(*args))
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB.logger.warning",
+            _capture_warning,
+        )
+
+        serialized = db._serialize_flashcard_template_row(
+            {
+                "id": 17,
+                "name": "Broken JSON",
+                "placeholder_definitions_json": "{not valid json}",
+            }
+        )
+
+        assert serialized["placeholder_definitions"] == []
+        assert warnings
+        assert any("_serialize_flashcard_template_row" in warning for warning in warnings)
+        assert any("17" in warning for warning in warnings)
+
+
 def test_flashcard_template_sync_log_tracks_create_update_and_delete():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "ChaChaNotes.db")

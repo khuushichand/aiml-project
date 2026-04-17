@@ -40,10 +40,32 @@ export const FlashcardTemplateValueModal: React.FC<FlashcardTemplateValueModalPr
   })
   const templates = templatesQuery.data?.items ?? []
   const selectedTemplateId = Form.useWatch("template_id", form)
+  const placeholderValues = Form.useWatch("placeholder_values", form)
   const selectedTemplate = React.useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) ?? null,
     [selectedTemplateId, templates]
   )
+  const isSubmitDisabled = React.useMemo(() => {
+    if (templatesQuery.isLoading || templatesQuery.error || templates.length === 0 || !selectedTemplate) {
+      return true
+    }
+
+    return selectedTemplate.placeholder_definitions.some((definition) => {
+      if (!definition.required) {
+        return false
+      }
+      if ((definition.default_value ?? "").trim().length > 0) {
+        return false
+      }
+      return String(placeholderValues?.[definition.key] ?? "").trim().length === 0
+    })
+  }, [
+    placeholderValues,
+    selectedTemplate,
+    templates.length,
+    templatesQuery.error,
+    templatesQuery.isLoading
+  ])
 
   React.useEffect(() => {
     if (!open) {
@@ -108,7 +130,12 @@ export const FlashcardTemplateValueModal: React.FC<FlashcardTemplateValueModalPr
       cancelText={t("common:cancel", {
         defaultValue: "Cancel"
       })}
-      onOk={() => form.submit()}
+      okButtonProps={{ disabled: isSubmitDisabled }}
+      onOk={() => {
+        if (!isSubmitDisabled) {
+          form.submit()
+        }
+      }}
     >
       {templatesQuery.isLoading ? (
         <div className="flex min-h-[160px] items-center justify-center">

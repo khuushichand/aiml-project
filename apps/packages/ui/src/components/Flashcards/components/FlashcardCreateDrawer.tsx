@@ -355,10 +355,10 @@ export const FlashcardCreateDrawer: React.FC<
           deck_id: draft.deck_id ?? undefined,
           tags: draft.tags ?? undefined,
           model_type: draft.model_type,
-          front: draft.front,
-          back: draft.back,
-          notes: draft.notes ?? undefined,
-          extra: draft.extra ?? undefined
+          front: draft.front ?? "",
+          back: draft.back ?? "",
+          notes: draft.notes ?? "",
+          extra: draft.extra ?? ""
         })
       )
       setTemplateValueModalOpen(false)

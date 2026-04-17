@@ -263,6 +263,10 @@ describe("SchedulerTab editor", () => {
 
     fireEvent.mouseDown(screen.getByLabelText("Review prompt side"))
     fireEvent.click(screen.getByText("Back first"))
+
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument()
+    expect(screen.queryByText(/all changes saved/i)).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole("button", { name: /save changes/i }))
 
     await waitFor(() =>

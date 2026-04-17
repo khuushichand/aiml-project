@@ -46,6 +46,7 @@ export const TemplatesTab: React.FC = () => {
   const [searchValue, setSearchValue] = React.useState("")
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<number | null>(() => templates[0]?.id ?? null)
   const [isCreating, setIsCreating] = React.useState(false)
+  const [isTemplateDirty, setIsTemplateDirty] = React.useState(false)
   const [optimisticTemplate, setOptimisticTemplate] = React.useState<FlashcardTemplate | null>(null)
 
   const visibleTemplates = React.useMemo(() => {
@@ -77,7 +78,7 @@ export const TemplatesTab: React.FC = () => {
   }, [optimisticTemplate, templates])
 
   React.useEffect(() => {
-    if (isCreating) {
+    if (isCreating || isTemplateDirty) {
       return
     }
     if (filteredTemplates.length === 0) {
@@ -90,22 +91,50 @@ export const TemplatesTab: React.FC = () => {
     ) {
       setSelectedTemplateId(filteredTemplates[0].id)
     }
-  }, [filteredTemplates, isCreating, selectedTemplateId])
+  }, [filteredTemplates, isCreating, isTemplateDirty, selectedTemplateId])
+
+  const confirmDiscardTemplateChanges = React.useCallback(() => {
+    if (!isTemplateDirty) {
+      return true
+    }
+    const shouldDiscard = window.confirm(
+      t("option:flashcards.templatesDiscardChangesConfirm", {
+        defaultValue: "Discard unsaved template changes?"
+      })
+    )
+    if (shouldDiscard) {
+      setIsTemplateDirty(false)
+    }
+    return shouldDiscard
+  }, [isTemplateDirty, t])
 
   const handleStartCreate = React.useCallback(() => {
+    if (!confirmDiscardTemplateChanges()) {
+      return
+    }
     setIsCreating(true)
     setSelectedTemplateId(null)
-  }, [])
+  }, [confirmDiscardTemplateChanges])
 
   const handleSelectTemplate = React.useCallback((templateId: number) => {
+    if (!isCreating && templateId === selectedTemplateId) {
+      return
+    }
+    if (!confirmDiscardTemplateChanges()) {
+      return
+    }
     setSelectedTemplateId(templateId)
     setIsCreating(false)
-  }, [])
+  }, [confirmDiscardTemplateChanges, isCreating, selectedTemplateId])
 
   const handleCancelCreate = React.useCallback(() => {
+    if (!confirmDiscardTemplateChanges()) {
+      return
+    }
     setIsCreating(false)
+    setIsTemplateDirty(false)
     setSelectedTemplateId(filteredTemplates[0]?.id ?? templates[0]?.id ?? null)
-  }, [filteredTemplates, templates])
+  }, [confirmDiscardTemplateChanges, filteredTemplates, templates])
 
   const handleCreate = React.useCallback(
     async (values: FlashcardTemplateCreate) => {
@@ -118,6 +147,7 @@ export const TemplatesTab: React.FC = () => {
             defaultValue: "Created"
           })
         )
+        setIsTemplateDirty(false)
         setSelectedTemplateId(template.id)
         setIsCreating(false)
       } catch (error: unknown) {
@@ -150,6 +180,7 @@ export const TemplatesTab: React.FC = () => {
             defaultValue: "Saved"
           })
         )
+        setIsTemplateDirty(false)
         setSelectedTemplateId(template.id)
         setIsCreating(false)
       } catch (error: unknown) {
@@ -196,6 +227,7 @@ export const TemplatesTab: React.FC = () => {
       } else {
         setSelectedTemplateId(null)
       }
+      setIsTemplateDirty(false)
       setIsCreating(false)
     } catch (error: unknown) {
       message.error(error instanceof Error ? error.message : "Failed to delete template")
@@ -315,6 +347,7 @@ export const TemplatesTab: React.FC = () => {
             submitting={createMutation.isPending}
             onSubmit={handleCreate}
             onCancel={handleCancelCreate}
+            onDirtyChange={setIsTemplateDirty}
           />
         ) : activeTemplate ? (
           <FlashcardTemplateForm
@@ -324,6 +357,7 @@ export const TemplatesTab: React.FC = () => {
             onSubmit={handleUpdate}
             onDelete={handleDelete}
             deleteDisabled={deleteMutation.isPending}
+            onDirtyChange={setIsTemplateDirty}
           />
         ) : templates.length > 0 && filteredTemplates.length === 0 ? (
           <div className="flex h-full min-h-[320px] items-center justify-center rounded border border-dashed border-border bg-surface p-6">

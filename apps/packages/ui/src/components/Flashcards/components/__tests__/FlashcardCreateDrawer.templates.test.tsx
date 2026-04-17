@@ -269,6 +269,21 @@ describe("FlashcardCreateDrawer template flows", () => {
     } as any))
   })
 
+  const openTemplateModal = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Apply template" }))
+
+    const modal = await waitFor(() => {
+      const activeModal = screen.getAllByRole("dialog").find((dialog) => {
+        return within(dialog).queryByLabelText("Template") !== null
+      })
+
+      expect(activeModal).toBeDefined()
+      return activeModal as HTMLElement
+    })
+
+    return modal
+  }
+
   const selectDeck = async (deckName: string) => {
     fireEvent.mouseDown(screen.getByLabelText("Deck"))
     fireEvent.click(await screen.findByText(deckName, { selector: ".ant-select-item-option-content" }))
@@ -300,19 +315,18 @@ describe("FlashcardCreateDrawer template flows", () => {
       charCode: 13
     })
 
-    fireEvent.click(screen.getByRole("button", { name: "Apply template" }))
+    const modal = await openTemplateModal()
 
-    await waitFor(() => {
-      expect(screen.getByLabelText("Template")).toBeInTheDocument()
-    })
-
-    fireEvent.change(screen.getByLabelText("Term"), {
+    fireEvent.change(within(modal).getByLabelText("Term"), {
       target: { value: "ATP" }
     })
-    fireEvent.change(screen.getByLabelText("Definition"), {
+    fireEvent.change(within(modal).getByLabelText("Definition"), {
       target: { value: "The cell's energy currency" }
     })
-    fireEvent.click(screen.getByRole("button", { name: "Apply" }))
+    await waitFor(() => {
+      expect(within(modal).getByRole("button", { name: "Apply" })).not.toBeDisabled()
+    })
+    fireEvent.click(within(modal).getByRole("button", { name: "Apply" }))
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("What does ATP mean?")).toBeInTheDocument()
@@ -329,6 +343,68 @@ describe("FlashcardCreateDrawer template flows", () => {
     expect(
       within(modelField as HTMLElement).getAllByText("Basic (Question - Answer)").length
     ).toBeGreaterThan(0)
+  })
+
+  it("disables template apply until required placeholder values are provided", async () => {
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    const modal = await openTemplateModal()
+    const applyButton = within(modal).getByRole("button", { name: "Apply" })
+
+    expect(applyButton).toBeDisabled()
+
+    fireEvent.change(within(modal).getByLabelText("Term"), {
+      target: { value: "ATP" }
+    })
+    fireEvent.change(within(modal).getByLabelText("Definition"), {
+      target: { value: "The cell's energy currency" }
+    })
+
+    await waitFor(() => {
+      expect(applyButton).not.toBeDisabled()
+    })
+  })
+
+  it("clears omitted notes and extra fields when applying a template", async () => {
+    currentTemplates = [
+      {
+        ...template,
+        notes_template: null,
+        extra_template: null,
+        placeholder_definitions: template.placeholder_definitions.slice(0, 2)
+      }
+    ]
+
+    render(<FlashcardCreateDrawer open onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    await openAdvancedOptions()
+
+    fireEvent.change(screen.getByPlaceholderText("Optional hints or explanations..."), {
+      target: { value: "Old extra text" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Internal notes (not shown during review)..."), {
+      target: { value: "Old internal notes" }
+    })
+
+    const modal = await openTemplateModal()
+
+    fireEvent.change(within(modal).getByLabelText("Term"), {
+      target: { value: "ATP" }
+    })
+    fireEvent.change(within(modal).getByLabelText("Definition"), {
+      target: { value: "The cell's energy currency" }
+    })
+    await waitFor(() => {
+      expect(within(modal).getByRole("button", { name: "Apply" })).not.toBeDisabled()
+    })
+    fireEvent.click(within(modal).getByRole("button", { name: "Apply" }))
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("What does ATP mean?")).toBeInTheDocument()
+    })
+
+    expect(screen.getByPlaceholderText("Optional hints or explanations...")).toHaveValue("")
+    expect(screen.getByPlaceholderText("Internal notes (not shown during review)...")).toHaveValue("")
   })
 
   it("saves the current draft as a template using the supported template payload", async () => {

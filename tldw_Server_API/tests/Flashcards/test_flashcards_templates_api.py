@@ -24,7 +24,7 @@ def _build_test_app() -> FastAPI:
     return app
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def flashcards_db(tmp_path):
     db_path = tmp_path / "flashcards.db"
     db = CharactersRAGDB(str(db_path), client_id=f"test-{uuid.uuid4().hex[:6]}")
@@ -124,6 +124,37 @@ def test_flashcard_template_requires_front_template(client_with_flashcards_db: T
     assert response.status_code == 422
 
 
+def test_flashcard_template_rejects_whitespace_only_placeholder_key(
+    client_with_flashcards_db: TestClient,
+):
+    response = client_with_flashcards_db.post(
+        "/api/v1/flashcards/templates",
+        json={
+            "name": "Whitespace placeholder",
+            "model_type": "basic",
+            "front_template": "What does {{term}} mean?",
+            "back_template": "{{definition}}",
+            "placeholder_definitions": [
+                {
+                    "key": "   ",
+                    "label": "Term",
+                    "required": True,
+                    "targets": ["front_template"],
+                },
+                {
+                    "key": "definition",
+                    "label": "Definition",
+                    "required": True,
+                    "targets": ["back_template"],
+                },
+            ],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 422
+
+
 def test_flashcard_template_placeholder_targets_are_required_in_openapi_schema(
     client_with_flashcards_db: TestClient,
 ):
@@ -146,6 +177,36 @@ def test_flashcard_template_update_missing_returns_not_found(client_with_flashca
     )
 
     assert response.status_code == 404
+
+
+def test_flashcard_template_update_rejects_invalid_merged_non_cloze_state(
+    client_with_flashcards_db: TestClient,
+):
+    created = client_with_flashcards_db.post(
+        "/api/v1/flashcards/templates",
+        json={
+            "name": "Cloze scaffold",
+            "model_type": "cloze",
+            "front_template": "{{c1::ATP}} powers the cell",
+            "back_template": None,
+            "placeholder_definitions": [],
+        },
+        headers=AUTH_HEADERS,
+    )
+    assert created.status_code == 200
+    payload = created.json()
+
+    response = client_with_flashcards_db.patch(
+        f"/api/v1/flashcards/templates/{payload['id']}",
+        json={
+            "model_type": "basic",
+            "expected_version": payload["version"],
+        },
+        headers=AUTH_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert "back_template is required" in response.json()["detail"]
 
 
 def test_flashcard_template_empty_update_is_noop(client_with_flashcards_db: TestClient):

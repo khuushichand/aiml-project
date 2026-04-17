@@ -74,6 +74,10 @@ export class FlashcardsPage extends BasePage {
     return this.page.getByRole('tab', { name: /templates/i });
   }
 
+  get schedulerTab(): Locator {
+    return this.page.getByRole('tab', { name: /scheduler/i });
+  }
+
   get templatesCreateButton(): Locator {
     return this.page.getByRole('button', { name: /create template/i });
   }
@@ -298,13 +302,14 @@ export class FlashcardsPage extends BasePage {
 
   // -- Tab Navigation --------------------------------------------------------
 
-  async switchToTab(tab: 'study' | 'manage' | 'templates' | 'transfer'): Promise<void> {
+  async switchToTab(tab: 'study' | 'manage' | 'templates' | 'transfer' | 'scheduler'): Promise<void> {
     // Dismiss any overlays that might intercept clicks
     await dismissConnectionModals(this.page);
     const tabLocator = {
       study: this.studyTab,
       manage: this.manageTab,
       templates: this.templatesTab,
+      scheduler: this.schedulerTab,
       transfer: this.transferTab,
     }[tab];
     await tabLocator.click({ force: true });

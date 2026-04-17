@@ -1,6 +1,6 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { TemplatesTab } from "../TemplatesTab"
 import {
@@ -106,6 +106,10 @@ const buildTemplate = (overrides: Partial<FlashcardTemplate> = {}): FlashcardTem
 })
 
 describe("TemplatesTab", () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -261,6 +265,39 @@ describe("TemplatesTab", () => {
     })
   })
 
+  it("keeps the current template editor pinned while a dirty search filters it out", () => {
+    vi.mocked(useFlashcardTemplatesQuery).mockReturnValue({
+      data: {
+        items: [
+          buildTemplate(),
+          buildTemplate({
+            id: 2,
+            name: "Chemistry facts",
+            front_template: "Element: {{prompt}}",
+            back_template: "Symbol: {{answer}}",
+            version: 1
+          })
+        ],
+        count: 2,
+        total: 2
+      },
+      isLoading: false,
+      error: null
+    } as any)
+
+    render(<TemplatesTab />)
+
+    fireEvent.change(screen.getByLabelText("Template name"), {
+      target: { value: "Unsaved rename" }
+    })
+    fireEvent.change(screen.getByPlaceholderText("Search templates"), {
+      target: { value: "Chemistry" }
+    })
+
+    expect(screen.getByDisplayValue("Unsaved rename")).toBeInTheDocument()
+    expect(screen.queryByDisplayValue("Chemistry facts")).not.toBeInTheDocument()
+  })
+
   it("clears a stale search and keeps the edited template selected after rename", async () => {
     vi.mocked(useFlashcardTemplatesQuery).mockReturnValue({
       data: { items: [buildTemplate()], count: 1, total: 1 },
@@ -298,7 +335,7 @@ describe("TemplatesTab", () => {
       error: null
     } as any)
     deleteMutateAsync.mockResolvedValue(undefined)
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    vi.spyOn(window, "confirm").mockReturnValue(true)
 
     render(<TemplatesTab />)
 
@@ -311,7 +348,6 @@ describe("TemplatesTab", () => {
       })
     })
 
-    confirmSpy.mockRestore()
   })
 
   it("clears a stale search and selects another template after deleting the last match", async () => {
@@ -334,7 +370,7 @@ describe("TemplatesTab", () => {
       error: null
     } as any)
     deleteMutateAsync.mockResolvedValue(undefined)
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true)
+    vi.spyOn(window, "confirm").mockReturnValue(true)
 
     render(<TemplatesTab />)
 
@@ -353,7 +389,6 @@ describe("TemplatesTab", () => {
     expect(screen.getByPlaceholderText("Search templates")).toHaveValue("")
     expect(screen.getByDisplayValue("Chemistry facts")).toBeInTheDocument()
 
-    confirmSpy.mockRestore()
   })
 
   it("blocks save when a placeholder key is not used in any targeted field", async () => {

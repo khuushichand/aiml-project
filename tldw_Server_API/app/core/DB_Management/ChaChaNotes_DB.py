@@ -26050,7 +26050,14 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if isinstance(raw_definitions, str):
             try:
                 parsed = json.loads(raw_definitions)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "_serialize_flashcard_template_row failed to parse placeholder_definitions_json "
+                    "for flashcard template {}: {}. Raw value: {}",
+                    item.get("id"),
+                    exc,
+                    raw_definitions,
+                )
                 parsed = []
         else:
             parsed = raw_definitions
@@ -26167,7 +26174,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     definitions_json,
                     now,
                     now,
-                    False,
+                    self._flashcard_template_deleted_value(False),
                     self.client_id,
                     1,
                 )

@@ -17,6 +17,53 @@ FlashcardTemplateModelType = Literal["basic", "basic_reverse", "cloze"]
 FlashcardTemplateFieldTarget = Literal["front_template", "back_template", "notes_template", "extra_template"]
 
 
+def _strip_required_string(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _strip_optional_string(value: Any) -> Any:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return value
+
+
+def _normalize_flashcard_template_placeholder_payload(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    if "key" in normalized:
+        normalized["key"] = _strip_required_string(normalized.get("key"))
+    if "label" in normalized:
+        normalized["label"] = _strip_required_string(normalized.get("label"))
+    if "help_text" in normalized:
+        normalized["help_text"] = _strip_optional_string(normalized.get("help_text"))
+    if "default_value" in normalized:
+        normalized["default_value"] = _strip_optional_string(normalized.get("default_value"))
+    return normalized
+
+
+def _normalize_flashcard_template_payload(data: Any) -> Any:
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    if "name" in normalized:
+        normalized["name"] = _strip_required_string(normalized.get("name"))
+    if "front_template" in normalized:
+        normalized["front_template"] = _strip_required_string(normalized.get("front_template"))
+    for field_name in ("back_template", "notes_template", "extra_template"):
+        if field_name in normalized:
+            normalized[field_name] = _strip_optional_string(normalized.get(field_name))
+    if isinstance(normalized.get("placeholder_definitions"), list):
+        normalized["placeholder_definitions"] = [
+            _normalize_flashcard_template_placeholder_payload(item)
+            for item in normalized["placeholder_definitions"]
+        ]
+    return normalized
+
+
 class DeckSchedulerSettings(BaseModel):
     new_steps_minutes: list[int] = Field(default_factory=lambda: [1, 10])
     relearn_steps_minutes: list[int] = Field(default_factory=lambda: [10])
@@ -124,6 +171,10 @@ class Deck(BaseModel):
 class FlashcardTemplatePlaceholderDefinition(BaseModel):
     """Describes a named placeholder that can populate one or more template scaffold fields."""
 
+    @model_validator(mode="before")
+    def _normalize_definition_fields(cls, data: Any) -> Any:
+        return _normalize_flashcard_template_placeholder_payload(data)
+
     key: str = Field(..., min_length=1, description="Placeholder token name without braces")
     label: str = Field(..., min_length=1)
     help_text: Optional[str] = None
@@ -134,6 +185,10 @@ class FlashcardTemplatePlaceholderDefinition(BaseModel):
 
 class FlashcardTemplateCreate(BaseModel):
     """Payload for creating a reusable flashcard authoring template."""
+
+    @model_validator(mode="before")
+    def _normalize_template_fields(cls, data: Any) -> Any:
+        return _normalize_flashcard_template_payload(data)
 
     name: str = Field(..., min_length=1)
     model_type: FlashcardTemplateModelType = "basic"
@@ -152,6 +207,10 @@ class FlashcardTemplateCreate(BaseModel):
 
 class FlashcardTemplateUpdate(BaseModel):
     """Partial payload for updating an existing flashcard authoring template."""
+
+    @model_validator(mode="before")
+    def _normalize_template_fields(cls, data: Any) -> Any:
+        return _normalize_flashcard_template_payload(data)
 
     name: Optional[str] = Field(None, min_length=1)
     model_type: Optional[FlashcardTemplateModelType] = None

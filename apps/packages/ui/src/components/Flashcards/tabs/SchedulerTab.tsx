@@ -612,7 +612,7 @@ export const SchedulerTab: React.FC<SchedulerTabProps> = ({
                     })}
                   </Text>
                 )}
-                {editorStatus === "saved" && !draftChanged && (
+                {editorStatus === "saved" && !draftChanged && !reviewPromptSideChanged && (
                   <Text type="success">
                     {t("option:flashcards.schedulerSavedState", {
                       defaultValue: "All changes saved"

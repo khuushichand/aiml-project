@@ -32,6 +32,7 @@ interface FlashcardTemplateFormProps {
   onCancel?: () => void
   onDelete?: () => void
   deleteDisabled?: boolean
+  onDirtyChange?: (dirty: boolean) => void
 }
 
 type FlashcardTemplateFormValues = FlashcardTemplateCreate
@@ -43,47 +44,29 @@ const TARGET_OPTIONS: Array<{ label: string; value: FlashcardTemplateFieldTarget
   { label: "Extra template", value: "extra_template" }
 ]
 
-const buildDefaultValues = (): FlashcardTemplateFormValues => ({
-  name: "",
-  model_type: "basic",
-  front_template: "",
-  back_template: "",
-  notes_template: "",
-  extra_template: "",
-  placeholder_definitions: []
+const coerceTemplateFormValues = (
+  values?: Partial<FlashcardTemplateCreate> | FlashcardTemplate | null
+): FlashcardTemplateFormValues => ({
+  name: values?.name ?? "",
+  model_type: values?.model_type ?? "basic",
+  front_template: values?.front_template ?? "",
+  back_template: values?.back_template ?? "",
+  notes_template: values?.notes_template ?? "",
+  extra_template: values?.extra_template ?? "",
+  placeholder_definitions: (values?.placeholder_definitions ?? []).map((definition) => ({
+    ...definition,
+    help_text: definition.help_text ?? "",
+    default_value: definition.default_value ?? "",
+    required: definition.required ?? false
+  }))
 })
+
+const buildDefaultValues = (): FlashcardTemplateFormValues => coerceTemplateFormValues(null)
 
 const buildInitialValues = (
   template?: FlashcardTemplate | null,
   initialValues?: Partial<FlashcardTemplateCreate> | null
-): FlashcardTemplateFormValues => {
-  if (!template) {
-    const defaults = buildDefaultValues()
-    return {
-      ...defaults,
-      ...initialValues,
-      back_template: initialValues?.back_template ?? defaults.back_template,
-      notes_template: initialValues?.notes_template ?? defaults.notes_template,
-      extra_template: initialValues?.extra_template ?? defaults.extra_template,
-      placeholder_definitions: initialValues?.placeholder_definitions ?? defaults.placeholder_definitions
-    }
-  }
-
-  return {
-    name: template.name,
-    model_type: template.model_type,
-    front_template: template.front_template,
-    back_template: template.back_template ?? "",
-    notes_template: template.notes_template ?? "",
-    extra_template: template.extra_template ?? "",
-    placeholder_definitions: template.placeholder_definitions.map((definition) => ({
-      ...definition,
-      help_text: definition.help_text ?? "",
-      default_value: definition.default_value ?? "",
-      required: definition.required ?? false
-    }))
-  }
-}
+): FlashcardTemplateFormValues => coerceTemplateFormValues(template ?? initialValues)
 
 const normalizeOptionalText = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim() ?? ""
@@ -172,16 +155,34 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
   onSubmit,
   onCancel,
   onDelete,
-  deleteDisabled = false
+  deleteDisabled = false,
+  onDirtyChange
 }) => {
   const { t } = useTranslation(["option", "common"])
   const [form] = Form.useForm<FlashcardTemplateFormValues>()
   const selectedModelType = Form.useWatch("model_type", form) ?? "basic"
+  const initialFormValues = React.useMemo(
+    () => buildInitialValues(template, initialValues),
+    [initialValues, template]
+  )
 
   React.useEffect(() => {
     form.resetFields()
-    form.setFieldsValue(buildInitialValues(template, initialValues))
-  }, [form, initialValues, template, mode])
+    form.setFieldsValue(initialFormValues)
+    onDirtyChange?.(false)
+  }, [form, initialFormValues, mode, onDirtyChange])
+
+  const handleValuesChange = React.useCallback(
+    (_changedValues: Partial<FlashcardTemplateFormValues>, allValues: FlashcardTemplateFormValues) => {
+      if (!onDirtyChange) {
+        return
+      }
+      const dirty =
+        JSON.stringify(coerceTemplateFormValues(allValues)) !== JSON.stringify(initialFormValues)
+      onDirtyChange(dirty)
+    },
+    [initialFormValues, onDirtyChange]
+  )
 
   const handleFinish = React.useCallback(
     async (values: FlashcardTemplateFormValues) => {
@@ -200,8 +201,9 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
         extra_template: normalizeOptionalText(values.extra_template),
         placeholder_definitions: normalizePlaceholderDefinitions(values.placeholder_definitions)
       })
+      onDirtyChange?.(false)
     },
-    [form, onSubmit, t]
+    [form, onDirtyChange, onSubmit, t]
   )
 
   return (
@@ -221,6 +223,7 @@ export const FlashcardTemplateForm: React.FC<FlashcardTemplateFormProps> = ({
         layout="vertical"
         initialValues={buildDefaultValues()}
         onFinish={handleFinish}
+        onValuesChange={handleValuesChange}
       >
         <Form.Item
           label={t("option:flashcards.templatesName", { defaultValue: "Template name" })}

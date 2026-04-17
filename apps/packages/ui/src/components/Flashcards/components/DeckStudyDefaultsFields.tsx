@@ -31,8 +31,18 @@ export const DeckStudyDefaultsFields: React.FC<DeckStudyDefaultsFieldsProps> = (
           defaultValue: "Review prompt side"
         })}
         options={[
-          { value: "front", label: "Front first" },
-          { value: "back", label: "Back first" }
+          {
+            value: "front",
+            label: t("option:flashcards.reviewPromptSideFront", {
+              defaultValue: "Front first"
+            })
+          },
+          {
+            value: "back",
+            label: t("option:flashcards.reviewPromptSideBack", {
+              defaultValue: "Back first"
+            })
+          }
         ]}
         data-testid="deck-study-defaults-review-prompt-side"
       />

@@ -124,6 +124,9 @@ test.describe('Flashcards', () => {
         await expect(flashcards.manageTab).toBeVisible();
         await expect(flashcards.templatesTab).toBeVisible();
         await expect(flashcards.transferTab).toBeVisible();
+        if (await flashcards.schedulerTab.isVisible().catch(() => false)) {
+          await expect(flashcards.schedulerTab).toBeVisible();
+        }
         await expect(flashcards.testWithQuizButton).toBeVisible();
       }
 
@@ -138,12 +141,18 @@ test.describe('Flashcards', () => {
       const online = await flashcards.isOnline();
       if (!online) return;
 
-      for (const tab of ['manage', 'templates', 'transfer', 'study'] as const) {
+      const tabs = ['manage', 'templates', 'transfer', 'study'] as const;
+      const schedulerVisible = await flashcards.schedulerTab.isVisible().catch(() => false);
+      const tabsToVisit = schedulerVisible ? [...tabs, 'scheduler' as const] : [...tabs];
+
+      for (const tab of tabsToVisit) {
         await flashcards.switchToTab(tab);
         if (tab === 'manage') {
           await expect(flashcards.manageTopBar).toBeVisible({ timeout: 10_000 });
         } else if (tab === 'templates') {
           await expect(flashcards.templatesTab).toHaveAttribute('aria-selected', 'true');
+        } else if (tab === 'scheduler') {
+          await expect(authedPage.getByPlaceholder('Search decks')).toBeVisible({ timeout: 10_000 });
         } else if (tab === 'transfer') {
           await expect(flashcards.importButton).toBeVisible({ timeout: 10_000 });
           await expect(flashcards.exportButton).toBeVisible({ timeout: 10_000 });
