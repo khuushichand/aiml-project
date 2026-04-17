@@ -47,7 +47,7 @@ from collections.abc import Mapping
 from configparser import ConfigParser  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, Protocol, TypeAlias  # noqa: E402
 
 from loguru import logger  # noqa: E402
 
@@ -357,9 +357,10 @@ class BackendCursorAdapter:
 class BackendCursorWrapper:
     """Cursor wrapper that routes operations through the configured backend."""
 
-    def __init__(self, db: CharactersRAGDB, connection):
+    def __init__(self, db: CharactersRAGDB, connection, backend: DatabaseBackend):
         self._db = db
         self._connection = connection
+        self._backend = backend
         self._result: QueryResult | None = None
         self._adapter: BackendCursorAdapter | None = None
         self.rowcount: int = -1
@@ -368,7 +369,7 @@ class BackendCursorWrapper:
 
     def execute(self, query: str, params: tuple | list | dict | None = None):
         prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
-        self._result = self._db.backend.execute(
+        self._result = self._backend.execute(
             prepared_query,
             prepared_params,
             connection=self._connection,
@@ -381,7 +382,7 @@ class BackendCursorWrapper:
 
     def executemany(self, query: str, params_list: list[tuple | list | dict]):
         prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
-        self._result = self._db.backend.execute_many(
+        self._result = self._backend.execute_many(
             prepared_query,
             prepared_params_list,
             connection=self._connection,
@@ -422,14 +423,15 @@ class BackendCursorWrapper:
 class BackendConnectionWrapper:
     """Connection wrapper that returns backend-aware cursors."""
 
-    def __init__(self, db: CharactersRAGDB, connection):
+    def __init__(self, db: CharactersRAGDB, connection, backend: DatabaseBackend):
         self._db = db
         self._connection = connection
+        self._backend = backend
 
     def cursor(self):
-        if self._db.backend_type == BackendType.SQLITE:
+        if self._backend.backend_type == BackendType.SQLITE:
             return self._connection.cursor()
-        return BackendCursorWrapper(self._db, self._connection)
+        return BackendCursorWrapper(self._db, self._connection, self._backend)
 
     def execute(self, query: str, params: tuple | list | dict | None = None):
         cursor = self.cursor()
@@ -454,12 +456,27 @@ class BackendConnectionWrapper:
 
     @property
     def in_transaction(self) -> bool:
-        if self._db.backend_type == BackendType.SQLITE:
+        if self._backend.backend_type == BackendType.SQLITE:
             return self._connection.in_transaction
         return True
 
     def __getattr__(self, item):
         return getattr(self._connection, item)
+
+
+class SupportsRawBackendConnection(Protocol):
+    """Protocol for pooled backend connections handled outside sqlite3."""
+
+    def close(self) -> Any: ...
+
+    def commit(self) -> Any: ...
+
+    def rollback(self) -> Any: ...
+
+    def cursor(self) -> Any: ...
+
+
+RawBackendConnection: TypeAlias = sqlite3.Connection | SupportsRawBackendConnection
 
 
 class BackendManagedTransaction:
@@ -477,7 +494,8 @@ class BackendManagedTransaction:
         self._depth = getattr(self._db._local, "tx_depth", 0)
         self._managed = self._depth == 0
         self._db._local.tx_depth = self._depth + 1
-        self._wrapper = BackendConnectionWrapper(self._db, self._raw_conn)
+        backend = self._db._get_pinned_backend() or self._db.backend
+        self._wrapper = BackendConnectionWrapper(self._db, self._raw_conn, backend)
         return self._wrapper
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -5115,13 +5133,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         if not client_id:
             raise ValueError("Client ID cannot be empty or None.")  # noqa: TRY003
         self.client_id = client_id
+        self._local = threading.local()
+        self._schema_lock = threading.RLock()
+        self._bootstrapped_backend_targets: set[str] = set()
+        self._backend_refresh_suspended = False
         # Ownership marker for backend lifecycle:
         # - True: this wrapper directly owns the backend lifecycle and cleanup.
         # - False: lifecycle is managed externally (factory-managed shared backend or injected backend).
         self._owner_managed_backend = False
-
-        self.backend = self._resolve_backend(backend=backend, config=config)
-        self.backend_type = self.backend.backend_type
+        self._uses_shared_content_backend = False
+        self._backend, self._uses_shared_content_backend = self._resolve_backend(
+            backend=backend,
+            config=config,
+        )
 
         if self.backend_type != BackendType.SQLITE:
             self.is_memory_db = False
@@ -5144,10 +5168,9 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             f"Initializing CharactersRAGDB for path: {self.db_path_str} "
             f"[Client ID: {self.client_id}] (backend={self.backend_type.value})"
         )
-        self._local = threading.local()
-        self._schema_lock = threading.RLock()
         try:
             self._initialize_schema()
+            self._mark_backend_bootstrapped(self._backend)
             logger.debug(f"CharactersRAGDB initialization completed successfully for {self.db_path_str}")
         except (CharactersRAGDBError, sqlite3.Error) as e:
             logger.critical(f"FATAL: DB Initialization failed for {self.db_path_str}: {e}", exc_info=True)
@@ -5165,11 +5188,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         *,
         backend: DatabaseBackend | None,
         config: ConfigParser | None,
-    ) -> DatabaseBackend:
+    ) -> tuple[DatabaseBackend, bool]:
         """Select the database backend instance for this content store."""
         if backend is not None:
             self._owner_managed_backend = False
-            return backend
+            return backend, False
 
         parser: ConfigParser | None = config
         if parser is None:
@@ -5182,7 +5205,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             candidate = get_content_backend(parser)
             if candidate and candidate.backend_type == BackendType.POSTGRESQL:
                 self._owner_managed_backend = False
-                return candidate
+                return candidate, True
 
         fallback_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
@@ -5193,9 +5216,85 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             # isolated from the global factory registry. This wrapper owns cleanup for
             # that backend and it is not affected by factory-wide reset/close calls.
             self._owner_managed_backend = True
-            return SQLiteBackend(fallback_config)
+            return SQLiteBackend(fallback_config), False
         self._owner_managed_backend = False
-        return DatabaseBackendFactory.create_backend(fallback_config)
+        return DatabaseBackendFactory.create_backend(fallback_config), False
+
+    def _backend_target_key(self, backend: DatabaseBackend | None) -> str | None:
+        if backend is None:
+            return None
+        config = getattr(backend, "config", None)
+        if backend.backend_type == BackendType.POSTGRESQL:
+            if config and getattr(config, "connection_string", None):
+                return str(config.connection_string)
+            if config:
+                host = getattr(config, "pg_host", None) or "localhost"
+                port = getattr(config, "pg_port", None) or 5432
+                database = getattr(config, "pg_database", None) or "<postgres>"
+                return f"{host}:{port}/{database}"
+            return f"postgres:{id(backend)}"
+        if config and getattr(config, "sqlite_path", None):
+            return str(config.sqlite_path)
+        return f"sqlite:{id(backend)}"
+
+    def _get_pinned_backend(self) -> DatabaseBackend | None:
+        return getattr(self._local, "backend_ref", None)
+
+    def _mark_backend_bootstrapped(self, backend: DatabaseBackend | None) -> None:
+        key = self._backend_target_key(backend)
+        if key:
+            self._bootstrapped_backend_targets.add(key)
+
+    def _ensure_bootstrap_for_backend(self, backend: DatabaseBackend) -> None:
+        if backend.backend_type != BackendType.POSTGRESQL:
+            return
+        key = self._backend_target_key(backend)
+        if key in self._bootstrapped_backend_targets:
+            return
+        previous_suspend = self._backend_refresh_suspended
+        self._backend_refresh_suspended = True
+        try:
+            self._backend = backend
+            self._initialize_schema()
+        finally:
+            self._backend_refresh_suspended = previous_suspend
+        if key:
+            self._bootstrapped_backend_targets.add(key)
+
+    @property
+    def backend(self) -> DatabaseBackend:
+        pinned_backend = self._get_pinned_backend()
+        if pinned_backend is not None:
+            return pinned_backend
+        if not self._uses_shared_content_backend:
+            return self._backend
+        if self._backend_refresh_suspended:
+            return self._backend
+        with self._schema_lock:
+            pinned_backend = self._get_pinned_backend()
+            if pinned_backend is not None:
+                return pinned_backend
+            if not self._uses_shared_content_backend:
+                return self._backend
+            if self._backend_refresh_suspended:
+                return self._backend
+
+            current_key = self._backend_target_key(self._backend)
+            refreshed_backend, uses_shared_backend = self._resolve_backend(backend=None, config=None)
+            self._uses_shared_content_backend = uses_shared_backend
+            self._backend = refreshed_backend
+            refreshed_key = self._backend_target_key(refreshed_backend)
+            if (
+                uses_shared_backend
+                and refreshed_backend.backend_type == BackendType.POSTGRESQL
+                and refreshed_key != current_key
+            ):
+                self._ensure_bootstrap_for_backend(refreshed_backend)
+            return self._backend
+
+    @property
+    def backend_type(self) -> BackendType:
+        return self.backend.backend_type
 
 
     def _prepare_backend_statement(
@@ -5241,18 +5340,23 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         return transform_sqlite_query_for_postgres(query)
 
 
-    def _open_new_connection(self):
+    def _open_new_connection(self, backend: DatabaseBackend | None = None) -> RawBackendConnection:
+        active_backend = backend or self.backend
         try:
-            pool = self.backend.get_pool()
+            pool = active_backend.get_pool()
             conn = pool.get_connection()
             # Apply per-tenant session guard for PostgreSQL (RLS via current_setting('app.current_user_id'))
-            if self.backend_type == BackendType.POSTGRESQL and self.client_id:
+            if active_backend.backend_type == BackendType.POSTGRESQL and self.client_id:
                 conn = self._apply_postgres_client_scope(conn, pool)
             return conn  # noqa: TRY300
         except BackendDatabaseError as exc:
             raise CharactersRAGDBError(f"Failed to acquire database connection: {exc}") from exc  # noqa: TRY003
 
-    def _apply_postgres_client_scope(self, conn, pool):
+    def _apply_postgres_client_scope(
+        self,
+        conn: RawBackendConnection,
+        pool,
+    ) -> RawBackendConnection:
         """Best-effort helper to set session-scoped client_id in PostgreSQL.
 
         Ensures failed SET/COMMIT attempts do not leave pooled connections in a
@@ -5273,7 +5377,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     (user_value,),
                 )
 
-        def _replace_connection(bad_conn) -> Any:
+        def _replace_connection(bad_conn: RawBackendConnection) -> RawBackendConnection:
             with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
                 bad_conn.close()
             with contextlib.suppress(_CHACHA_NONCRITICAL_EXCEPTIONS):
@@ -5330,12 +5434,17 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     _safe_rollback(conn, "retry failure")
         return conn
 
-    def _release_connection(self, connection) -> None:
+    def _release_connection(
+        self,
+        connection: RawBackendConnection,
+        backend: DatabaseBackend | None = None,
+    ) -> None:
+        active_backend = backend or self._get_pinned_backend() or self._backend
         try:
-            if self.backend_type == BackendType.SQLITE:
+            if active_backend.backend_type == BackendType.SQLITE:
                 thread_id = threading.get_ident()
                 try:
-                    pool = self.backend.get_pool()
+                    pool = active_backend.get_pool()
                     pool._connections[thread_id] = None  # type: ignore[attr-defined]
                     if hasattr(pool._local, 'connection'):  # type: ignore[attr-defined]
                         pool._local.connection = None  # type: ignore[attr-defined]
@@ -5344,7 +5453,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                 with contextlib.suppress(sqlite3.Error):
                     connection.close()
             else:
-                self.backend.get_pool().return_connection(connection)
+                active_backend.get_pool().return_connection(connection)
         except _CHACHA_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.warning("Error while releasing connection: {}", exc)
 
@@ -5369,9 +5478,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             CharactersRAGDBError: If acquiring a connection from the backend fails.
         """
         conn = getattr(self._local, 'conn', None)
+        backend = self._get_pinned_backend() or self.backend
 
-        if self.backend_type == BackendType.SQLITE:
-            pool = self.backend.get_pool()
+        if backend.backend_type == BackendType.SQLITE:
+            pool = backend.get_pool()
             if conn is not None:
                 try:
                     conn.execute("SELECT 1")
@@ -5396,7 +5506,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self._local.conn = None
 
             if conn is None:
-                conn = self._open_new_connection()
+                conn = self._open_new_connection(backend)
                 self._local.conn = conn
                 logger.debug(
                     'Opened/Reopened SQLite connection to {} for thread {}',
@@ -5407,16 +5517,19 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         # Non-SQLite backend: reuse connection if still open, otherwise borrow anew.
         if conn is not None and getattr(conn, "closed", False):
-            self._release_connection(conn)
+            self._release_connection(conn, backend=backend)
             conn = None
             self._local.conn = None
+            self._local.backend_ref = None
+            backend = self.backend
 
         if conn is None:
-            conn = self._open_new_connection()
+            conn = self._open_new_connection(backend)
             self._local.conn = conn
+            self._local.backend_ref = backend
             logger.debug(
                 'Acquired backend connection ({}) for thread {}',
-                self.backend_type.value,
+                backend.backend_type.value,
                 threading.get_ident(),
             )
         return conn
@@ -5424,9 +5537,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
     def get_connection(self) -> Any:
         """Return the active connection wrapper for the current thread."""
         raw_conn = self._get_thread_connection()
-        if self.backend_type == BackendType.SQLITE:
+        backend = self._get_pinned_backend() or self.backend
+        if backend.backend_type == BackendType.SQLITE:
             return raw_conn
-        return BackendConnectionWrapper(self, raw_conn)
+        return BackendConnectionWrapper(self, raw_conn, backend)
 
     def close_connection(self):
         """
@@ -5441,9 +5555,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         conn = getattr(self._local, 'conn', None)
         if conn is None:
             return
+        backend = self._get_pinned_backend() or self._backend
 
         try:
-            if self.backend_type == BackendType.SQLITE:
+            if backend.backend_type == BackendType.SQLITE:
                 if not self.is_memory_db:
                     if conn.in_transaction:
                         try:
@@ -5480,10 +5595,10 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
                     self.db_path_str,
                 )
             else:
-                self.backend.get_pool().return_connection(conn)
+                backend.get_pool().return_connection(conn)
                 logger.debug(
                     'Returned backend connection ({}) for thread {}.',
-                    self.backend_type.value,
+                    backend.backend_type.value,
                     threading.get_ident(),
                 )
         except sqlite3.Error as exc:
@@ -5496,9 +5611,11 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         finally:
             if hasattr(self._local, 'conn'):
                 self._local.conn = None
-            if self.backend_type == BackendType.SQLITE:
+            if hasattr(self._local, 'backend_ref'):
+                self._local.backend_ref = None
+            if backend.backend_type == BackendType.SQLITE:
                 try:
-                    pool = self.backend.get_pool()
+                    pool = backend.get_pool()
                     if hasattr(pool, 'clear_thread_local_connection'):
                         pool.clear_thread_local_connection()  # type: ignore[attr-defined]
                 except _CHACHA_NONCRITICAL_EXCEPTIONS:

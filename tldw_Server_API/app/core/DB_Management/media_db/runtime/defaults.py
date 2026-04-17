@@ -70,17 +70,13 @@ def _clear_content_backend_cache_unlocked() -> None:
 
     Intended to be called from within a ``_runtime_state_context()`` block.
     Swallows import and runtime errors so callers can proceed with reset.
+    The shared cache module owns its own cache lock, so callers should invoke
+    ``clear_cached_backend()`` directly.
     """
     try:
         import tldw_Server_API.app.core.DB_Management.content_backend as cb
 
-        # clear_cached_backend() acquires _cache_lock internally, so no
-        # external lock acquisition is needed here.
-        if hasattr(cb, "_cache_lock") and cb._cache_lock:
-            with cb._cache_lock:  # type: ignore[attr-defined]
-                cb.clear_cached_backend()
-        else:
-            cb.clear_cached_backend()
+        cb.clear_cached_backend()
     except ImportError as exc:
         logger.debug(f"reset_media_runtime_defaults: unable to import content_backend: {exc}")
     except MEDIA_DB_RUNTIME_EXCEPTIONS as exc:
