@@ -179,7 +179,7 @@ git commit -m "feat: add shared web outbound policy mode"
 - Test: `tldw_Server_API/tests/WebScraping/test_scraping_module.py`
 - Test: `tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py`
 
-- [ ] **Step 1: Write the failing scrape-path regressions**
+- [x] **Step 1: Write the failing scrape-path regressions**
 
 ```python
 @pytest.mark.asyncio
@@ -199,12 +199,12 @@ async def test_playwright_path_strict_blocks_before_browser_navigation(monkeypat
     assert playwright_used["used"] is False
 ```
 
-- [ ] **Step 2: Run the scrape-path regressions to verify they fail**
+- [x] **Step 2: Run the scrape-path regressions to verify they fail**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebScraping/test_playwright_guard_and_cookies.py tldw_Server_API/tests/Web_Scraping/test_router_backend_selection.py tldw_Server_API/tests/WebScraping/test_scraping_module.py tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py -v`
 Expected: FAIL because the scrape branches still use branch-local robots and egress decisions.
 
-- [ ] **Step 3: Implement the minimal scrape-call-site migration**
+- [x] **Step 3: Implement the minimal scrape-call-site migration**
 
 ```python
 decision = await decide_web_outbound_policy(
@@ -228,8 +228,9 @@ Implementation requirements:
 - keep the established blocked-result response shape for scrape-style operations
 - block Playwright navigation before the browser launches when strict mode denies the URL
 - route recursive crawl candidate gating through the same helper instead of mixing helper-based and branch-local logic
+- pull the same-code legacy sync neighbors (`scrape_article_blocking()`, `scrape_from_sitemap()`, and `collect_internal_links()`) onto the shared sync helper while preserving their non-scrape result contracts
 
-- [ ] **Step 4: Re-run the focused scrape-path tests**
+- [x] **Step 4: Re-run the focused scrape-path tests**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebScraping/test_playwright_guard_and_cookies.py tldw_Server_API/tests/Web_Scraping/test_router_backend_selection.py tldw_Server_API/tests/WebScraping/test_scraping_module.py tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py -v`
 Expected: PASS

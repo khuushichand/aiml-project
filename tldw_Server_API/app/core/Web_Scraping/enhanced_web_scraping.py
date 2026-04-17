@@ -61,6 +61,11 @@ from tldw_Server_API.app.core.Web_Scraping.filters import (
     URLPatternFilter,
 )
 from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
+from tldw_Server_API.app.core.Web_Scraping.outbound_policy import (
+    WebOutboundPolicyDecision,
+    decide_web_outbound_policy,
+    decide_web_outbound_policy_sync,
+)
 from tldw_Server_API.app.core.Web_Scraping.scoring import (
     CompositeScorer,
     DomainAuthorityScorer,
@@ -133,6 +138,7 @@ CRAWL_SKIP_REASON_DUPLICATE = "duplicate"
 CRAWL_SKIP_REASON_FILTER_CHAIN = "filter_chain"
 CRAWL_SKIP_REASON_PATH_DEPTH = "path_depth"
 CRAWL_SKIP_REASON_ROBOTS = "robots"
+CRAWL_SKIP_REASON_POLICY = "policy"
 CRAWL_SKIP_REASON_BELOW_THRESHOLD = "below_threshold"
 CRAWL_SKIP_REASON_CUSTOM_FILTER = "custom_filter"
 CRAWL_SKIP_REASON_OTHER = "other"
@@ -143,9 +149,43 @@ CRAWL_SKIP_REASON_LABELS = {
     CRAWL_SKIP_REASON_FILTER_CHAIN,
     CRAWL_SKIP_REASON_PATH_DEPTH,
     CRAWL_SKIP_REASON_ROBOTS,
+    CRAWL_SKIP_REASON_POLICY,
     CRAWL_SKIP_REASON_BELOW_THRESHOLD,
     CRAWL_SKIP_REASON_CUSTOM_FILTER,
 }
+
+
+def _record_robot_policy_block(url: str, reason: str) -> None:
+    if not reason.startswith("robots_"):
+        return
+    try:
+        parsed = urlparse(url)
+        increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+        increment_counter("scrape_blocked_by_robots_total", labels={})
+
+
+def _blocked_scrape_result(url: str, decision: WebOutboundPolicyDecision) -> dict[str, Any]:
+    _record_robot_policy_block(url, decision.reason)
+    if decision.reason.startswith("robots_"):
+        error = "Blocked by outbound policy"
+    else:
+        error = f"Egress denied: {decision.reason}"
+    return {
+        "url": url,
+        "error": error,
+        "extraction_successful": False,
+        "policy_reason": decision.reason,
+        "policy_mode": decision.mode,
+        "policy_stage": decision.stage,
+        "policy_source": decision.source,
+    }
+
+
+def _policy_skip_reason(decision: WebOutboundPolicyDecision) -> str:
+    if decision.reason.startswith("robots_"):
+        return CRAWL_SKIP_REASON_ROBOTS
+    return CRAWL_SKIP_REASON_POLICY
 
 
 def _default_rules_path() -> str:
@@ -1304,22 +1344,6 @@ class EnhancedWebScraper:
         custom_headers: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         """Scrape a single article with specified method"""
-        # Enforce centralized egress/SSRF policy before any network access
-        try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(url)
-            if not getattr(pol, 'allowed', False):
-                return {
-                    "url": url,
-                    "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}",
-                    "extraction_successful": False,
-                }
-        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as _e:
-            return {
-                "url": url,
-                "error": f"Egress policy evaluation failed: {_e}",
-                "extraction_successful": False,
-            }
         # Apply rate limiting
         await self.rate_limiter.acquire()
 
@@ -1349,6 +1373,32 @@ class EnhancedWebScraper:
                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                     pass
 
+            preflight_payload = None
+
+            def _attach_preflight(result: dict[str, Any]) -> dict[str, Any]:
+                if preflight_payload and isinstance(result, dict):
+                    result.setdefault("preflight_analysis", preflight_payload)
+                return result
+
+            try:
+                decision = await decide_web_outbound_policy(
+                    url,
+                    respect_robots=bool(getattr(plan, "respect_robots", True)),
+                    user_agent=headers.get("User-Agent", DEFAULT_USER_AGENT),
+                    source="enhanced_scrape",
+                    stage="pre_fetch",
+                    config={"web_scraper": self.config or {}},
+                )
+            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:
+                return _attach_preflight({
+                    "url": url,
+                    "error": f"Outbound policy evaluation failed: {exc}",
+                    "extraction_successful": False,
+                })
+
+            if not decision.allowed:
+                return _attach_preflight(_blocked_scrape_result(url, decision))
+
             preflight_analysis = await self._run_preflight_analysis(url)
             backend_setting = str(getattr(plan, "backend", "auto") or "auto").lower()
             backend_choice, method, preflight_notes = self._apply_preflight_advice(
@@ -1371,31 +1421,6 @@ class EnhancedWebScraper:
                         "notes": preflight_notes,
                     },
                 }
-
-            def _attach_preflight(result: dict[str, Any]) -> dict[str, Any]:
-                if preflight_payload and isinstance(result, dict):
-                    result.setdefault("preflight_analysis", preflight_payload)
-                return result
-
-            # robots.txt enforcement (fail open if error)
-            if getattr(plan, "respect_robots", True):
-                try:
-                    from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-                        is_allowed_by_robots_async,
-                    )
-                    if not await is_allowed_by_robots_async(url, headers.get("User-Agent", DEFAULT_USER_AGENT)):
-                        try:
-                            parsed = urlparse(url)
-                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-                        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                            increment_counter("scrape_blocked_by_robots_total", labels={})
-                        return _attach_preflight({
-                            "url": url,
-                            "error": "Blocked by robots policy",
-                            "extraction_successful": False,
-                        })
-                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                    pass
 
             effective_method = method
             if backend_choice == "playwright":
@@ -1947,15 +1972,19 @@ class EnhancedWebScraper:
         user_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
-        # Egress guard for sitemap endpoint
         try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(sitemap_url)
-            if not getattr(pol, 'allowed', False):
-                logger.error(f"Egress denied for sitemap: {getattr(pol, 'reason', 'blocked')}")
+            decision = decide_web_outbound_policy_sync(
+                sitemap_url,
+                respect_robots=False,
+                source="enhanced_sitemap",
+                stage="pre_fetch",
+                config={"web_scraper": self.config or {}},
+            )
+            if not decision.allowed:
+                logger.error(f"Sitemap blocked by outbound policy: {decision.reason}")
                 return []
-        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as _e:
-            logger.error(f"Egress policy evaluation failed: {_e}")
+        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.error(f"Outbound policy evaluation failed: {exc}")
             return []
         if task_id and task_id not in self._progress:
             self._progress[task_id] = {
@@ -2026,15 +2055,19 @@ class EnhancedWebScraper:
         crawl_strategy: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Recursively scrape a website"""
-        # Egress guard for base URL
         try:
-            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-            pol = evaluate_url_policy(base_url)
-            if not getattr(pol, 'allowed', False):
-                logger.error(f"Egress denied for recursive scrape: {getattr(pol, 'reason', 'blocked')}")
+            decision = decide_web_outbound_policy_sync(
+                base_url,
+                respect_robots=False,
+                source="recursive_scrape",
+                stage="pre_fetch",
+                config={"web_scraper": self.config or {}},
+            )
+            if not decision.allowed:
+                logger.error(f"Recursive scrape blocked by outbound policy: {decision.reason}")
                 return []
-        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as _e:
-            logger.error(f"Egress policy evaluation failed: {_e}")
+        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:
+            logger.error(f"Outbound policy evaluation failed: {exc}")
             return []
         if task_id and task_id not in self._progress:
             self._progress[task_id] = {
@@ -2358,25 +2391,35 @@ class EnhancedWebScraper:
                                         ),
                                     )
                                     continue
-                                # Optional robots gating (execute only for egress-allowed hosts)
-                                if robots_filter is not None:
-                                    try:
-                                        allowed = await robots_filter.allowed(cand)
-                                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                        allowed = True  # fail open
-                                    if not allowed:
-                                        try:
-                                            parsed = urlparse(cand)
-                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-                                        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                            pass
-                                        _record_skip(
-                                            reason=CRAWL_SKIP_REASON_ROBOTS,
-                                            strategy="best_first",
-                                            url=cand,
-                                            depth=depth + 1,
-                                        )
-                                        continue
+                                try:
+                                    decision = await decide_web_outbound_policy(
+                                        cand,
+                                        respect_robots=robots_filter is not None,
+                                        user_agent=user_agent or DEFAULT_USER_AGENT,
+                                        source="recursive_scrape_candidate",
+                                        stage="discovery",
+                                        config={"web_scraper": wc},
+                                        robots_filter=robots_filter,
+                                    )
+                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_POLICY,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"policy_error={exc}",
+                                    )
+                                    continue
+                                if not decision.allowed:
+                                    _record_robot_policy_block(cand, decision.reason)
+                                    _record_skip(
+                                        reason=_policy_skip_reason(decision),
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"policy_reason={decision.reason}",
+                                    )
+                                    continue
                                 try:
                                     s_val = composite.score(cand)
                                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
@@ -2557,24 +2600,35 @@ class EnhancedWebScraper:
                                         ),
                                     )
                                     continue
-                                if robots_filter is not None:
-                                    try:
-                                        allowed = await robots_filter.allowed(cand)
-                                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                        allowed = True  # fail open
-                                    if not allowed:
-                                        try:
-                                            parsed = urlparse(cand)
-                                            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-                                        except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                            pass
-                                        _record_skip(
-                                            reason=CRAWL_SKIP_REASON_ROBOTS,
-                                            strategy=eff_strategy,
-                                            url=cand,
-                                            depth=depth + 1,
-                                        )
-                                        continue
+                                try:
+                                    decision = await decide_web_outbound_policy(
+                                        cand,
+                                        respect_robots=robots_filter is not None,
+                                        user_agent=user_agent or DEFAULT_USER_AGENT,
+                                        source="recursive_scrape_candidate",
+                                        stage="discovery",
+                                        config={"web_scraper": wc},
+                                        robots_filter=robots_filter,
+                                    )
+                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS as exc:
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_POLICY,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"policy_error={exc}",
+                                    )
+                                    continue
+                                if not decision.allowed:
+                                    _record_robot_policy_block(cand, decision.reason)
+                                    _record_skip(
+                                        reason=_policy_skip_reason(decision),
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"policy_reason={decision.reason}",
+                                    )
+                                    continue
                                 try:
                                     s_val = float(composite.score(cand))
                                     log_histogram("webscraping.crawl.score", s_val, labels={"stage": "discovery"})

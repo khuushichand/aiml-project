@@ -31,6 +31,43 @@ async def test_egress_denied_enhanced_scraper(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_article_scrape_blocks_on_shared_policy_before_network(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import Article_Extractor_Lib as ael
+    from tldw_Server_API.app.core.Web_Scraping.outbound_policy import (
+        WebOutboundPolicyDecision,
+    )
+
+    monkeypatch.setattr(ael, "load_and_log_configs", lambda: {"web_scraper": {}})
+    async def fake_policy(*args, **kwargs):
+        return WebOutboundPolicyDecision(
+            allowed=False,
+            mode="strict",
+            reason="robots_unreachable",
+            stage="pre_fetch",
+            source="article_extract",
+        )
+
+    monkeypatch.setattr(
+        ael,
+        "decide_web_outbound_policy",
+        fake_policy,
+        raising=False,
+    )
+
+    def fail_http_fetch(*args, **kwargs):
+        raise AssertionError("network fetch should not run when outbound policy blocks")
+
+    monkeypatch.setattr(ael, "http_fetch", fail_http_fetch)
+    monkeypatch.setattr(ael, "_fetch_with_curl", fail_http_fetch)
+
+    result = await ael.scrape_article("https://example.com/blocked")
+
+    assert result["extraction_successful"] is False
+    assert result["error"] == "Blocked by outbound policy"
+    assert result["policy_reason"] == "robots_unreachable"
+
+
+@pytest.mark.asyncio
 async def test_extract_links_text_vs_html(monkeypatch):
     from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import EnhancedWebScraper
 

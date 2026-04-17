@@ -7,7 +7,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics import increment_counter
-from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.Security import egress as egress_policy
 from tldw_Server_API.app.core.Web_Scraping.filters import RobotsFilter
 from tldw_Server_API.app.core.config import web_outbound_policy_mode
 
@@ -23,6 +23,10 @@ class WebOutboundPolicyDecision:
     stage: str
     source: str
     details: dict[str, Any] | None = None
+
+
+def evaluate_url_policy(url: str):
+    return egress_policy.evaluate_url_policy(url)
 
 
 def get_web_outbound_policy_mode(config: dict[str, Any] | None = None) -> _Mode:
@@ -107,6 +111,7 @@ async def decide_web_outbound_policy(
     source: str,
     stage: str,
     config: dict[str, Any] | None = None,
+    robots_filter: RobotsFilter | None = None,
 ) -> WebOutboundPolicyDecision:
     mode = get_web_outbound_policy_mode(config)
     raw = evaluate_url_policy(url)
@@ -122,7 +127,7 @@ async def decide_web_outbound_policy(
     if not respect_robots:
         return _decision(True, mode=mode, reason="robots_skipped", stage=stage, source=source)
 
-    robots_filter = RobotsFilter(user_agent=user_agent or "*")
+    robots_filter = robots_filter or RobotsFilter(user_agent=user_agent or "*")
     try:
         allowed = await robots_filter.allowed(url)
     except Exception as exc:  # pragma: no cover - explicit behavior covered by monkeypatched tests
