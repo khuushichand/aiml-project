@@ -416,11 +416,13 @@ def _fetch_flashcard_or_404(card_uuid: str, db: CharactersRAGDB) -> dict:
     return card
 
 
-def _fetch_flashcard_template_or_404(template_id: int, db: CharactersRAGDB) -> dict[str, Any]:
+def _fetch_flashcard_template_or_404(template_id: int, db: CharactersRAGDB) -> FlashcardTemplate:
+    """Return a validated flashcard template or raise a 404 when it does not exist."""
+
     template = db.get_flashcard_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Flashcard template not found")
-    return template
+    return FlashcardTemplate.model_validate(template)
 
 
 def _build_assistant_context_snapshot(context: dict[str, Any]) -> dict[str, Any]:
@@ -2270,7 +2272,9 @@ def export_flashcards(
 def create_flashcard_template(
     payload: FlashcardTemplateCreate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> FlashcardTemplate:
+    """Create a reusable flashcard authoring template for the current user."""
+
     try:
         template_id = db.add_flashcard_template(**payload.model_dump())
         return _fetch_flashcard_template_or_404(template_id, db)
@@ -2279,7 +2283,9 @@ def create_flashcard_template(
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
-        logger.error(f"Failed to create flashcard template: {e}")
+        logger.bind(template_name=payload.name, model_type=payload.model_type).error(
+            f"Failed to create flashcard template: {e}"
+        )
         raise HTTPException(status_code=500, detail="Failed to create flashcard template") from e
 
 
@@ -2288,16 +2294,20 @@ def list_flashcard_templates(
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-):
+) -> FlashcardTemplateListResponse:
+    """List flashcard authoring templates for the current user."""
+
     try:
         items = db.list_flashcard_templates(limit=limit, offset=offset)
-        return {
-            "items": items,
-            "count": len(items),
-            "total": db.count_flashcard_templates(),
-        }
+        return FlashcardTemplateListResponse(
+            items=items,
+            count=len(items),
+            total=db.count_flashcard_templates(),
+        )
     except CharactersRAGDBError as e:
-        logger.error(f"Failed to list flashcard templates: {e}")
+        logger.bind(limit=limit, offset=offset).error(
+            f"Failed to list flashcard templates: {e}"
+        )
         raise HTTPException(status_code=500, detail="Failed to list flashcard templates") from e
 
 
@@ -2305,11 +2315,15 @@ def list_flashcard_templates(
 def get_flashcard_template(
     template_id: int,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> FlashcardTemplate:
+    """Fetch a single flashcard authoring template by ID."""
+
     try:
         return _fetch_flashcard_template_or_404(template_id, db)
     except CharactersRAGDBError as e:
-        logger.error(f"Failed to get flashcard template: {e}")
+        logger.bind(template_id=template_id).error(
+            f"Failed to get flashcard template: {e}"
+        )
         raise HTTPException(status_code=500, detail="Failed to get flashcard template") from e
 
 
@@ -2318,7 +2332,11 @@ def update_flashcard_template(
     template_id: int,
     payload: FlashcardTemplateUpdate,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> FlashcardTemplate:
+    """Update a flashcard authoring template using optimistic locking when provided."""
+
+    data: dict[str, Any] = {}
+    expected_version: Optional[int] = None
     try:
         data = payload.model_dump(exclude_unset=True)
         expected_version = data.pop("expected_version", None)
@@ -2331,7 +2349,11 @@ def update_flashcard_template(
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
-        logger.error(f"Failed to update flashcard template: {e}")
+        logger.bind(
+            template_id=template_id,
+            expected_version=expected_version,
+            updated_fields=sorted(data.keys()),
+        ).error(f"Failed to update flashcard template: {e}")
         raise HTTPException(status_code=500, detail="Failed to update flashcard template") from e
 
 
@@ -2340,7 +2362,9 @@ def delete_flashcard_template(
     template_id: int,
     expected_version: int = Query(..., ge=1),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
-):
+) -> dict[str, bool]:
+    """Soft-delete a flashcard authoring template using optimistic locking."""
+
     try:
         ok = db.soft_delete_flashcard_template(template_id, expected_version)
         if not ok:
@@ -2349,7 +2373,9 @@ def delete_flashcard_template(
     except ConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
-        logger.error(f"Failed to delete flashcard template: {e}")
+        logger.bind(template_id=template_id, expected_version=expected_version).error(
+            f"Failed to delete flashcard template: {e}"
+        )
         raise HTTPException(status_code=500, detail="Failed to delete flashcard template") from e
 
 

@@ -124,6 +124,17 @@ def test_flashcard_template_requires_front_template(client_with_flashcards_db: T
     assert response.status_code == 422
 
 
+def test_flashcard_template_placeholder_targets_are_required_in_openapi_schema(
+    client_with_flashcards_db: TestClient,
+):
+    response = client_with_flashcards_db.get("/openapi.json", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+    placeholder_schema = schemas["FlashcardTemplatePlaceholderDefinition"]
+    assert "targets" in placeholder_schema["required"]
+
+
 def test_flashcard_template_update_missing_returns_not_found(client_with_flashcards_db: TestClient):
     response = client_with_flashcards_db.patch(
         "/api/v1/flashcards/templates/999999",

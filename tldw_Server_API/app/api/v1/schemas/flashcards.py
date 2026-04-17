@@ -122,15 +122,19 @@ class Deck(BaseModel):
 
 
 class FlashcardTemplatePlaceholderDefinition(BaseModel):
+    """Describes a named placeholder that can populate one or more template scaffold fields."""
+
     key: str = Field(..., min_length=1, description="Placeholder token name without braces")
     label: str = Field(..., min_length=1)
     help_text: Optional[str] = None
     default_value: Optional[str] = None
     required: bool = False
-    targets: list[FlashcardTemplateFieldTarget] = Field(default_factory=list, min_length=1)
+    targets: list[FlashcardTemplateFieldTarget] = Field(..., min_length=1)
 
 
 class FlashcardTemplateCreate(BaseModel):
+    """Payload for creating a reusable flashcard authoring template."""
+
     name: str = Field(..., min_length=1)
     model_type: FlashcardTemplateModelType = "basic"
     front_template: str = Field(..., min_length=1)
@@ -147,6 +151,8 @@ class FlashcardTemplateCreate(BaseModel):
 
 
 class FlashcardTemplateUpdate(BaseModel):
+    """Partial payload for updating an existing flashcard authoring template."""
+
     name: Optional[str] = Field(None, min_length=1)
     model_type: Optional[FlashcardTemplateModelType] = None
     front_template: Optional[str] = None
@@ -158,6 +164,8 @@ class FlashcardTemplateUpdate(BaseModel):
 
 
 class FlashcardTemplate(BaseModel):
+    """Stored flashcard authoring template returned by the API."""
+
     id: int
     name: str
     model_type: FlashcardTemplateModelType
@@ -174,6 +182,8 @@ class FlashcardTemplate(BaseModel):
 
 
 class FlashcardTemplateListResponse(BaseModel):
+    """Response envelope for listing flashcard authoring templates."""
+
     items: list[FlashcardTemplate]
     count: int
     total: int | None = None

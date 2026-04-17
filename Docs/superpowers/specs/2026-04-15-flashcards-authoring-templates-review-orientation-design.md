@@ -19,7 +19,7 @@ The design keeps these concerns separate from the existing flashcard schema:
 
 ## Problem
 
-The current flashcards create flow in [FlashcardCreateDrawer.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx) supports manual creation well enough for one-off cards, but it is slower than it needs to be for users building many structurally similar cards.
+The current flashcards create flow in [FlashcardCreateDrawer.tsx](../../../apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx) supports manual creation well enough for one-off cards, but it is slower than it needs to be for users building many structurally similar cards.
 
 Current friction:
 
@@ -27,7 +27,7 @@ Current friction:
 - authors must repeatedly re-enter deck, tags, model choice, and recurring front/back scaffolding
 - there is no first-class place to save and reuse flashcard-specific creation patterns
 
-The current review flow in [ReviewTab.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx) always presents the `front` side first.
+The current review flow in [ReviewTab.tsx](../../../apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx) always presents the `front` side first.
 
 Current limitation:
 
@@ -77,7 +77,7 @@ Current limitation:
 
 ### Flashcard authoring already has the right extension point
 
-[FlashcardCreateDrawer.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx) already manages:
+[FlashcardCreateDrawer.tsx](../../../apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx) already manages:
 
 - deck selection
 - inline deck creation
@@ -99,7 +99,7 @@ Design implication:
 
 ### Review already routes through one active-card presentation path
 
-[ReviewTab.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx) derives a single `activeCard` and always renders:
+[ReviewTab.tsx](../../../apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx) derives a single `activeCard` and always renders:
 
 - `front` as the prompt
 - `back` as the revealed answer
@@ -108,13 +108,13 @@ Because due review and cram review share that rendering path, a deck-level orien
 
 ### Deck settings already have a natural home
 
-[DeckSchedulerSettingsEditor.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/components/DeckSchedulerSettingsEditor.tsx) and the deck create/update flow already support deck-level behavioral configuration. Review orientation should live alongside deck settings, not as an isolated ad hoc flag in Review.
+[DeckSchedulerSettingsEditor.tsx](../../../apps/packages/ui/src/components/Flashcards/components/DeckSchedulerSettingsEditor.tsx) and the deck create/update flow already support deck-level behavioral configuration. Review orientation should live alongside deck settings, not as an isolated ad hoc flag in Review.
 
 ### The repo already contains a template CRUD precedent
 
 The writing/playground feature already uses user-owned template persistence and CRUD patterns in:
 
-- [writing.py](/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/app/api/v1/endpoints/writing.py)
+- [writing.py](../../../tldw_Server_API/app/api/v1/endpoints/writing.py)
 - `ChaChaNotes_DB` writing template helpers
 
 Design implication:
@@ -203,7 +203,7 @@ Templates produce ordinary flashcard drafts. They do not create a new flashcard 
 
 ### 2. Create drawer flow adds template apply and save actions
 
-In [FlashcardCreateDrawer.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx):
+In [FlashcardCreateDrawer.tsx](../../../apps/packages/ui/src/components/Flashcards/components/FlashcardCreateDrawer.tsx):
 
 - rename `Card template` copy to `Card model` or `Card type`
 - add `Apply template`
@@ -228,7 +228,7 @@ That avoids silently freezing one-off draft content into a reusable template.
 
 ### 3. Templates library lives inside Flashcards
 
-Add a dedicated `Templates` tab to [FlashcardsManager.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/FlashcardsManager.tsx).
+Add a dedicated `Templates` tab to [FlashcardsManager.tsx](../../../apps/packages/ui/src/components/Flashcards/FlashcardsManager.tsx).
 
 This becomes the primary management home for:
 
@@ -267,7 +267,7 @@ This setting belongs in deck create/edit settings rather than scheduler settings
 
 ### 5. Review sessions allow temporary override
 
-Add a session-level review orientation control to [ReviewTab.tsx](/Users/macbook-dev/Documents/GitHub/tldw_server2/apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx).
+Add a session-level review orientation control to [ReviewTab.tsx](../../../apps/packages/ui/src/components/Flashcards/tabs/ReviewTab.tsx).
 
 Precedence:
 
