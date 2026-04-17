@@ -218,6 +218,8 @@ export type ClientPath =
   | "/api/v1/quizzes/import/json"
   | "/api/v1/flashcards"
   | "/api/v1/flashcards/decks"
+  | "/api/v1/flashcards/templates"
+  | "/api/v1/flashcards/templates/{template_id}"
   | "/api/v1/flashcards/generate"
   | "/api/v1/flashcards/review"
   | "/api/v1/flashcards/import"
