@@ -162,7 +162,7 @@ Implementation requirements:
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Web_Scraping/test_outbound_policy.py tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tldw_Server_API/app/core/Web_Scraping/outbound_policy.py tldw_Server_API/app/core/config.py tldw_Server_API/Config_Files/config.txt tldw_Server_API/app/core/Web_Scraping/filters.py tldw_Server_API/tests/Web_Scraping/test_outbound_policy.py tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py
@@ -235,7 +235,7 @@ Implementation requirements:
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebScraping/test_playwright_guard_and_cookies.py tldw_Server_API/tests/Web_Scraping/test_router_backend_selection.py tldw_Server_API/tests/WebScraping/test_scraping_module.py tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tldw_Server_API/app/core/Web_Scraping/Article_Extractor_Lib.py tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py tldw_Server_API/tests/WebScraping/test_playwright_guard_and_cookies.py tldw_Server_API/tests/Web_Scraping/test_router_backend_selection.py tldw_Server_API/tests/WebScraping/test_scraping_module.py tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py
@@ -298,7 +298,7 @@ Implementation requirements:
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/WebSearch/test_websearch_core.py tldw_Server_API/tests/Security/test_websearch_egress_guard.py tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tldw_Server_API/app/core/Web_Scraping/WebSearch_APIs.py tldw_Server_API/tests/WebSearch/test_websearch_core.py tldw_Server_API/tests/Security/test_websearch_egress_guard.py tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py
@@ -344,7 +344,7 @@ Expected: only deliberately documented raw preflight checks remain, if any; all 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m bandit -r tldw_Server_API/app/core/Web_Scraping/outbound_policy.py tldw_Server_API/app/core/Web_Scraping/filters.py tldw_Server_API/app/core/Web_Scraping/Article_Extractor_Lib.py tldw_Server_API/app/core/Web_Scraping/enhanced_web_scraping.py tldw_Server_API/app/core/Web_Scraping/WebSearch_APIs.py tldw_Server_API/app/core/config.py -f json -o /tmp/bandit_wave4_outbound_policy.json`
 Expected: no new high-severity findings in touched scope.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Docs/superpowers/reviews/web-scraping/2026-04-16-wave4-outbound-policy-callsite-audit.md tldw_Server_API/app/core/Web_Scraping/README.md Docs/Published/User_Guides/Server/Web_Scraping_Ingestion_Guide.md
