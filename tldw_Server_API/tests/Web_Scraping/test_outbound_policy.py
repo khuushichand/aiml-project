@@ -66,7 +66,7 @@ def test_web_outbound_policy_sync_emits_decision_metric(monkeypatch):
     monkeypatch.setattr(
         policy,
         "evaluate_url_policy",
-        lambda _url: SimpleNamespace(allowed=False, reason="deny_test"),
+        lambda _url: SimpleNamespace(allowed=False, reason="Port not allowed: 12345"),
         raising=False,
     )
     monkeypatch.setattr(
@@ -95,7 +95,7 @@ def test_web_outbound_policy_sync_emits_decision_metric(monkeypatch):
                 "source": "websearch_provider",
                 "stage": "provider_request",
                 "outcome": "blocked",
-                "reason": "deny_test",
+                "reason": "port_not_allowed",
             },
         )
     ]
@@ -115,10 +115,18 @@ async def test_web_outbound_policy_compat_allows_when_robots_fetch_errors(monkey
         raising=False,
     )
 
-    async def boom(self, _url):
-        raise RuntimeError("robots timeout")
+    async def check_result(self, _url, *, skip_egress_check, fail_open):
+        assert skip_egress_check is True
+        assert fail_open is True
+        return SimpleNamespace(allowed=True, status="unreachable")
 
-    monkeypatch.setattr(policy.RobotsFilter, "allowed", boom, raising=False)
+    monkeypatch.setattr(policy.RobotsFilter, "check", check_result, raising=False)
+    monkeypatch.setattr(
+        policy.RobotsFilter,
+        "allowed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("use check() instead of allowed()")),
+        raising=False,
+    )
 
     decision = await policy.decide_web_outbound_policy(
         "https://example.com/page",
@@ -149,10 +157,18 @@ async def test_web_outbound_policy_strict_blocks_when_robots_fetch_errors(monkey
         raising=False,
     )
 
-    async def boom(self, _url):
-        raise RuntimeError("robots timeout")
+    async def check_result(self, _url, *, skip_egress_check, fail_open):
+        assert skip_egress_check is True
+        assert fail_open is False
+        return SimpleNamespace(allowed=False, status="unreachable")
 
-    monkeypatch.setattr(policy.RobotsFilter, "allowed", boom, raising=False)
+    monkeypatch.setattr(policy.RobotsFilter, "check", check_result, raising=False)
+    monkeypatch.setattr(
+        policy.RobotsFilter,
+        "allowed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("use check() instead of allowed()")),
+        raising=False,
+    )
 
     decision = await policy.decide_web_outbound_policy(
         "https://example.com/page",
@@ -167,3 +183,98 @@ async def test_web_outbound_policy_strict_blocks_when_robots_fetch_errors(monkey
     assert decision.reason == "robots_unreachable"
     assert decision.stage == "pre_fetch"
     assert decision.source == "article_extract"
+
+
+@pytest.mark.asyncio
+async def test_web_outbound_policy_strict_blocks_when_robots_endpoint_returns_5xx(monkeypatch):
+    monkeypatch.setenv("WEB_OUTBOUND_POLICY_MODE", "strict")
+    policy = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.outbound_policy"
+    )
+    filters = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.filters"
+    )
+    article_lib = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib"
+    )
+
+    monkeypatch.setattr(
+        policy,
+        "evaluate_url_policy",
+        lambda _url: SimpleNamespace(allowed=True, reason="allowed"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        filters,
+        "http_fetch",
+        lambda **_kwargs: {"status": 503, "text": ""},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        article_lib,
+        "http_fetch",
+        lambda **_kwargs: {"status": 503, "text": ""},
+        raising=False,
+    )
+
+    decision = await policy.decide_web_outbound_policy(
+        "https://example.com/page",
+        respect_robots=True,
+        user_agent="UA",
+        source="article_extract",
+        stage="pre_fetch",
+        robots_filter=filters.RobotsFilter(user_agent="UA"),
+    )
+
+    assert decision.allowed is False
+    assert decision.mode == "strict"
+    assert decision.reason == "robots_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_web_outbound_policy_reuses_existing_egress_decision_for_robots_check(monkeypatch):
+    monkeypatch.setenv("WEB_OUTBOUND_POLICY_MODE", "compat")
+    policy = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.outbound_policy"
+    )
+    filters = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.filters"
+    )
+    egress = importlib.import_module(
+        "tldw_Server_API.app.core.Security.egress"
+    )
+
+    monkeypatch.setattr(
+        policy,
+        "evaluate_url_policy",
+        lambda _url: SimpleNamespace(allowed=True, reason="allowed"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        egress,
+        "evaluate_url_policy",
+        lambda _url: (_ for _ in ()).throw(AssertionError("unexpected second egress evaluation")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        filters,
+        "http_fetch",
+        lambda **_kwargs: {
+            "status": 200,
+            "text": "User-agent: *\nAllow: /\n",
+        },
+        raising=False,
+    )
+
+    decision = await policy.decide_web_outbound_policy(
+        "https://example.com/page",
+        respect_robots=True,
+        user_agent="UA",
+        source="article_extract",
+        stage="pre_fetch",
+        robots_filter=filters.RobotsFilter(user_agent="UA"),
+    )
+
+    assert decision.allowed is True
+    assert decision.mode == "compat"
+    assert decision.reason == "allowed"

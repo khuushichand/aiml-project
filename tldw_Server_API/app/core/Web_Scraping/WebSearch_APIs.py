@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 from tldw_Server_API.app.core.Web_Scraping.outbound_policy import (
+    WebOutboundPolicyDecision,
     decide_web_outbound_policy_sync,
 )
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
@@ -101,7 +102,8 @@ def _provider_outbound_policy_decision(
     *,
     source: str,
     stage: str = "provider_request",
-):
+) -> WebOutboundPolicyDecision:
+    """Return the shared outbound-policy decision for a websearch provider URL."""
     try:
         return decide_web_outbound_policy_sync(
             url,

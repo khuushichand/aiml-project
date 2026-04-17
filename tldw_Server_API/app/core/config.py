@@ -2333,6 +2333,11 @@ def rag_low_confidence_behavior(default: str = "continue") -> str:
 
 
 def web_outbound_policy_mode(default: str = "compat") -> str:
+    """Return the web outbound-policy mode with env-over-config precedence.
+
+    Accepted values are ``compat`` and ``strict``. Invalid or missing values
+    fall back to ``default``.
+    """
     v = os.getenv("WEB_OUTBOUND_POLICY_MODE")
     if v is None:
         try:
