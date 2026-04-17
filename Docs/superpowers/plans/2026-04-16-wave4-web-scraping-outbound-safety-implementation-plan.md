@@ -312,7 +312,7 @@ git commit -m "fix: align websearch and research outbound policy"
 - Modify: `tldw_Server_API/app/core/Web_Scraping/README.md`
 - Modify: `Docs/Published/User_Guides/Server/Web_Scraping_Ingestion_Guide.md`
 
-- [ ] **Step 1: Record the call-site audit and explicit exclusions**
+- [x] **Step 1: Record the call-site audit and explicit exclusions**
 
 ```markdown
 # Wave 4 Outbound Policy Call-Site Audit
@@ -326,14 +326,14 @@ git commit -m "fix: align websearch and research outbound policy"
   - workflows_webhook_dlq_service.py
 ```
 
-- [ ] **Step 2: Update internal and operator-facing documentation**
+- [x] **Step 2: Update internal and operator-facing documentation**
 
 Document:
 - new `WEB_OUTBOUND_POLICY_MODE` / `web_outbound_policy_mode`
 - `compat` versus `strict` behavior
 - explicit note that strict mode is supported but not the default flip in this wave
 
-- [ ] **Step 3: Run the focused final verification set**
+- [x] **Step 3: Run the focused final verification set**
 
 Run: `source /Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/activate && python -m pytest tldw_Server_API/tests/Web_Scraping/test_outbound_policy.py tldw_Server_API/tests/Web_Scraping/test_robots_enforcement.py tldw_Server_API/tests/Web_Scraping/test_filters_and_robots.py tldw_Server_API/tests/WebScraping/test_playwright_guard_and_cookies.py tldw_Server_API/tests/Web_Scraping/test_router_backend_selection.py tldw_Server_API/tests/WebScraping/test_scraping_module.py tldw_Server_API/tests/Web_Scraping/test_recursive_crawl_semantics.py tldw_Server_API/tests/WebSearch/test_websearch_core.py tldw_Server_API/tests/Security/test_websearch_egress_guard.py tldw_Server_API/tests/RAG_NEW/unit/test_research_agent.py tldw_Server_API/tests/Web_Scraping/test_http_client_fetch.py tldw_Server_API/tests/Web_Scraping/test_process_web_scraping_strategy_validation.py tldw_Server_API/tests/WebScraping/test_webscraping_usage_events.py tldw_Server_API/tests/WebScraping/test_custom_headers_support.py -v`
 Expected: PASS
