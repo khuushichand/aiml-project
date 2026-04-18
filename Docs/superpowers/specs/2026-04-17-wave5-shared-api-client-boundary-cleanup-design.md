@@ -238,6 +238,17 @@ Before removing or moving behavior, the implementation must build an ownership i
 - which runtime helpers are imported by domains from `TldwApiClient.ts`
 - which overlaps currently exist between the class body and mixed-in domains
 
+This stage also needs one authoritative comparison point for guard coverage.
+
+Recommended options:
+
+- expose a pre-mixin `TldwApiClientBase` export that contains the class implementation before `Object.assign(...)`
+- or define an explicit ownership manifest checked by tests against both the base class and the mixed-in domain objects
+
+Guardrail:
+
+- do not rely on the final runtime prototype alone for collision detection, because the mixed-in methods have already overwritten the overlapping class methods by that point
+
 Wave 5 should add a collision-guard test that fails when:
 
 - a domain-owned method exists both in the class body and in a domain mixin
@@ -258,13 +269,24 @@ This includes helpers currently imported by domains for runtime behavior, such a
 Guardrails:
 
 - preserve consumer compatibility through re-exports from `TldwApiClient.ts` where that avoids broad churn
+- treat runtime-helper re-exports as transitional by default unless the implementation plan explicitly justifies keeping a given helper as permanent public API
 - do not use this stage as an excuse to move all types or all helpers out of the file
 
 #### Stage 2: De-Shadow By Reviewable Slices
 
 Once helper dependencies are safe, remove overlapping legacy class methods in reviewable slices.
 
-The initial slice order should favor the least coupled domains first. Candidate early slices include:
+Slice selection should be driven by Stage 0 evidence, not by a hardcoded order.
+
+Selection criteria:
+
+- low or moderate dependency coupling
+- high overlap reduction per touched file
+- small, coherent verification surface
+- limited consumer churn outside the touched domain
+- clear ownership payoff relative to the size of the slice
+
+Candidate early slices include:
 
 - admin
 - workspace API
@@ -296,6 +318,10 @@ Add a focused test that verifies:
 
 - the agreed set of domain-owned method names is not redefined in the class body
 - `Object.assign(...)` is not masking newly introduced collisions
+
+Implementation note:
+
+- the test must compare against either the pre-mixin `TldwApiClientBase` export or the explicit ownership manifest from Stage 0 so it can detect collisions before runtime prototype overwrites hide them
 
 This is the most important new regression coverage in the wave.
 
@@ -366,7 +392,8 @@ Mitigation:
 Wave 5 is complete only when:
 
 - the core vs domain ownership boundary is explicit and tested
-- at least one meaningful de-shadowing slice has landed without export regressions
+- the Stage 0 inventory is recorded and the Wave 5 implementation plan names the de-shadowing slices actually in scope for this wave
+- every Wave 5 in-scope slice has landed without export regressions, or has an explicit handoff into a follow-on backlog with the remaining overlaps and next action named
 - `TldwApiClient.ts` no longer presents overlapping ownership for the completed slice
 - shared runtime helpers used by domains no longer require risky coupling to the class file
 - request-core and path-resolution behavior remain green
