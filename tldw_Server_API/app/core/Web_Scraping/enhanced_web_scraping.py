@@ -1972,10 +1972,15 @@ class EnhancedWebScraper:
         user_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Scrape all URLs from a sitemap"""
+        headers = self._build_request_headers(user_agent, custom_headers)
         try:
-            decision = decide_web_outbound_policy_sync(
+            decision = await decide_web_outbound_policy(
                 sitemap_url,
-                respect_robots=False,
+                respect_robots=self._as_bool(
+                    (self.config or {}).get("web_scraper_respect_robots", True),
+                    True,
+                ),
+                user_agent=headers.get("User-Agent", DEFAULT_USER_AGENT),
                 source="enhanced_sitemap",
                 stage="pre_fetch",
                 config={"web_scraper": self.config or {}},
@@ -1994,7 +1999,6 @@ class EnhancedWebScraper:
                 "current_url": sitemap_url,
                 "started_at": datetime.now().isoformat(),
             }
-        headers = self._build_request_headers(user_agent, custom_headers)
         cookies = self._build_cookie_map(sitemap_url, custom_cookies)
         resp = await afetch(
             method="GET",

@@ -2041,15 +2041,10 @@ def search_web_duckduckgo(
     results: list[dict[str, str]] = []
 
     ddg_url = "https://html.duckduckgo.com/html"
-    try:
-        decision = _provider_outbound_policy_decision(
-            ddg_url,
-            source="websearch_duckduckgo_html",
-        )
-        if not decision.allowed:
-            return results
-    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
-        return results
+    _enforce_provider_outbound_policy(
+        ddg_url,
+        source="websearch_duckduckgo_html",
+    )
 
     headers = _websearch_browser_headers(restrict_encodings_for_requests=True)
     for _ in range(5):

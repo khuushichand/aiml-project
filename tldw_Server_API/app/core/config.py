@@ -2342,7 +2342,20 @@ def web_outbound_policy_mode(default: str = "compat") -> str:
     if v is None:
         try:
             cp = load_comprehensive_config()
-            v = cp.get("Web-Scraper", "web_outbound_policy_mode", fallback=default) if cp else default
+            v = default
+            if cp:
+                has_section = getattr(cp, "has_section", None)
+                for section_name in ("Web-Scraper", "Web-Scraping"):
+                    if callable(has_section) and not has_section(section_name):
+                        continue
+                    candidate = cp.get(
+                        section_name,
+                        "web_outbound_policy_mode",
+                        fallback=None,
+                    )
+                    if candidate is not None and str(candidate).strip():
+                        v = candidate
+                        break
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
             v = default
     s = str(v).strip().lower()

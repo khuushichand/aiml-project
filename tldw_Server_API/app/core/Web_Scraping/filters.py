@@ -314,8 +314,8 @@ class RobotsFilter:
                     if not getattr(pol, "allowed", False):
                         return RobotsCheckResult(allowed=False, status="egress_denied")
             except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
-                # On egress evaluation error, fail closed for safety at enqueue time.
-                return RobotsCheckResult(allowed=False, status="egress_denied")
+                # On egress evaluation error, fail closed and preserve that distinction for observability.
+                return RobotsCheckResult(allowed=False, status="egress_error")
 
         fetch_result = await self._fetch_parser(url)
         if fetch_result.status != "ok" or fetch_result.parser is None:

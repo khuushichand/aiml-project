@@ -28,6 +28,30 @@ def test_web_outbound_policy_mode_reads_config_when_env_unset(monkeypatch):
     assert config_mod.web_outbound_policy_mode() == "strict"
 
 
+def test_web_outbound_policy_mode_reads_legacy_web_scraping_section_when_needed(monkeypatch):
+    monkeypatch.delenv("WEB_OUTBOUND_POLICY_MODE", raising=False)
+
+    config_mod = importlib.import_module("tldw_Server_API.app.core.config")
+
+    class _ConfigStub:
+        def has_section(self, section):
+            return section == "Web-Scraping"
+
+        def get(self, section, option, fallback=None):
+            if section == "Web-Scraping" and option == "web_outbound_policy_mode":
+                return "strict"
+            return fallback
+
+    monkeypatch.setattr(
+        config_mod,
+        "load_comprehensive_config",
+        lambda: _ConfigStub(),
+        raising=False,
+    )
+
+    assert config_mod.web_outbound_policy_mode() == "strict"
+
+
 def test_web_outbound_policy_sync_denies_provider_request(monkeypatch):
     monkeypatch.delenv("WEB_OUTBOUND_POLICY_MODE", raising=False)
     policy = importlib.import_module(
@@ -278,3 +302,53 @@ async def test_web_outbound_policy_reuses_existing_egress_decision_for_robots_ch
     assert decision.allowed is True
     assert decision.mode == "compat"
     assert decision.reason == "allowed"
+
+
+@pytest.mark.asyncio
+async def test_web_outbound_policy_blocks_internal_robots_check_errors_and_sanitizes_log(monkeypatch):
+    monkeypatch.setenv("WEB_OUTBOUND_POLICY_MODE", "compat")
+    policy = importlib.import_module(
+        "tldw_Server_API.app.core.Web_Scraping.outbound_policy"
+    )
+
+    monkeypatch.setattr(
+        policy,
+        "evaluate_url_policy",
+        lambda _url: SimpleNamespace(allowed=True, reason="allowed"),
+        raising=False,
+    )
+
+    async def raise_internal_error(self, _url, *, skip_egress_check, fail_open):
+        assert skip_egress_check is True
+        assert fail_open is True
+        raise RuntimeError("secret-token")
+
+    class _BoundLogger:
+        def __init__(self):
+            self.bound = {}
+            self.message = None
+
+        def bind(self, **kwargs):
+            self.bound = dict(kwargs)
+            return self
+
+        def debug(self, message):
+            self.message = message
+
+    fake_logger = _BoundLogger()
+    monkeypatch.setattr(policy.RobotsFilter, "check", raise_internal_error, raising=False)
+    monkeypatch.setattr(policy, "logger", fake_logger, raising=False)
+
+    decision = await policy.decide_web_outbound_policy(
+        "https://example.com/private?token=secret-token",
+        respect_robots=True,
+        user_agent="UA",
+        source="article_extract",
+        stage="pre_fetch",
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "robots_check_error_internal"
+    assert fake_logger.bound["sanitized_url"] == "example.com/private"
+    assert fake_logger.bound["error_type"] == "RuntimeError"
+    assert fake_logger.message == "Web outbound policy robots check failed"

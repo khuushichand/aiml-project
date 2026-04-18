@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from loguru import logger
 
@@ -64,6 +65,7 @@ def _metric_reason_label(reason: str) -> str:
         "robots_disallowed": "robots_disallowed",
         "robots_unreachable": "robots_unreachable",
         "robots_unreachable_allowed": "robots_unreachable_allowed",
+        "robots_check_error_internal": "robots_check_error_internal",
         "robots_sync_unsupported": "robots_sync_unsupported",
         "Host in denylist": "host_in_denylist",
         "Host not in allowlist": "host_not_in_allowlist",
@@ -122,6 +124,14 @@ def _decision(
 def _egress_denial_reason(raw: egress_policy.URLPolicyResult) -> str:
     """Extract a stable human-readable reason from an egress policy result."""
     return str(getattr(raw, "reason", "egress_denied") or "egress_denied")
+
+
+def _sanitize_url_for_logs(url: str) -> str:
+    """Strip query fragments from a URL before attaching it to logs."""
+    parsed = urlsplit(url)
+    host = parsed.hostname or ""
+    path = parsed.path or ""
+    return f"{host}{path}"
 
 
 def decide_web_outbound_policy_sync(
@@ -183,14 +193,35 @@ async def decide_web_outbound_policy(
             skip_egress_check=True,
             fail_open=(mode != "strict"),
         )
-    except Exception as exc:  # pragma: no cover - explicit behavior covered by monkeypatched tests
-        logger.debug(f"Web outbound policy robots check failed for {url}: {exc}")
+    except (ConnectionError, OSError, TimeoutError) as exc:  # pragma: no cover - defensive guard
+        logger.bind(
+            source=source,
+            stage=stage,
+            mode=mode,
+            sanitized_url=_sanitize_url_for_logs(url),
+            error_type=exc.__class__.__name__,
+        ).debug("Web outbound policy robots check failed")
         if mode == "strict":
             return _decision(False, mode=mode, reason="robots_unreachable", stage=stage, source=source)
         return _decision(
             True,
             mode=mode,
             reason="robots_unreachable_allowed",
+            stage=stage,
+            source=source,
+        )
+    except Exception as exc:  # pragma: no cover - explicit behavior covered by monkeypatched tests
+        logger.bind(
+            source=source,
+            stage=stage,
+            mode=mode,
+            sanitized_url=_sanitize_url_for_logs(url),
+            error_type=exc.__class__.__name__,
+        ).debug("Web outbound policy robots check failed")
+        return _decision(
+            False,
+            mode=mode,
+            reason="robots_check_error_internal",
             stage=stage,
             source=source,
         )

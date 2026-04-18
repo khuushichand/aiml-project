@@ -3132,7 +3132,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, An
                 "date": "N/A",
                 "content": "",
                 "extraction_successful": False,
-                "error": f"Outbound policy evaluation failed: {exc}",
+                "error": "Outbound policy evaluation failed",
             }
 
         headers = {"User-Agent": web_scraping_user_agent}
