@@ -297,7 +297,13 @@
     "durationTag": "Duration",
     "modelTag": "Model",
     "currentTranscriptTitle": "Current session transcript",
-    "currentTranscriptPlaceholder": "Live transcript will appear here while recording."
+    "currentTranscriptPlaceholder": "Live transcript will appear here while recording.",
+    "serverRequirement": "Transcription requires a configured STT engine on your tldw server.",
+    "audioSetupGuide": "Audio Setup Guide",
+    "firstUseHint": "Press the record button or upload an audio file to get started with transcription.",
+    "noModelsTitle": "No transcription models available",
+    "noModelsBody": "Configure STT models in your server settings. Check the Audio Setup Guide for instructions.",
+    "spaceKeyHint": "Press <kbd>Space</kbd> to toggle recording"
   },
   "actions": {
     "temporaryOn": "Temporary chat (not saved)",
@@ -651,8 +657,6 @@
     "browserResume": "Resume",
     "tldwStatusOnline": "tldw server audio API detected (audio/speech)",
     "tldwStatusOffline": "Audio API not detected; check your tldw server version.",
-    "tldwWarningTitle": "tldw audio/speech API not detected",
-    "tldwWarningBody": "Ensure your tldw_server version includes /api/v1/audio/speech and that your extension is connected with a valid API key.",
     "chatDisabledUnhealthy": "Audio service is unhealthy. Check Settings → Health.",
     "chatDisabledNoVoices": "No TTS voices are available on the server.",
     "speechErrorTitle": "Dictation failed",
@@ -674,7 +678,14 @@
     "elevenLabsMissingCta": "Set API key in Settings",
     "generateErrorTitle": "Error generating audio",
     "generateErrorDescription": "Something went wrong while generating TTS audio.",
-    "savedToNotes": "Transcription saved as a note."
+    "savedToNotes": "Transcription saved as a note.",
+    "combinedWorkflowHint": "For combined TTS + STT workflows, try the <speechLink>Speech Playground</speechLink>.",
+    "audioSetupGuide": "Audio Setup Guide",
+    "ffmpegWarningTitle": "ffmpeg not detected",
+    "ffmpegWarningBody": "Some audio processing features require ffmpeg. Install it for full functionality.",
+    "noProviderTitle": "No TTS provider detected on your server",
+    "noProviderDescription": "Your tldw server doesn't have a TTS engine configured yet. <settingsLink>Open Speech Settings</settingsLink> to configure one, or switch to <strong>Browser</strong> TTS which works without any setup.",
+    "progressSegments": "{{completed}}/{{total}} segments"
   },
   "tldwState": {
     "title": "Waiting for your tldw server",
@@ -844,9 +855,21 @@
     "compareMode": "Compare Mode",
     "compareResponses": "Compare Responses",
     "addModel": "Add model",
+    "keyboardShortcuts": "Keyboard Shortcuts",
+    "shortcutSearch": "Search workspace",
+    "shortcutFocusSources": "Focus sources pane",
+    "shortcutFocusChat": "Focus chat pane",
+    "shortcutFocusStudio": "Focus studio pane",
+    "shortcutNewNote": "New note",
+    "shortcutNewWorkspace": "New workspace",
+    "shortcutUndo": "Undo",
+    "shortcutShowShortcuts": "Show shortcuts",
     "clearChat": "Clear chat",
     "messagePlaceholder": "Type your message...",
     "messagePlaceholderCompare": "Send to {{count}} models..."
+  },
+  "studio": {
+    "loadingOutputViewer": "Loading output viewer..."
   },
   "debug": {
     "title": "Debug Panel",

@@ -24,7 +24,9 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
     require_permissions,
 )
+from tldw_Server_API.app.api.v1.API_Deps.billing_deps import require_within_limit
 from tldw_Server_API.app.api.v1.API_Deps.storage_quota_guard import guard_storage_quota
+from tldw_Server_API.app.core.Billing.enforcement import LimitCategory
 from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_form
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
@@ -40,6 +42,7 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 from tldw_Server_API.app.core.exceptions import BadRequestError
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work
 
 router = APIRouter()
 
@@ -394,6 +397,11 @@ def _resolve_batch_or_session_id(
         Depends(require_permissions(MEDIA_CREATE)),
         Depends(rbac_rate_limit("media.create")),
         Depends(guard_storage_quota),
+        # Pessimistic pre-check: verifies at least 1 MB of storage quota
+        # remains.  Actual size is unknown until after ingestion completes,
+        # so the real usage is recorded post-ingestion by the job worker.
+        Depends(require_within_limit(LimitCategory.STORAGE_MB, 1)),
+        Depends(require_within_limit(LimitCategory.API_CALLS_DAY, 1)),
     ],
 )
 async def submit_media_ingest_jobs(
@@ -636,6 +644,7 @@ async def stream_media_ingest_job_events(
     principal: AuthPrincipal = Depends(get_auth_principal),
     jm: JobManager = Depends(get_job_manager),
 ) -> StreamingResponse:
+    assert_may_start_work(request.app, "media.ingest.jobs.events.stream")
     is_admin = _principal_has_admin_claims(principal)
     owner_filter = None if is_admin else str(current_user.id)
 

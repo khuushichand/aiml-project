@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
@@ -26,7 +27,12 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentRegisterRequest,
     ACPAgentRegistrationResponse,
     ACPAgentUpdateRequest,
+    ACPAsyncPromptRequest,
+    ACPAsyncPromptResponse,
+    ACPCheckpointListResponse,
     ACPHealthResponse,
+    ACPRollbackRequest,
+    ACPRollbackResponse,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
     ACPSessionDetailResponse,
@@ -40,6 +46,7 @@ from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPSessionPromptResponse,
     ACPSessionUpdatesResponse,
     ACPSessionUsageResponse,
+    ACPTaskStatusResponse,
     ACPTokenUsage,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
@@ -61,8 +68,57 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
+from tldw_Server_API.app.core.Agent_Client_Protocol.consumers.checkpoint_consumer import CheckpointConsumer
+from tldw_Server_API.app.core.Agent_Client_Protocol.consumers.sse_consumer import SSEConsumer
+from tldw_Server_API.app.core.Agent_Client_Protocol.event_bus import SessionEventBus
 
 router = APIRouter(prefix="/acp", tags=["acp"])
+
+# ---------------------------------------------------------------------------
+# Per-session event bus registry (shared across SSE, WS, and ACP runtime)
+# ---------------------------------------------------------------------------
+
+_SESSION_EVENT_BUSES: dict[str, SessionEventBus] = {}
+_SESSION_EVENT_BUSES_LOCK = threading.Lock()
+
+
+def register_session_event_bus(session_id: str, bus: SessionEventBus) -> None:
+    """Register a session's event bus so SSE/WS consumers can find it.
+
+    Called by the ACP runtime when a session starts.
+    """
+    with _SESSION_EVENT_BUSES_LOCK:
+        _SESSION_EVENT_BUSES[session_id] = bus
+
+
+def get_session_event_bus(session_id: str) -> SessionEventBus | None:
+    """Return the event bus registered for *session_id*, or ``None``."""
+    with _SESSION_EVENT_BUSES_LOCK:
+        return _SESSION_EVENT_BUSES.get(session_id)
+
+
+def get_or_create_session_event_bus(session_id: str) -> SessionEventBus:
+    """Return the SessionEventBus for *session_id*, creating one if needed.
+
+    Prefers a bus registered by the ACP runtime via
+    :func:`register_session_event_bus`.  Falls back to creating a
+    standalone bus so that SSE consumers work even if the runtime has
+    not yet registered one.
+    """
+    with _SESSION_EVENT_BUSES_LOCK:
+        bus = _SESSION_EVENT_BUSES.get(session_id)
+        if bus is None:
+            bus = SessionEventBus(session_id=session_id)
+            _SESSION_EVENT_BUSES[session_id] = bus
+        return bus
+
+
+# ---------------------------------------------------------------------------
+# Per-session checkpoint consumer registry
+# ---------------------------------------------------------------------------
+
+_CHECKPOINT_CONSUMERS: dict[str, CheckpointConsumer] = {}
+_CHECKPOINT_CONSUMERS_LOCK = threading.Lock()
 
 _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     ACPResponseError,
@@ -599,16 +655,30 @@ async def _prepare_acp_runtime_prompt(
     session_id: str,
     prompt: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], bool]:
+    used_bootstrap = False
     try:
         store = await get_acp_session_store()
         builder = getattr(store, "build_bootstrap_prompt", None)
         if callable(builder):
-            return await builder(session_id, prompt)
+            prompt, used_bootstrap = await builder(session_id, prompt)
     except ValueError as exc:
         raise ACPResponseError(str(exc)) from exc
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.warning("Failed to prepare ACP bootstrap prompt for session {}", session_id)
-    return prompt, False
+
+    # Preprocess @tool_name mentions and attach hints to message metadata.
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.prompt_utils import preprocess_mentions
+
+        prompt, tool_hints = await preprocess_mentions(prompt)
+        if tool_hints and prompt:
+            last_msg = prompt[-1]
+            meta = last_msg.setdefault("metadata", {})
+            meta["tool_hints"] = tool_hints
+    except Exception:
+        logger.debug("@mention preprocessing failed for session {}", session_id)
+
+    return prompt, used_bootstrap
 
 
 async def _clear_acp_bootstrap_state(session_id: str) -> None:
@@ -669,6 +739,27 @@ async def _execute_acp_prompt(
     )
     if used_bootstrap:
         await _clear_acp_bootstrap_state(session_id)
+
+    # Check token budget after recording usage — auto-terminate if exceeded
+    budget_terminated = False
+    try:
+        store = await get_acp_session_store()
+        budget_terminated = await store.check_and_enforce_budget(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        logger.warning("Budget enforcement check failed for session {}", session_id)
+    if budget_terminated:
+        # Inject budget exhaustion notice into the result
+        result["budget_exhausted"] = True
+        result["budget_termination_notice"] = (
+            "Session auto-terminated: token budget exhausted"
+        )
+        _acp_record_audit_event(
+            action="budget_terminated",
+            user_id=int(user_id),
+            session_id=session_id,
+            metadata={"reason": "token_budget_exhausted"},
+        )
+
     _acp_record_audit_event(
         action="prompt",
         user_id=int(user_id),
@@ -709,9 +800,14 @@ async def acp_session_stream(
     session_id: str,
     token: str | None = Query(None),
     api_key: str | None = Query(None),
+    last_sequence: int = Query(0),
 ) -> None:
     """
     WebSocket endpoint for real-time ACP session updates.
+
+    Query Parameters:
+    - last_sequence: If > 0, replay buffered events from this sequence on
+      reconnect before switching to live delivery.
 
     Message types (Server → Client):
     - connected: Connection established
@@ -778,13 +874,36 @@ async def acp_session_stream(
             await stream.send_json(message)
         send_callback = _send_callback
 
-        # Register this WebSocket with the session
+        # Register this WebSocket with the session.
+        # NOTE: client.register_websocket uses the runner's internal
+        # broadcast mechanism which does not currently expose a
+        # from_sequence parameter.  Replay of missed events on
+        # reconnect requires wiring a WSBroadcaster with the
+        # session's shared event bus.  For now we pass
+        # last_sequence through when a bus-backed broadcaster is
+        # available; otherwise fall back to the existing path.
+        bus = get_session_event_bus(session_id)
+        if bus is not None and last_sequence > 0:
+            from tldw_Server_API.app.core.Agent_Client_Protocol.consumers.ws_broadcaster import WSBroadcaster
+
+            broadcaster = WSBroadcaster()
+            await broadcaster.start(bus)
+
+            async def _ws_send_str(msg: str) -> None:
+                await stream.send_json(json.loads(msg))
+
+            await broadcaster.add_connection(
+                conn_id=f"ws-{session_id}-{id(stream)}",
+                send_callback=_ws_send_str,
+                from_sequence=last_sequence,
+            )
         await client.register_websocket(session_id, send_callback)
 
         # Send connected message
         await stream.send_json({
             "type": "connected",
             "session_id": session_id,
+            "last_sequence": last_sequence,
             "agent_capabilities": client.agent_capabilities,
         })
 
@@ -1310,7 +1429,35 @@ async def acp_health(
             runner_probe = {"status": "error", "detail": str(exc)}
     result["runner_probe"] = runner_probe
 
-    # 4. Overall status
+    # 4. Route-gating status
+    try:
+        from tldw_Server_API.app.core.config import route_enabled as _route_enabled
+
+        _stable_only = False
+        try:
+            from tldw_Server_API.app.core.config import _route_toggle_policy
+            _policy = _route_toggle_policy()
+            _stable_only = bool(_policy.get("stable_only", False))
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        _acp_enabled = _route_enabled("acp", default_stable=False)
+        _route_note: str | None = None
+        if _stable_only and not _acp_enabled:
+            _route_note = (
+                "ACP routes are hidden because stable_only is enabled. "
+                "Add 'acp' to the enable list in [API-Routes] section of "
+                "config.txt, or set ROUTES_STABLE_ONLY=false."
+            )
+        result["routes"] = {
+            "stable_only": _stable_only,
+            "acp_enabled": _acp_enabled,
+            "note": _route_note,
+        }
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        result["routes"] = None
+
+    # 5. Overall status
     any_agent_available = any(a.get("status") == "available" for a in agents_status)
     runner_ok = runner_status.get("status") == "ok"
 
@@ -1774,6 +1921,17 @@ async def acp_session_new(
         resolved_workspace_group_id = resolved_workspace_group_id or sandbox_meta.get("workspace_group_id")
         resolved_scope_snapshot_id = resolved_scope_snapshot_id or sandbox_meta.get("scope_snapshot_id")
 
+    # Resolve model from agent registry for cost tracking
+    resolved_model: str | None = None
+    try:
+        from tldw_Server_API.app.core.Agent_Client_Protocol.agent_registry import get_agent_registry
+        _reg = get_agent_registry()
+        _agent_entry = _reg.get_entry(resolved_agent_type or "custom")
+        if _agent_entry is not None:
+            resolved_model = _agent_entry.model or _agent_entry.mcp_llm_model
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        pass
+
     # Persist session metadata and emit SSE event
     persisted_record = None
     try:
@@ -1790,6 +1948,7 @@ async def acp_session_new(
             workspace_id=resolved_workspace_id,
             workspace_group_id=resolved_workspace_group_id,
             scope_snapshot_id=resolved_scope_snapshot_id,
+            model=resolved_model,
         )
         if persisted_record is not None:
             try:
@@ -1872,6 +2031,24 @@ async def acp_session_prompt(
         raise
     except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("Token quota check failed (non-blocking): {}", exc)
+    # Budget exhaustion pre-check — reject prompts on budget-exhausted sessions
+    try:
+        store = await get_acp_session_store()
+        rec = await store.get_session(payload.session_id)
+        if rec and rec.budget_exhausted:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "budget_exhausted",
+                    "message": "Session token budget has been exhausted",
+                    "token_budget": rec.token_budget,
+                    "total_tokens": rec.usage.total_tokens,
+                },
+            )
+    except HTTPException:
+        raise
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Budget exhaustion pre-check failed (non-blocking): {}", exc)
     try:
         client = await get_runner_client()
         result, turn_usage = await _execute_acp_prompt(
@@ -2288,6 +2465,76 @@ async def acp_session_events(
     }
 
 
+# -----------------------------------------------------------------------------
+# Session Events SSE Stream
+# -----------------------------------------------------------------------------
+
+
+@router.get(
+    "/sessions/{session_id}/events/stream",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
+)
+async def acp_session_events_stream(
+    request: Request,
+    session_id: str,
+    last_event_id: int = Query(0, description="Replay events from this sequence number"),
+    user: User = Depends(get_request_user),
+) -> StreamingResponse:
+    """Stream ACP session events as Server-Sent Events.
+
+    Events are formatted as typed SSE frames with ``event: {kind}`` and
+    ``data: {json}`` fields.  A heartbeat comment is sent every 15 seconds
+    to keep the connection alive through proxies and load balancers.
+
+    Use the *last_event_id* query parameter to replay buffered events from
+    a given sequence number (e.g. for reconnection catch-up).
+    """
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="events_stream")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+
+    # Verify session exists in the store
+    store = await get_acp_session_store()
+    rec = await store.get_session(session_id)
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session_not_found")
+
+    bus = get_or_create_session_event_bus(session_id)
+    consumer = SSEConsumer(
+        from_sequence=max(0, last_event_id),
+        heartbeat_interval=15.0,
+    )
+    await consumer.start(bus)
+
+    _acp_record_audit_event(
+        action="events_stream_connect",
+        user_id=int(user.id),
+        session_id=session_id,
+        metadata={"last_event_id": int(last_event_id), "consumer_id": consumer.consumer_id},
+    )
+
+    async def _event_generator():
+        try:
+            async for line in consumer.iter_sse_lines():
+                if await request.is_disconnected():
+                    break
+                yield line
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            await consumer.stop()
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get(
     "/sessions/{session_id}/artifacts",
     dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.read"))],
@@ -2470,4 +2717,330 @@ async def acp_session_fork(
         name=forked.name,
         forked_from=session_id,
         message_count=forked.message_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Async fire-and-forget API (Scheduler-backed)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/sessions/prompt-async",
+    response_model=ACPAsyncPromptResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.prompt_async"))],
+)
+async def acp_prompt_async(
+    body: ACPAsyncPromptRequest,
+    user: User = Depends(get_request_user),
+) -> ACPAsyncPromptResponse:
+    """Submit an ACP prompt for asynchronous execution.
+
+    Returns a ``task_id`` that can be polled via
+    ``GET /api/v1/acp/tasks/{task_id}`` for status and results.
+
+    Tasks are submitted to the global Scheduler and persisted in the
+    database, so they survive process restarts and are visible from
+    any worker.
+    """
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="prompt_async")
+
+    payload: dict[str, Any] = {
+        "user_id": int(user.id),
+        "prompt": body.prompt,
+        "cwd": body.cwd,
+    }
+    if body.agent_type is not None:
+        payload["agent_type"] = body.agent_type
+    if body.persona_id is not None:
+        payload["persona_id"] = body.persona_id
+    if body.workspace_id is not None:
+        payload["workspace_id"] = body.workspace_id
+
+    from tldw_Server_API.app.core.Scheduler import get_global_scheduler
+
+    scheduler = await get_global_scheduler()
+    task_id = await scheduler.submit(
+        handler="acp_run",
+        payload=payload,
+        queue_name="acp",
+        metadata={"user_id": str(user.id)},
+    )
+
+    poll_url = f"/api/v1/acp/tasks/{task_id}"
+    return ACPAsyncPromptResponse(task_id=task_id, poll_url=poll_url, status="queued")
+
+
+@router.get(
+    "/tasks/{task_id}",
+    response_model=ACPTaskStatusResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.tasks.status"))],
+)
+async def acp_task_status(
+    task_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPTaskStatusResponse:
+    """Poll for the status and result of an async ACP task."""
+    from tldw_Server_API.app.core.Scheduler import get_global_scheduler
+
+    scheduler = await get_global_scheduler()
+    task = await scheduler.get_task(task_id)
+
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found",
+        )
+
+    # Verify ownership via task metadata
+    task_user_id = (task.metadata or {}).get("user_id")
+    if task_user_id != str(user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found",
+        )
+
+    # Map scheduler TaskStatus to the API status string
+    status_map = {
+        "pending": "queued",
+        "queued": "queued",
+        "running": "running",
+        "completed": "completed",
+        "failed": "failed",
+        "cancelled": "failed",
+        "dead": "failed",
+    }
+    task_status_str = status_map.get(task.status.value, task.status.value)
+
+    result_data = task.result if isinstance(task.result, dict) else None
+    return ACPTaskStatusResponse(
+        task_id=task_id,
+        status=task_status_str,
+        result=result_data.get("result") if result_data else None,
+        usage=result_data.get("usage", {}) if result_data else {},
+        error=task.error or (result_data.get("error") if result_data else None),
+        duration_ms=result_data.get("duration_ms") if result_data else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Run history & cost tracking
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/runs",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.runs.list"))],
+)
+async def list_acp_runs(
+    user: User = Depends(get_request_user),
+    status_filter: str | None = Query(None, alias="status", description="Filter by session status (active, closed, error)"),
+    agent_type: str | None = Query(None, description="Filter by agent type"),
+    from_date: str | None = Query(None, description="ISO date lower bound, e.g. 2026-01-01"),
+    to_date: str | None = Query(None, description="ISO date upper bound, e.g. 2026-12-31"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Query ACP run history with optional filters."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="list_runs")
+    store = await get_acp_session_store()
+    return await store.list_runs(
+        user_id=int(user.id),
+        status=status_filter,
+        agent_type=agent_type,
+        from_date=from_date,
+        to_date=to_date,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/runs/aggregate",
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.runs.aggregate"))],
+)
+async def aggregate_acp_runs(
+    user: User = Depends(get_request_user),
+    from_date: str | None = Query(None, description="ISO date lower bound"),
+    to_date: str | None = Query(None, description="ISO date upper bound"),
+) -> dict:
+    """Aggregate token usage and costs across ACP runs."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="aggregate_runs")
+    store = await get_acp_session_store()
+    return await store.aggregate_runs(
+        user_id=int(user.id),
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Checkpoint-based Rollback
+# -----------------------------------------------------------------------------
+
+
+def _get_checkpoint_consumer(session_id: str) -> CheckpointConsumer | None:
+    """Return the CheckpointConsumer for *session_id*, if one exists."""
+    with _CHECKPOINT_CONSUMERS_LOCK:
+        return _CHECKPOINT_CONSUMERS.get(session_id)
+
+
+async def _ensure_checkpoint_consumer(session_id: str) -> CheckpointConsumer:
+    """Return or create a CheckpointConsumer for *session_id*.
+
+    Lazily creates the consumer and starts it on the session's event bus.
+    The SandboxService is instantiated on demand so the endpoint module
+    does not import it at module level.
+    """
+    with _CHECKPOINT_CONSUMERS_LOCK:
+        consumer = _CHECKPOINT_CONSUMERS.get(session_id)
+        if consumer is not None:
+            return consumer
+
+    # Build consumer outside the lock (SandboxService init may be expensive)
+    try:
+        from tldw_Server_API.app.core.Sandbox.service import SandboxService
+        svc = SandboxService()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Sandbox service unavailable: {exc}",
+        ) from exc
+
+    consumer = CheckpointConsumer(sandbox_service=svc, session_id=session_id)
+    bus = get_or_create_session_event_bus(session_id)
+    await consumer.start(bus)
+
+    with _CHECKPOINT_CONSUMERS_LOCK:
+        # Double-check: another request may have raced us
+        existing = _CHECKPOINT_CONSUMERS.get(session_id)
+        if existing is not None:
+            await consumer.stop()
+            return existing
+        _CHECKPOINT_CONSUMERS[session_id] = consumer
+
+    return consumer
+
+
+@router.post(
+    "/sessions/{session_id}/rollback",
+    response_model=ACPRollbackResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
+async def acp_session_rollback(
+    session_id: str,
+    body: ACPRollbackRequest,
+    user: User = Depends(get_request_user),
+) -> ACPRollbackResponse:
+    """Rollback sandbox state to a checkpoint.
+
+    Provide either ``to_sequence`` (finds nearest checkpoint at or before
+    that sequence) or ``to_snapshot_id`` (restores directly).  Only works
+    for sandbox-backed sessions with an active CheckpointConsumer.
+    """
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="rollback")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+
+    if body.to_sequence is None and body.to_snapshot_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either to_sequence or to_snapshot_id",
+        )
+
+    # Resolve snapshot_id
+    snapshot_id: str | None = body.to_snapshot_id
+    resolved_sequence: int | None = None
+
+    consumer = _get_checkpoint_consumer(session_id)
+
+    if snapshot_id is None:
+        # Must resolve from sequence via the consumer
+        if consumer is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No checkpoint consumer active for this session; provide to_snapshot_id directly or ensure checkpointing is enabled",
+            )
+        assert body.to_sequence is not None
+        result = consumer.get_nearest_checkpoint(body.to_sequence)
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No checkpoint found at or before sequence {body.to_sequence}",
+            )
+        resolved_sequence, snapshot_id = result
+
+    assert snapshot_id is not None
+
+    # Perform the restore via SandboxService
+    try:
+        from tldw_Server_API.app.core.Sandbox.service import SandboxService
+        svc = SandboxService()
+        restored = svc.restore_snapshot(session_id, snapshot_id)
+    except Exception as exc:
+        logger.error(
+            "Rollback failed for session {} snapshot {}: {}",
+            session_id, snapshot_id, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Rollback failed: {exc}",
+        ) from exc
+
+    if not restored:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="restore_snapshot returned False",
+        )
+
+    # Emit LIFECYCLE event on the bus
+    from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
+
+    bus = get_or_create_session_event_bus(session_id)
+    await bus.publish(AgentEvent(
+        session_id=session_id,
+        kind=AgentEventKind.LIFECYCLE,
+        payload={
+            "action": "rollback",
+            "snapshot_id": snapshot_id,
+            "to_sequence": resolved_sequence,
+        },
+    ))
+
+    _acp_record_audit_event(
+        action="rollback",
+        user_id=int(user.id),
+        session_id=session_id,
+        metadata={"snapshot_id": snapshot_id, "to_sequence": resolved_sequence},
+    )
+
+    return ACPRollbackResponse(
+        restored=True,
+        snapshot_id=snapshot_id,
+        sequence=resolved_sequence,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/checkpoints",
+    response_model=ACPCheckpointListResponse,
+    dependencies=[Depends(require_token_scope("any", require_if_present=True, endpoint_id="acp.sessions.manage"))],
+)
+async def acp_session_checkpoints(
+    session_id: str,
+    user: User = Depends(get_request_user),
+) -> ACPCheckpointListResponse:
+    """List available checkpoints for a sandbox-backed session."""
+    _acp_enforce_control_rate_limit(user_id=int(user.id), action="list_checkpoints")
+    client = await get_runner_client()
+    await _require_session_access(client, session_id=session_id, user_id=int(user.id))
+
+    consumer = _get_checkpoint_consumer(session_id)
+    checkpoints: dict[int, str] = {}
+    if consumer is not None:
+        checkpoints = consumer.get_checkpoints()
+
+    return ACPCheckpointListResponse(
+        session_id=session_id,
+        checkpoints=checkpoints,
     )

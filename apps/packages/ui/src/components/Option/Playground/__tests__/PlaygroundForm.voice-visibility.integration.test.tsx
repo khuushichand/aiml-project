@@ -798,17 +798,11 @@ vi.mock("react-router-dom", () => ({
 import { PlaygroundForm } from "../PlaygroundForm"
 
 describe("PlaygroundForm voice visibility", () => {
-  it("keeps the main voice button rendered but disabled when voice transport is missing", () => {
+  it("hides the main voice button but forwards the shared unavailable reason when voice transport is missing", () => {
     capturedModeLauncherProps = null
     render(<PlaygroundForm droppedFiles={[]} />)
 
-    const voiceButton = screen.getByTestId("voice-chat-button")
-
-    expect(voiceButton).toBeDisabled()
-    expect(voiceButton).toHaveAttribute(
-      "title",
-      "This server does not advertise voice conversation streaming."
-    )
+    expect(screen.queryByTestId("voice-chat-button")).toBeNull()
     expect(capturedModeLauncherProps?.voiceChatUnavailableReason).toBe(
       "This server does not advertise voice conversation streaming."
     )

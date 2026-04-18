@@ -33,10 +33,12 @@ from tldw_Server_API.app.api.v1.schemas.media_navigation_schemas import (
 )
 from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.media_db.errors import DatabaseError
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     get_document_version,
     get_latest_transcription,
     get_media_transcripts,
+    lookup_section_by_heading,
 )
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
@@ -1372,10 +1374,10 @@ def _derive_content_span(
             heading = anchor
     try:
         if heading:
-            lookup = db.lookup_section_by_heading(media_id, heading)
+            lookup = lookup_section_by_heading(db, media_id, heading)
         else:
             lookup = None
-    except Exception as exc:
+    except (DatabaseError, TypeError) as exc:
         logger.debug("Section heading lookup failed for media {}: {}", media_id, exc)
         lookup = None
 

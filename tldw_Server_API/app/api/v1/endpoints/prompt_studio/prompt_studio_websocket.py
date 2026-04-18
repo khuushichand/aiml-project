@@ -14,12 +14,14 @@ Key responsibilities
 """
 
 import asyncio
+import contextlib
 import json
 import os
 from datetime import datetime
+from threading import RLock
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 # Create router
@@ -66,6 +68,10 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter impor
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 from tldw_Server_API.app.core.testing import env_flag_enabled
+from tldw_Server_API.app.services.app_lifecycle import assert_may_start_work, is_lifecycle_draining
+from tldw_Server_API.app.services.shutdown_transport_registry import (
+    register_shutdown_transport_family,
+)
 
 ########################################################################################################################
 # Error Handling Utilities
@@ -120,9 +126,10 @@ class ConnectionManager:
         self.active_connections: dict[str, set[WebSocket]] = {}
         # Store connection metadata
         self.connection_metadata: dict[WebSocket, dict] = {}
+        self._connections_lock = RLock()
 
     async def connect(self, websocket: WebSocket, client_id: str,
-                     user_context: Optional[dict] = None):
+                     user_context: Optional[dict] = None) -> bool:
         """
         Accept and register a new WebSocket connection.
 
@@ -131,22 +138,31 @@ class ConnectionManager:
             client_id: Client identifier
             user_context: Optional user context
         """
-        await websocket.accept()
+        await _accept_prompt_studio_websocket_if_needed(websocket)
 
-        # Add to active connections
-        if client_id not in self.active_connections:
-            self.active_connections[client_id] = set()
+        should_close = False
+        with self._connections_lock:
+            app = getattr(websocket, "app", None)
+            if app is not None and is_lifecycle_draining(app):
+                should_close = True
+            else:
+                if client_id not in self.active_connections:
+                    self.active_connections[client_id] = set()
 
-        self.active_connections[client_id].add(websocket)
+                self.active_connections[client_id].add(websocket)
 
-        # Store metadata
-        self.connection_metadata[websocket] = {
-            "client_id": client_id,
-            "user_context": user_context,
-            "connected_at": datetime.utcnow().isoformat()
-        }
+                self.connection_metadata[websocket] = {
+                    "client_id": client_id,
+                    "user_context": user_context,
+                    "connected_at": datetime.utcnow().isoformat()
+                }
+
+        if should_close:
+            await websocket.close(code=1013, reason="shutdown_draining")
+            return False
 
         logger.info(f"WebSocket connected for client {client_id}")
+        return True
 
     def disconnect(self, websocket: WebSocket):
         """
@@ -155,22 +171,18 @@ class ConnectionManager:
         Args:
             websocket: WebSocket connection to remove
         """
-        metadata = self.connection_metadata.get(websocket)
-        if metadata:
-            client_id = metadata["client_id"]
+        with self._connections_lock:
+            metadata = self.connection_metadata.get(websocket)
+            if metadata:
+                client_id = metadata["client_id"]
 
-            # Remove from active connections
-            if client_id in self.active_connections:
-                self.active_connections[client_id].discard(websocket)
+                if client_id in self.active_connections:
+                    self.active_connections[client_id].discard(websocket)
+                    if not self.active_connections[client_id]:
+                        del self.active_connections[client_id]
 
-                # Clean up empty sets
-                if not self.active_connections[client_id]:
-                    del self.active_connections[client_id]
-
-            # Remove metadata
-            del self.connection_metadata[websocket]
-
-            logger.info(f"WebSocket disconnected for client {client_id}")
+                del self.connection_metadata[websocket]
+                logger.info(f"WebSocket disconnected for client {client_id}")
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
         """
@@ -194,19 +206,23 @@ class ConnectionManager:
             client_id: Client identifier
             message: Message to broadcast
         """
-        if client_id in self.active_connections:
-            disconnected = []
+        with self._connections_lock:
+            sockets = list(self.active_connections.get(client_id, ()))
+        if not sockets:
+            return
 
-            for websocket in self.active_connections[client_id]:
-                try:
-                    await websocket.send_text(message)
-                except _WS_SEND_EXCEPTIONS as e:
-                    logger.error(f"Failed to send to WebSocket: {e}")
-                    disconnected.append(websocket)
+        disconnected = []
 
-            # Clean up disconnected sockets
-            for ws in disconnected:
-                self.disconnect(ws)
+        for websocket in sockets:
+            try:
+                await websocket.send_text(message)
+            except _WS_SEND_EXCEPTIONS as e:
+                logger.error(f"Failed to send to WebSocket: {e}")
+                disconnected.append(websocket)
+
+        # Clean up disconnected sockets
+        for ws in disconnected:
+            self.disconnect(ws)
 
     async def broadcast_to_all(self, message: str):
         """
@@ -215,16 +231,33 @@ class ConnectionManager:
         Args:
             message: Message to broadcast
         """
-        for client_id in self.active_connections:
+        with self._connections_lock:
+            client_ids = list(self.active_connections)
+        for client_id in client_ids:
             await self.broadcast_to_client(client_id, message)
 
     def get_connection_count(self) -> int:
         """Get total number of active connections."""
-        return sum(len(connections) for connections in self.active_connections.values())
+        with self._connections_lock:
+            return sum(len(connections) for connections in self.active_connections.values())
 
     def get_client_count(self) -> int:
         """Get number of unique clients connected."""
-        return len(self.active_connections)
+        with self._connections_lock:
+            return len(self.active_connections)
+
+    async def close_all(self, timeout_s: float | None = None) -> None:
+        """Close all active Prompt Studio sockets and clear tracking state."""
+        with self._connections_lock:
+            sockets = [socket for sockets in self.active_connections.values() for socket in sockets]
+        if sockets:
+            await asyncio.gather(
+                *(socket.close(code=1001, reason="Server shutdown") for socket in sockets),
+                return_exceptions=True,
+            )
+        with self._connections_lock:
+            self.active_connections.clear()
+            self.connection_metadata.clear()
 
 # NOTE: A single, shared connection manager is defined later as
 # `connection_manager` and imported by the job processor for broadcasts.
@@ -238,9 +271,6 @@ class ConnectionManager:
 
 ########################################################################################################################
 # SSE (Server-Sent Events) Fallback
-
-
-import contextlib
 
 from fastapi.responses import StreamingResponse
 
@@ -394,6 +424,36 @@ async def sse_endpoint_route(
 
 # Initialize connection manager
 connection_manager = ConnectionManager()
+register_shutdown_transport_family(
+    "prompt_studio.websocket",
+    active_count=connection_manager.get_connection_count,
+    drain=connection_manager.close_all,
+)
+
+
+async def _guard_prompt_studio_websocket_start(websocket: WebSocket, kind: str) -> bool:
+    app = getattr(websocket, "app", None)
+    if app is None:
+        return True
+    try:
+        assert_may_start_work(app, kind)
+        return True
+    except HTTPException:
+        await _accept_prompt_studio_websocket_if_needed(websocket)
+        await websocket.close(code=1013, reason="shutdown_draining")
+        return False
+
+
+async def _accept_prompt_studio_websocket_if_needed(websocket: WebSocket) -> None:
+    already_accepted = False
+    try:
+        state = getattr(websocket, "application_state", None)
+        if state is not None and str(state).upper().endswith("CONNECTED"):
+            already_accepted = True
+    except _STREAM_ACTIVITY_EXCEPTIONS:
+        already_accepted = False
+    if hasattr(websocket, "accept") and not already_accepted:
+        await websocket.accept()
 
 @router.websocket("")
 async def websocket_endpoint_base(websocket: WebSocket):
@@ -411,8 +471,11 @@ async def websocket_endpoint_base(websocket: WebSocket):
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_base"},
     )
+    if not await _guard_prompt_studio_websocket_start(websocket, "prompt_studio.websocket"):
+        return
     # Accept via manager first to avoid double-accept issues
-    await connection_manager.connect(websocket, "global")
+    if not await connection_manager.connect(websocket, "global"):
+        return
     await stream.start()
 
     try:
@@ -426,11 +489,6 @@ async def websocket_endpoint_base(websocket: WebSocket):
             if data.get("type") == "subscribe":
                 project_id = data.get("project_id")
                 if project_id:
-                    # Add to project subscription
-                    if "global" not in connection_manager.active_connections:
-                        connection_manager.active_connections["global"] = set()
-                    connection_manager.active_connections["global"].add(websocket)
-
                     await stream.send_json({
                         "type": "subscribed",
                         "project_id": project_id
@@ -467,7 +525,10 @@ async def websocket_endpoint(
         close_on_done=False,
         labels={"component": "prompt_studio", "endpoint": "ps_ws_project"},
     )
-    await connection_manager.connect(websocket, str(project_id))
+    if not await _guard_prompt_studio_websocket_start(websocket, "prompt_studio.websocket"):
+        return
+    if not await connection_manager.connect(websocket, str(project_id)):
+        return
     await stream.start()
 
     try:

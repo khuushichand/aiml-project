@@ -434,6 +434,17 @@ class TestCharacterCardAddition:
         assert retrieved["tags"] == json.loads(tags_json_str)
         assert retrieved["extensions"] == json.loads(extensions_json_str)
 
+    def test_add_character_with_null_tags_in_json_string_skips_none_entries(self, db: CharactersRAGDB):
+        data = sample_card_data(
+            name="NullTagsJSONChar",
+            tags='["tag_json_str1", null, "tag_json_str2"]',  # type: ignore[arg-type]
+        )
+
+        card_id = db.add_character_card(data)
+        retrieved = db.get_character_card_by_id(card_id)
+
+        assert retrieved["tags"] == ["tag_json_str1", "tag_json_str2"]
+
     def test_add_character_with_invalid_string_for_json_field_becomes_none(self, db: CharactersRAGDB):
         invalid_json_str = "this is not a valid json array"
         data = sample_card_data(name="InvalidStringJSONChar", tags=invalid_json_str)  # type: ignore
@@ -666,6 +677,70 @@ class TestCharacterCardUpdate:
         after_noop_card = db.get_character_card_by_id(char_id_for_update)
         assert after_noop_card["version"] == original_card["version"]
         assert after_noop_card["last_modified"] == original_card["last_modified"]
+
+    def test_empty_update_payload_remains_a_noop(self, db: CharactersRAGDB):
+        char_id = db.add_character_card(sample_card_data(name="NoOpCharacter"))
+        existing = db.get_character_card_by_id(char_id, include_deleted=True)
+        assert existing is not None
+
+        assert db.update_character_card(char_id, {}, expected_version=int(existing["version"])) is True
+
+        unchanged = db.get_character_card_by_id(char_id, include_deleted=True)
+        assert unchanged is not None
+        assert int(unchanged["version"]) == int(existing["version"])
+
+    def test_restore_character_card_raises_conflict_when_row_is_already_active(self, db: CharactersRAGDB):
+        char_id = db.add_character_card(sample_card_data(name="RestoreActive"))
+        active = db.get_character_card_by_id(char_id)
+        assert active is not None
+
+        with pytest.raises(ConflictError, match="already active"):
+            db.restore_character_card(char_id, expected_version=int(active["version"]))
+
+    def test_restore_character_card_concurrent_restore_raises_conflict(
+        self, db: CharactersRAGDB, monkeypatch: pytest.MonkeyPatch
+    ):
+        char_id = db.add_character_card(sample_card_data(name="RestoreConcurrentRace"))
+        active = db.get_character_card_by_id(char_id)
+        assert active is not None
+
+        deleted_version = int(active["version"])
+        deleted_at = active["last_modified"]
+
+        class FakeCursor:
+            def __init__(self, *, rows: list[dict[str, Any]] | None = None, rowcount: int = 0):
+                self._rows = list(rows or [])
+                self._index = 0
+                self.rowcount = rowcount
+
+            def fetchone(self):
+                if self._index >= len(self._rows):
+                    return None
+                row = self._rows[self._index]
+                self._index += 1
+                return row
+
+        class FakeConnection:
+            def execute(self, query: str, params: tuple | list | dict | None = None):
+                if query.startswith("SELECT deleted, version, last_modified FROM character_cards WHERE id = ?"):
+                    return FakeCursor(rows=[{"deleted": 1, "version": deleted_version, "last_modified": deleted_at}])
+                if query.startswith("UPDATE character_cards SET deleted = 0"):
+                    return FakeCursor(rowcount=0)
+                if query.startswith("SELECT version, deleted FROM character_cards WHERE id = ?"):
+                    return FakeCursor(rows=[{"version": deleted_version + 1, "deleted": 0}])
+                raise AssertionError(f"Unexpected query in fake restore race test: {query}")
+
+        class FakeTransaction:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                return False
+
+        monkeypatch.setattr(db, "transaction", lambda: FakeTransaction())
+
+        with pytest.raises(ConflictError, match="already active"):
+            db.restore_character_card(char_id, expected_version=deleted_version)
 
     def test_update_character_with_only_ignored_fields_touches_record(
         self, db: CharactersRAGDB, char_id_for_update: int

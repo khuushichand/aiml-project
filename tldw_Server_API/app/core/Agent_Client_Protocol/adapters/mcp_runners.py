@@ -13,6 +13,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from tldw_Server_API.app.core.Agent_Client_Protocol import metrics as acp_metrics
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_llm_caller import (
     LLMCaller,
     LLMToolCall,
@@ -23,6 +24,13 @@ from loguru import logger
 from tldw_Server_API.app.core.Agent_Client_Protocol.adapters.mcp_transport import MCPTransport
 from tldw_Server_API.app.core.Agent_Client_Protocol.events import AgentEvent, AgentEventKind
 from tldw_Server_API.app.core.Agent_Client_Protocol.tool_gate import ToolGate
+
+_RUN_FIRST_METRIC_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _extract_text_content(result: dict[str, Any]) -> str:
@@ -221,6 +229,9 @@ class LLMDrivenRunner:
         tool_gate: ToolGate,
         tools: list[dict],
         max_iterations: int = 20,
+        llm_tools: list[dict[str, Any]] | None = None,
+        prompt_fragment: str | None = None,
+        run_first_metrics_context: dict[str, Any] | None = None,
     ) -> None:
         self._transport = transport
         self._emit = event_callback
@@ -230,6 +241,11 @@ class LLMDrivenRunner:
         self._gate = tool_gate
         self._tools = tools
         self._max_iterations = max_iterations
+        self._llm_tools = list(llm_tools) if llm_tools is not None else None
+        self._prompt_fragment = str(prompt_fragment or "").strip() or None
+        self._run_first_metrics_context = self._normalize_run_first_metrics_context(
+            run_first_metrics_context
+        )
         self._seq = 0
 
     # -- helpers --
@@ -250,12 +266,114 @@ class LLMDrivenRunner:
         self._seq += 1
         await self._emit(event)
 
+    @staticmethod
+    def _normalize_run_first_metrics_context(
+        context: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(context, dict):
+            return None
+
+        presentation_variant = str(context.get("presentation_variant") or "").strip()
+        if not presentation_variant:
+            return None
+
+        return {
+            "agent_type": str(context.get("agent_type") or "").strip() or "mcp",
+            "presentation_variant": presentation_variant,
+            "cohort": str(context.get("cohort") or "").strip() or "unknown",
+            "provider": str(context.get("provider") or "").strip() or "unknown",
+            "model": str(context.get("model") or "").strip() or "unknown",
+            "eligible": bool(context.get("eligible")),
+            "ineligible_reason": (
+                str(context.get("ineligible_reason") or "").strip() or None
+            ),
+        }
+
+    def _record_run_first_rollout(self) -> None:
+        if self._run_first_metrics_context is None:
+            return
+        try:
+            acp_metrics.record_run_first_rollout(**self._run_first_metrics_context)
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for rollout on session {}: {}",
+                self._session_id,
+                exc,
+            )
+
+    def _record_run_first_first_tool(self, first_tool: str) -> None:
+        if self._run_first_metrics_context is None:
+            return
+        try:
+            acp_metrics.record_run_first_first_tool(
+                **self._run_first_metrics_context,
+                first_tool=first_tool,
+            )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for first_tool on session {}: {}",
+                self._session_id,
+                exc,
+            )
+
+    def _record_run_first_fallback_after_run(self, fallback_tool: str) -> None:
+        if self._run_first_metrics_context is None:
+            return
+        try:
+            acp_metrics.record_run_first_fallback_after_run(
+                **self._run_first_metrics_context,
+                fallback_tool=fallback_tool,
+            )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for fallback_after_run on session {}: {}",
+                self._session_id,
+                exc,
+            )
+
+    def _record_run_first_completion_proxy(self, outcome: str) -> None:
+        if self._run_first_metrics_context is None:
+            return
+        try:
+            acp_metrics.record_run_first_completion_proxy(
+                **self._run_first_metrics_context,
+                outcome=outcome,
+            )
+        except _RUN_FIRST_METRIC_EXCEPTIONS as exc:
+            logger.warning(
+                "ACP run-first metric emission failed for completion_proxy on session {}: {}",
+                self._session_id,
+                exc,
+            )
+
     # -- public API --
 
     async def run(self, messages: list[dict]) -> None:
         """Run the ReAct loop until completion or max iterations."""
+        self._record_run_first_rollout()
         history = list(messages)
-        openai_tools = mcp_tools_to_openai_format(self._tools)
+        first_tool_name: str | None = None
+        fallback_recorded = False
+        if self._prompt_fragment:
+            if (
+                history
+                and isinstance(history[0], dict)
+                and history[0].get("role") == "system"
+                and isinstance(history[0].get("content"), str)
+            ):
+                merged_system = dict(history[0])
+                merged_system["content"] = (
+                    f"{history[0]['content'].rstrip()}\n\n{self._prompt_fragment}"
+                )
+                history[0] = merged_system
+            else:
+                history.insert(0, {"role": "system", "content": self._prompt_fragment})
+
+        openai_tools = (
+            list(self._llm_tools)
+            if self._llm_tools is not None
+            else mcp_tools_to_openai_format(self._tools)
+        )
 
         for _i in range(self._max_iterations):
             if self._cancel.is_set():
@@ -264,6 +382,7 @@ class LLMDrivenRunner:
             try:
                 response = await self._llm.call(history, openai_tools)
             except Exception as exc:
+                self._record_run_first_completion_proxy("error")
                 await self._emit_event(AgentEventKind.ERROR, {"error": str(exc)})
                 return
 
@@ -291,6 +410,17 @@ class LLMDrivenRunner:
                     if self._cancel.is_set():
                         break
 
+                    if first_tool_name is None:
+                        first_tool_name = tc.name
+                        self._record_run_first_first_tool(first_tool_name)
+                    elif (
+                        first_tool_name == "run"
+                        and not fallback_recorded
+                        and tc.name != "run"
+                    ):
+                        fallback_recorded = True
+                        self._record_run_first_fallback_after_run(tc.name)
+
                     try:
                         gate_result = await self._gate.request_approval(
                             self._session_id,
@@ -301,6 +431,7 @@ class LLMDrivenRunner:
                     except asyncio.CancelledError:
                         break
                     except Exception as exc:
+                        self._record_run_first_completion_proxy("error")
                         await self._emit_event(AgentEventKind.ERROR, {"error": str(exc)})
                         return
 
@@ -350,6 +481,7 @@ class LLMDrivenRunner:
                     })
 
             if response.text and not response.tool_calls:
+                self._record_run_first_completion_proxy("end_turn")
                 await self._emit_event(
                     AgentEventKind.COMPLETION,
                     {"text": response.text, "stop_reason": "end_turn"},
@@ -357,7 +489,12 @@ class LLMDrivenRunner:
                 return
         else:
             # Exhausted max_iterations without returning
+            self._record_run_first_completion_proxy("max_iterations")
             await self._emit_event(
                 AgentEventKind.COMPLETION,
                 {"text": "Reached maximum iterations", "stop_reason": "max_iterations"},
             )
+            return
+
+        if self._cancel.is_set():
+            self._record_run_first_completion_proxy("cancelled")

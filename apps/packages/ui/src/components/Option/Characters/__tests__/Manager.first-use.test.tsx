@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event"
 import { CharactersManager, withCharacterNameInLabel } from "../Manager"
 import { DEFAULT_CHARACTER_STORAGE_KEY } from "@/utils/default-character-preference"
+import { ensureLocalStorageApi } from "./testUtils"
 
 const TEMPLATE_CHOOSER_SEEN_KEY = "characters-template-chooser-seen"
 
@@ -32,6 +33,7 @@ const {
   setSelectedCharacterMock,
   focusComposerMock,
   notificationMock,
+  storeSetters,
   tldwClientMock,
   templateData
 } = vi.hoisted(() => ({
@@ -58,6 +60,21 @@ const {
   navigateMock: vi.fn(),
   setSelectedCharacterMock: vi.fn(),
   focusComposerMock: vi.fn(),
+  storeSetters: {
+    setHistory: vi.fn(),
+    setMessages: vi.fn(),
+    setHistoryId: vi.fn(),
+    setServerChatId: vi.fn(),
+    setServerChatState: vi.fn(),
+    setServerChatTopic: vi.fn(),
+    setServerChatClusterId: vi.fn(),
+    setServerChatSource: vi.fn(),
+    setServerChatExternalRef: vi.fn(),
+    setServerChatCharacterId: vi.fn(),
+    setServerChatAssistantKind: vi.fn(),
+    setServerChatAssistantId: vi.fn(),
+    setServerChatMetaLoaded: vi.fn()
+  },
   notificationMock: {
     success: vi.fn(),
     info: vi.fn(),
@@ -229,17 +246,7 @@ vi.mock("@/hooks/useComposerFocus", () => ({
 
 vi.mock("@/store/option", () => ({
   useStoreMessageOption: (selector: any) =>
-    selector({
-      setHistory: vi.fn(),
-      setMessages: vi.fn(),
-      setHistoryId: vi.fn(),
-      setServerChatId: vi.fn(),
-      setServerChatState: vi.fn(),
-      setServerChatTopic: vi.fn(),
-      setServerChatClusterId: vi.fn(),
-      setServerChatSource: vi.fn(),
-      setServerChatExternalRef: vi.fn()
-    })
+    selector(storeSetters)
 }))
 
 vi.mock("@plasmohq/storage/hook", () => ({
@@ -312,7 +319,7 @@ const findEditSubmitButton = async (timeout = 15000) =>
 describe("CharactersManager first-use onboarding", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    window.localStorage.clear()
+    ensureLocalStorageApi().clear()
     window.history.replaceState({}, "", "/")
     useNavigateMock.mockReturnValue(navigateMock)
     confirmDangerMock.mockResolvedValue(true)
@@ -3505,11 +3512,16 @@ describe("CharactersManager first-use onboarding", () => {
 
     render(<CharactersManager />)
 
-    await user.click(await screen.findByText("Gallery Quick Chat Character"))
-    // "Test in popup" is now in the overflow menu
-    const moreButton = await screen.findByRole("button", {
-      name: /More actions/i
-    })
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Click to preview Gallery Quick Chat Character"
+      })
+    )
+    // The gallery preview action menu lives inside the preview modal, so target
+    // its explicit aria-label instead of the tooltip text node from the card.
+    const moreButton = await screen.findByLabelText(
+      "More actions for Gallery Quick Chat Character"
+    )
     await user.click(moreButton)
     await user.click(
       await screen.findByRole("menuitem", {
@@ -3728,6 +3740,8 @@ describe("CharactersManager first-use onboarding", () => {
       system_prompt: "Promotion prompt",
       greeting: "Promotion greeting",
       description: "Promotion test",
+      alternate_greetings: ["Backup greeting"],
+      extensions: { tone: "steady" },
       version: 1
     }
 
@@ -3786,9 +3800,15 @@ describe("CharactersManager first-use onboarding", () => {
     expect(setSelectedCharacterMock).toHaveBeenCalled()
     expect(setSelectedCharacterMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: "Promote Quick Chat Character"
+        name: "Promote Quick Chat Character",
+        alternate_greetings: expect.any(Array),
+        extensions: expect.anything()
       })
     )
+    expect(storeSetters.setServerChatCharacterId).toHaveBeenCalledWith("303")
+    expect(storeSetters.setServerChatAssistantKind).toHaveBeenCalledWith("character")
+    expect(storeSetters.setServerChatAssistantId).toHaveBeenCalledWith("303")
+    expect(storeSetters.setServerChatMetaLoaded).toHaveBeenCalledWith(false)
     expect(tldwClientMock.deleteChat).not.toHaveBeenCalled()
   }, 30000)
 

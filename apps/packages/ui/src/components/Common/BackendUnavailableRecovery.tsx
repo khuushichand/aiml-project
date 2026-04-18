@@ -3,6 +3,8 @@ import React from "react"
 export type BackendUnavailableRecoveryDetails = {
   title?: React.ReactNode
   message?: React.ReactNode
+  fixHint?: React.ReactNode
+  subtype?: string
   method?: string
   path?: string
   serverUrl?: string
@@ -81,6 +83,7 @@ export const BackendUnavailableRecovery: React.FC<
 }) => {
   const title = details?.title ?? DEFAULT_TITLE
   const message = details?.message ?? DEFAULT_MESSAGE
+  const fixHint = details?.fixHint
   const showDiagnostics = hasDiagnostics(details)
 
   return (
@@ -103,6 +106,15 @@ export const BackendUnavailableRecovery: React.FC<
             <p className="max-w-2xl text-sm leading-6 text-text-muted">
               {message}
             </p>
+            {fixHint ? (
+              <p
+                className="max-w-2xl rounded-xl border border-border/60 bg-surface2/40 px-4 py-3 text-sm leading-6 text-text-muted"
+                data-testid="backend-recovery-fix-hint"
+              >
+                <span className="font-medium text-text">How to fix: </span>
+                {fixHint}
+              </p>
+            ) : null}
           </div>
 
           {showDiagnostics ? (

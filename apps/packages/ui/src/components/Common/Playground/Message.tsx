@@ -12,6 +12,7 @@ import {
 import { EditMessageForm } from "./EditMessageForm"
 import { useTranslation } from "react-i18next"
 import { useTTS, type TtsClipMeta } from "@/hooks/useTTS"
+import { useChatMoodBadgePreference } from "@/hooks/useChatMoodBadgePreference"
 import { tagColors } from "@/utils/color"
 import { removeModelSuffix } from "@/db/dexie/models"
 import { parseReasoning } from "@/libs/reasoning"
@@ -260,6 +261,7 @@ type Props = {
   onDeleteAllImageVariants?: (payload: {
     messageId?: string
   }) => void
+  scope?: string
 }
 
 export type MessageResearchActions = {
@@ -292,7 +294,7 @@ export const PlaygroundMessage = (props: Props) => {
   const [assistantTextSize] = useStorage("chatAssistantTextSize", "md")
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
   const [showCharacterPortraits] = useStorage("chatShowCharacterPortraits", true)
-  const [showMoodBadge] = useStorage("chatShowMoodBadge", true)
+  const [showMoodBadge] = useChatMoodBadgePreference()
   const moodConfidenceDefault =
     Boolean(props.characterIdentityEnabled) && Boolean(props.characterIdentity?.id)
   const [showMoodConfidence] = useStorage(
@@ -378,6 +380,19 @@ export const PlaygroundMessage = (props: Props) => {
     .filter(Boolean)
     .join("\n")
   }, [errorPayload])
+  const resolvedResponseModel = React.useMemo(() => {
+    const info = props.generationInfo as Record<string, unknown> | undefined
+    if (!info) return null
+    const raw =
+      info.model ??
+      info.model_name ??
+      info.resolved_model ??
+      info.resolvedModel ??
+      (info.routing as Record<string, unknown> | undefined)?.resolved_model ??
+      (info.routing as Record<string, unknown> | undefined)?.model
+    if (typeof raw !== "string" || raw.trim().length === 0) return null
+    return removeModelSuffix(raw.trim().replace(/accounts\/[^/]+\/models\//g, ""))
+  }, [props.generationInfo])
   const messageUsage = React.useMemo(
     () => resolveMessageUsage(props.generationInfo),
     [props.generationInfo]
@@ -1049,12 +1064,15 @@ export const PlaygroundMessage = (props: Props) => {
     setSavingKnowledge(makeFlashcard ? "flashcard" : "note")
     try {
       await tldwClient.initialize().catch(() => null)
-      await tldwClient.saveChatKnowledge({
-        conversation_id: props.serverChatId,
-        message_id: props.serverMessageId,
-        snippet,
-        make_flashcard: makeFlashcard
-      })
+      await tldwClient.saveChatKnowledge(
+        {
+          conversation_id: props.serverChatId,
+          message_id: props.serverMessageId,
+          snippet,
+          make_flashcard: makeFlashcard
+        },
+        props.scope ? { scope: props.scope } : undefined
+      )
       message.success(
         makeFlashcard
           ? t("savedToFlashcards", "Saved to Flashcards")
@@ -1420,6 +1438,32 @@ export const PlaygroundMessage = (props: Props) => {
           "Continue from partial"
         ),
         onClick: props.onContinue
+      })
+    }
+    if (errorPayload.upgradeUrl) {
+      actions.unshift({
+        id: "upgrade",
+        label: t(
+          "playground:errorRecovery.upgradePlan",
+          "Upgrade plan"
+        ),
+        onClick: async () => {
+          let url = errorPayload.upgradeUrl!
+          // Resolve relative upgrade URLs against the configured server origin
+          // so they don't resolve against the extension origin in Plasmo.
+          if (url.startsWith("/")) {
+            try {
+              const cfg = await tldwClient.getConfig()
+              const base = String(cfg?.serverUrl || "").replace(/\/$/, "")
+              if (base) {
+                url = `${base}${url}`
+              }
+            } catch {
+              // best-effort; fall through with relative URL
+            }
+          }
+          window.open(url, "_blank", "noopener")
+        }
       })
     }
     return actions
@@ -1828,6 +1872,17 @@ export const PlaygroundMessage = (props: Props) => {
             ? "rounded-lg ring-1 ring-primary/35 ring-offset-1 ring-offset-bg"
             : ""
       }`}>
+      {/* "Generating..." indicator while streaming on the latest assistant message */}
+      {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && !props.message && (
+        <div className="flex self-start items-center gap-2 px-4 py-2 text-xs text-text-muted">
+          <span className="inline-flex gap-0.5">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:0ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-text-muted [animation-delay:300ms]" />
+          </span>
+          {t("playground:status.generating", "Generating...")}
+        </div>
+      )}
       {/* Inline stop button while streaming on the latest assistant message */}
       {props.isBot && (props.isStreaming || props.isProcessing) && isLastMessage && props.onStopStreaming && (
         <div className="absolute right-2 top-0 z-10">
@@ -1874,6 +1929,15 @@ export const PlaygroundMessage = (props: Props) => {
                 {messageTimestamp && (
                   <span className="text-xs text-text-muted">
                     • {messageTimestamp}
+                  </span>
+                )}
+                {props.isBot && !isSystemMessage && resolvedResponseModel && (
+                  <span
+                    data-testid="message-model-badge"
+                    className="inline-flex items-center rounded-full border border-border bg-surface2 px-1.5 py-0.5 text-[10px] font-medium text-text-muted"
+                    title={resolvedResponseModel}
+                  >
+                    {resolvedResponseModel}
                   </span>
                 )}
                 {props.isBot && !isSystemMessage && showMoodBadge && moodBadgeLabel && (
@@ -1995,20 +2059,45 @@ export const PlaygroundMessage = (props: Props) => {
             </div>
           )}
           {props.isBot && !isSystemMessage && fallbackAudit && (
-            <div
-              data-testid="message-fallback-audit"
-              className="text-[11px] text-text-muted"
+            <Tooltip
+              title={
+                fallbackAudit.fallbackApplied && fallbackAudit.requestedTarget && fallbackAudit.resolvedTarget
+                  ? t("playground:routing.fallbackTooltip",
+                      "Requested: {{requested}}. Fell back to: {{resolved}}",
+                      {
+                        requested: fallbackAudit.requestedTarget,
+                        resolved: fallbackAudit.resolvedTarget
+                      } as any)
+                  : undefined
+              }
             >
-              {fallbackAuditPolicyLabel}
-              {fallbackAuditPathLabel ? ` • ${fallbackAuditPathLabel}` : ""}
-              {typeof fallbackAudit.attempts === "number" &&
-              fallbackAudit.attempts > 1
-                ? ` • ${t("playground:routing.attempts", "{{count}} attempts", {
-                    count: fallbackAudit.attempts
-                  } as any)}`
-                : ""}
-              {fallbackAudit.reason ? ` • ${fallbackAudit.reason}` : ""}
-            </div>
+              <div
+                data-testid="message-fallback-audit"
+                className="text-[11px] text-text-muted"
+              >
+                {fallbackAudit.resolvedTarget && (
+                  <span>
+                    {t("playground:routing.using", "Using: {{target}}", {
+                      target: fallbackAudit.resolvedTarget
+                    } as any)}
+                  </span>
+                )}
+                {!fallbackAudit.resolvedTarget && fallbackAuditPolicyLabel}
+                {!fallbackAudit.resolvedTarget && fallbackAuditPathLabel ? ` • ${fallbackAuditPathLabel}` : ""}
+                {fallbackAudit.fallbackApplied && fallbackAudit.resolvedTarget && (
+                  <span className="ml-1 text-warn">
+                    ({t("playground:routing.fellBack", "fallback")})
+                  </span>
+                )}
+                {typeof fallbackAudit.attempts === "number" &&
+                fallbackAudit.attempts > 1
+                  ? ` • ${t("playground:routing.attempts", "{{count}} attempts", {
+                      count: fallbackAudit.attempts
+                    } as any)}`
+                  : ""}
+                {fallbackAudit.reason ? ` • ${fallbackAudit.reason}` : ""}
+              </div>
+            </Tooltip>
           )}
           {isImageGenerationAssistantEvent && imageGenerationEventSummary && (
             <div

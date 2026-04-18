@@ -218,6 +218,105 @@
   "notification_summaryLabel": {
     "message": "Summary"
   },
+  "clipper_routeLabel": {
+    "message": "Clipper"
+  },
+  "clipper_titleLabel": {
+    "message": "Title"
+  },
+  "clipper_commentLabel": {
+    "message": "Comment"
+  },
+  "clipper_tagsLabel": {
+    "message": "Tags"
+  },
+  "clipper_tagsPlaceholder": {
+    "message": "research, article"
+  },
+  "clipper_destinationLegend": {
+    "message": "Destination"
+  },
+  "clipper_destinationNote": {
+    "message": "Note"
+  },
+  "clipper_destinationWorkspace": {
+    "message": "Workspace"
+  },
+  "clipper_destinationBoth": {
+    "message": "Both"
+  },
+  "clipper_folderLabel": {
+    "message": "Folder ID"
+  },
+  "clipper_folderPlaceholder": {
+    "message": "42"
+  },
+  "clipper_folderValidation": {
+    "message": "Choose a positive whole-number folder ID or leave it blank."
+  },
+  "clipper_workspaceLabel": {
+    "message": "Workspace ID"
+  },
+  "clipper_workspacePlaceholder": {
+    "message": "workspace-alpha"
+  },
+  "clipper_workspaceValidation": {
+    "message": "Choose a workspace before saving to Workspace or Both."
+  },
+  "clipper_enhancementLegend": {
+    "message": "Enhancements"
+  },
+  "clipper_runOcr": {
+    "message": "Run OCR"
+  },
+  "clipper_runVlm": {
+    "message": "Run visual analysis"
+  },
+  "clipper_privacyDisclosure": {
+    "message": "OCR and vision requests send captured clip content to your configured tldw server."
+  },
+  "clipper_previewLabel": {
+    "message": "Clip preview"
+  },
+  "clipper_previewRequested": {
+    "message": "Requested"
+  },
+  "clipper_saveLabel": {
+    "message": "Save clip"
+  },
+  "clipper_saveAndOpenLabel": {
+    "message": "Save and open"
+  },
+  "clipper_cancelLabel": {
+    "message": "Cancel"
+  },
+  "clipper_savingLabel": {
+    "message": "Saving..."
+  },
+  "clipper_saveFailed": {
+    "message": "The clip could not be saved."
+  },
+  "clipper_noDraftTitle": {
+    "message": "No clip is ready to review yet."
+  },
+  "clipper_noDraftDescription": {
+    "message": "Capture a page from the browser context menu, then return here to file it."
+  },
+  "clipper_unavailableTitle": {
+    "message": "Web clipper unavailable"
+  },
+  "clipper_unavailableDescription": {
+    "message": "This server does not advertise web clipper support."
+  },
+  "clipper_offlineTitle": {
+    "message": "Connect to use the web clipper"
+  },
+  "clipper_offlineDescription": {
+    "message": "The review sheet needs a reachable tldw server before it can save clips."
+  },
+  "clipper_loadingCapabilities": {
+    "message": "Checking clipper support..."
+  },
   "saveStatus_ephemeral": {
     "message": "Ephemeral: Not saved, cleared on close"
   },
@@ -522,16 +621,19 @@
     "message": "All"
   },
   "rag_sources_media": {
-    "message": "Media"
+    "message": "Documents & Media"
   },
   "rag_sources_notes": {
     "message": "Notes"
   },
   "rag_sources_characters": {
-    "message": "Characters"
+    "message": "Story Characters"
   },
   "rag_sources_chats": {
-    "message": "Chats"
+    "message": "Conversations"
+  },
+  "rag_sources_kanban": {
+    "message": "Task Boards"
   },
   "rag_preset": {
     "message": "Preset"

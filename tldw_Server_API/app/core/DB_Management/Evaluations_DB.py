@@ -12,6 +12,7 @@ import json
 import importlib.util
 import os
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager, suppress
 from datetime import datetime, timezone
@@ -19,6 +20,13 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.evaluation_recipe_schemas import (
+    ConfidenceSummary,
+    RecommendationSlot,
+    RecipeRunRecord,
+    ReviewState,
+)
+from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import RunStatus
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
 # Backend abstraction (optional) for PostgreSQL support
@@ -31,7 +39,10 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     prepare_backend_many_statement,
     prepare_backend_statement,
 )
-from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
+from tldw_Server_API.app.core.DB_Management.content_backend import (
+    backend_target_key,
+    get_content_backend,
+)
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 _EVAL_DB_NONCRITICAL_EXCEPTIONS = (
@@ -201,6 +212,8 @@ class _EvaluationsBackendConnection:
 class EvaluationsDatabase:
     """Database manager for evaluations system (SQLite or PostgreSQL)."""
 
+    _bootstrapped_backend_targets: set[str] = set()
+
     def __init__(self, db_path: Optional[str], *, backend: Optional[DatabaseBackend] = None):
         # Default to per-user evaluations DB path when not provided
         if not db_path:
@@ -211,15 +224,12 @@ class EvaluationsDatabase:
                 db_path = "Databases/evaluations.db"
         self.db_path = db_path
         # Resolve backend (content backend by default)
-        self.backend: Optional[DatabaseBackend] = backend
-        if self.backend is None:
-            try:
-                cfg = load_comprehensive_config()
-                self.backend = get_content_backend(cfg)
-            except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
-                self.backend = None
-
-        self.backend_type: BackendType = self.backend.backend_type if self.backend else BackendType.SQLITE
+        self._backend: Optional[DatabaseBackend] = backend
+        self._uses_shared_content_backend = False
+        self._local = threading.local()
+        self._backend_refresh_suspended = False
+        if self._backend is None:
+            self._backend, self._uses_shared_content_backend = self._resolve_backend()
 
         self._abtest_store = None
 
@@ -227,7 +237,9 @@ class EvaluationsDatabase:
             self._initialize_database()
             self._apply_migrations()
         else:
-            self._initialize_database_postgres()
+            if self._backend is None:
+                raise RuntimeError("Evaluations backend is not configured")
+            self._ensure_bootstrap_for_backend(self._backend)
         self._init_abtest_store()
 
     @contextmanager
@@ -239,19 +251,98 @@ class EvaluationsDatabase:
                 sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
             conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
             conn.row_factory = sqlite3.Row
+            with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                conn.execute("PRAGMA foreign_keys = ON")
             try:
                 yield conn
             finally:
                 conn.close()
             return
 
-        assert self.backend is not None
-        raw = self.backend.get_pool().get_connection()
+        if self.backend is None:
+            raise RuntimeError("Evaluations backend is not configured")
+        backend = self.backend
+        raw = backend.get_pool().get_connection()
+        previous_backend = getattr(self._local, "backend_pin", None)
+        self._local.backend_pin = backend
         try:
             yield _EvaluationsBackendConnection(self, raw)
         finally:
             with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
-                self.backend.get_pool().return_connection(raw)
+                backend.get_pool().return_connection(raw)
+            if previous_backend is None:
+                with suppress(AttributeError):
+                    del self._local.backend_pin
+            else:
+                self._local.backend_pin = previous_backend
+
+    @property
+    def backend(self) -> Optional[DatabaseBackend]:
+        pinned_backend = getattr(self._local, "backend_pin", None)
+        if pinned_backend is not None:
+            return pinned_backend
+        if not self._uses_shared_content_backend:
+            return self._backend
+        if self._backend_refresh_suspended:
+            return self._backend
+        current_key = self._backend_target_key(self._backend)
+        refreshed_backend, uses_shared_backend = self._resolve_backend()
+        self._uses_shared_content_backend = uses_shared_backend
+        self._backend = refreshed_backend
+        refreshed_key = self._backend_target_key(refreshed_backend)
+        if (
+            uses_shared_backend
+            and refreshed_backend is not None
+            and refreshed_backend.backend_type == BackendType.POSTGRESQL
+            and refreshed_key != current_key
+        ):
+            self._ensure_bootstrap_for_backend(refreshed_backend)
+            self._abtest_store = None
+            self._init_abtest_store()
+        return self._backend
+
+    @property
+    def backend_type(self) -> BackendType:
+        backend = self.backend
+        return backend.backend_type if backend else BackendType.SQLITE
+
+    def _resolve_backend(self) -> tuple[Optional[DatabaseBackend], bool]:
+        try:
+            cfg = load_comprehensive_config()
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
+            return None, False
+
+        try:
+            backend = get_content_backend(cfg)
+        except _EVAL_DB_NONCRITICAL_EXCEPTIONS:
+            return None, False
+        if backend is None:
+            return None, False
+        return backend, backend.backend_type == BackendType.POSTGRESQL
+
+    def _backend_target_key(self, backend: Optional[DatabaseBackend]) -> str | None:
+        return backend_target_key(backend)
+
+    def _mark_backend_bootstrapped(self, backend: Optional[DatabaseBackend]) -> None:
+        key = self._backend_target_key(backend)
+        if key:
+            type(self)._bootstrapped_backend_targets.add(key)
+
+    def _ensure_bootstrap_for_backend(self, backend: DatabaseBackend) -> None:
+        if backend.backend_type != BackendType.POSTGRESQL:
+            return
+        key = self._backend_target_key(backend)
+        if key in type(self)._bootstrapped_backend_targets:
+            return
+        previous_suspend = self._backend_refresh_suspended
+        self._backend_refresh_suspended = True
+        try:
+            self._backend = backend
+            self._initialize_database_postgres()
+        finally:
+            self._backend_refresh_suspended = previous_suspend
+        if key:
+            type(self)._bootstrapped_backend_targets.add(key)
 
     # --- Backend helpers ---
     def _prepare_backend_statement(self, query: str, params: Optional[Any] = None) -> tuple[str, Optional[Any]]:
@@ -327,6 +418,79 @@ class EvaluationsDatabase:
                 )
             """)
 
+            # Recipe runs table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS evaluation_recipe_runs (
+                    run_id TEXT PRIMARY KEY,
+                    recipe_id TEXT NOT NULL,
+                    recipe_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    review_state TEXT NOT NULL DEFAULT 'not_required',
+                    dataset_snapshot_ref TEXT,
+                    dataset_content_hash TEXT,
+                    confidence_summary_json TEXT,
+                    recommendation_slots_json TEXT,
+                    metadata_json TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS evaluation_recipe_run_children (
+                    parent_run_id TEXT NOT NULL,
+                    child_run_id TEXT NOT NULL,
+                    child_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (parent_run_id, child_run_id),
+                    FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_draft_samples (
+                    sample_id TEXT PRIMARY KEY,
+                    recipe_kind TEXT NOT NULL,
+                    provenance TEXT NOT NULL,
+                    review_state TEXT NOT NULL DEFAULT 'draft',
+                    sample_payload_json TEXT NOT NULL,
+                    sample_metadata_json TEXT,
+                    source_kind TEXT,
+                    created_by TEXT,
+                    review_summary_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_review_actions (
+                    action_id TEXT PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reviewer_id TEXT,
+                    notes TEXT,
+                    action_payload_json TEXT,
+                    resulting_review_state TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_eval_promotions (
+                    promotion_id TEXT PRIMARY KEY,
+                    sample_id TEXT NOT NULL,
+                    dataset_id TEXT,
+                    dataset_snapshot_ref TEXT,
+                    promoted_by TEXT,
+                    promotion_reason TEXT,
+                    promotion_metadata_json TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+                )
+            """)
+
             # Internal evaluations table (for tldw-specific evaluations)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS internal_evaluations (
@@ -394,6 +558,18 @@ class EvaluationsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_recipe_id ON evaluation_recipe_runs(recipe_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_status ON evaluation_recipe_runs(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_recipe ON synthetic_eval_draft_samples(recipe_kind)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_provenance ON synthetic_eval_draft_samples(provenance)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_review_state ON synthetic_eval_draft_samples(review_state)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_created_at ON synthetic_eval_draft_samples(created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_actions_sample_created ON synthetic_eval_review_actions(sample_id, created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_sample_created ON synthetic_eval_promotions(sample_id, created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_dataset ON synthetic_eval_promotions(dataset_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_type ON internal_evaluations(evaluation_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_internal_evals_user ON internal_evaluations(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhook_registrations(active)")
@@ -517,7 +693,8 @@ class EvaluationsDatabase:
 
     def _initialize_database_postgres(self) -> None:
         """Provision PostgreSQL tables and indexes to mirror SQLite schema."""
-        assert self.backend is not None
+        if self.backend is None:
+            raise RuntimeError("Evaluations backend is not configured")
         ddl = """
         CREATE TABLE IF NOT EXISTS evaluations (
             id TEXT PRIMARY KEY,
@@ -557,6 +734,63 @@ class EvaluationsDatabase:
             created_at TIMESTAMPTZ DEFAULT NOW(),
             created_by TEXT,
             metadata JSONB
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_recipe_runs (
+            run_id TEXT PRIMARY KEY,
+            recipe_id TEXT NOT NULL,
+            recipe_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            review_state TEXT NOT NULL DEFAULT 'not_required',
+            dataset_snapshot_ref TEXT,
+            dataset_content_hash TEXT,
+            confidence_summary_json JSONB,
+            recommendation_slots_json JSONB,
+            metadata_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS evaluation_recipe_run_children (
+            parent_run_id TEXT NOT NULL,
+            child_run_id TEXT NOT NULL,
+            child_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (parent_run_id, child_run_id),
+            FOREIGN KEY (parent_run_id) REFERENCES evaluation_recipe_runs(run_id)
+        );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_draft_samples (
+            sample_id TEXT PRIMARY KEY,
+            recipe_kind TEXT NOT NULL,
+            provenance TEXT NOT NULL,
+            review_state TEXT NOT NULL DEFAULT 'draft',
+            sample_payload_json JSONB NOT NULL,
+            sample_metadata_json JSONB,
+            source_kind TEXT,
+            created_by TEXT,
+            review_summary_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_review_actions (
+            action_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            reviewer_id TEXT,
+            notes TEXT,
+            action_payload_json JSONB,
+            resulting_review_state TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
+        );
+        CREATE TABLE IF NOT EXISTS synthetic_eval_promotions (
+            promotion_id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            dataset_id TEXT,
+            dataset_snapshot_ref TEXT,
+            promoted_by TEXT,
+            promotion_reason TEXT,
+            promotion_metadata_json JSONB,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            FOREIGN KEY (sample_id) REFERENCES synthetic_eval_draft_samples(sample_id)
         );
         -- Unified evaluations table (enabled by default on PostgreSQL)
         CREATE TABLE IF NOT EXISTS evaluations_unified (
@@ -680,6 +914,18 @@ class EvaluationsDatabase:
         CREATE INDEX IF NOT EXISTS idx_runs_eval ON evaluation_runs(eval_id);
         CREATE INDEX IF NOT EXISTS idx_runs_status ON evaluation_runs(status);
         CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_recipe_id ON evaluation_recipe_runs(recipe_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_status ON evaluation_recipe_runs(status);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_runs_created_at ON evaluation_recipe_runs(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_parent ON evaluation_recipe_run_children(parent_run_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_recipe_children_child ON evaluation_recipe_run_children(child_run_id);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_recipe ON synthetic_eval_draft_samples(recipe_kind);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_provenance ON synthetic_eval_draft_samples(provenance);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_review_state ON synthetic_eval_draft_samples(review_state);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_samples_created_at ON synthetic_eval_draft_samples(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_actions_sample_created ON synthetic_eval_review_actions(sample_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_sample_created ON synthetic_eval_promotions(sample_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_synth_eval_promotions_dataset ON synthetic_eval_promotions(dataset_id);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_created ON evaluations_unified(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_status ON evaluations_unified(status);
         CREATE INDEX IF NOT EXISTS idx_evals_unified_type ON evaluations_unified(evaluation_type);
@@ -708,14 +954,29 @@ class EvaluationsDatabase:
             from tldw_Server_API.app.core.DB_Management.migrations_v5_unified_evaluations import (
                 migrate_to_unified_evaluations,
             )
+            from tldw_Server_API.app.core.DB_Management.migrations_v6_evaluation_recipes import (
+                migrate_to_evaluation_recipes,
+            )
+            from tldw_Server_API.app.core.DB_Management.migrations_v7_synthetic_eval_workflow import (
+                migrate_to_synthetic_eval_workflow,
+            )
 
             # Apply the unified evaluations migration
             if migrate_to_unified_evaluations(self.db_path):
                 logger.info("Applied unified evaluations migration successfully")
             else:
                 logger.warning("Unified evaluations migration already applied or failed")
+
+            if migrate_to_evaluation_recipes(self.db_path):
+                logger.info("Applied evaluation recipe migration successfully")
+            else:
+                logger.warning("Evaluation recipe migration already applied or failed")
+            if migrate_to_synthetic_eval_workflow(self.db_path):
+                logger.info("Applied synthetic eval workflow migration successfully")
+            else:
+                logger.warning("Synthetic eval workflow migration already applied or failed")
         except ImportError:
-            logger.warning("Unified evaluations migration module not found, skipping")
+            logger.warning("Migration module not found, skipping")
         except _EVAL_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error applying migrations: {e}")
 
@@ -1413,6 +1674,103 @@ class EvaluationsDatabase:
                 # Best-effort; safe to ignore failures
                 pass
 
+    def update_idempotency_entity(
+        self,
+        entity_type: str,
+        key: str,
+        entity_id: str,
+        user_id: Optional[str],
+    ) -> bool:
+        """Update an existing idempotency mapping to a new entity id."""
+        if not key or not entity_id:
+            return False
+        uid = user_id or ""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE idempotency_keys
+                    SET entity_id = ?
+                    WHERE user_id = ? AND entity_type = ? AND idempotency_key = ?
+                    """,
+                    (entity_id, uid, entity_type, key),
+                )
+                conn.commit()
+                return bool(cursor.rowcount)
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
+    def find_latest_recipe_run_by_reuse_hash(
+        self,
+        *,
+        reuse_hash: str,
+        owner_user_id: str | None,
+        allow_legacy_unowned: bool = False,
+    ) -> RecipeRunRecord | None:
+        """Fetch the latest completed recipe run matching a reuse hash and owner scope."""
+        normalized_reuse_hash = str(reuse_hash or "").strip()
+        normalized_owner_user_id = str(owner_user_id or "").strip()
+        if not normalized_reuse_hash or not normalized_owner_user_id:
+            return None
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if self.backend_type == BackendType.POSTGRESQL and self.backend is not None:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM evaluation_recipe_runs
+                    WHERE status = %s
+                      AND COALESCE(metadata_json, '{}')::jsonb ->> 'reuse_hash' = %s
+                      AND (
+                        COALESCE(metadata_json, '{}')::jsonb ->> 'owner_user_id' = %s
+                        OR (
+                            %s = TRUE
+                            AND NOT (COALESCE(metadata_json, '{}')::jsonb ? 'owner_user_id')
+                        )
+                      )
+                    ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        RunStatus.COMPLETED.value,
+                        normalized_reuse_hash,
+                        normalized_owner_user_id,
+                        allow_legacy_unowned,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM evaluation_recipe_runs
+                    WHERE status = ?
+                      AND json_extract(COALESCE(metadata_json, '{}'), '$.reuse_hash') = ?
+                      AND (
+                        json_extract(COALESCE(metadata_json, '{}'), '$.owner_user_id') = ?
+                        OR (
+                            ? = 1
+                            AND json_type(COALESCE(metadata_json, '{}'), '$.owner_user_id') IS NULL
+                        )
+                      )
+                    ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        RunStatus.COMPLETED.value,
+                        normalized_reuse_hash,
+                        normalized_owner_user_id,
+                        1 if allow_legacy_unowned else 0,
+                    ),
+                )
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_recipe_run_record(row)
+        return None
+
     def cleanup_idempotency_keys(self, ttl_hours: int = 72) -> int:
         """Remove idempotency keys older than ttl_hours. Returns deleted row count.
 
@@ -1711,7 +2069,15 @@ class EvaluationsDatabase:
         logger.info(f"Created dataset: {dataset_id} with {len(samples)} samples")
         return dataset_id
 
-    def get_dataset(self, dataset_id: str, *, created_by: Optional[str] = None) -> Optional[dict[str, Any]]:
+    def get_dataset(
+        self,
+        dataset_id: str,
+        *,
+        created_by: Optional[str] = None,
+        include_samples: bool = True,
+        sample_limit: Optional[int] = None,
+        sample_offset: int = 0,
+    ) -> Optional[dict[str, Any]]:
         """Get dataset by ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -1721,7 +2087,12 @@ class EvaluationsDatabase:
             cursor.execute(query, params)
             row = cursor.fetchone()
             if row:
-                return self._row_to_dataset_dict(row)
+                return self._row_to_dataset_dict(
+                    row,
+                    include_samples=include_samples,
+                    sample_limit=sample_limit,
+                    sample_offset=sample_offset,
+                )
         return None
 
     def list_datasets(
@@ -1770,7 +2141,301 @@ class EvaluationsDatabase:
             conn.commit()
             return cursor.rowcount > 0
 
+    # ============= Recipe Run CRUD Operations =============
+
+    def create_recipe_run(
+        self,
+        *,
+        recipe_id: str,
+        recipe_version: str,
+        status: RunStatus | str = RunStatus.PENDING,
+        review_state: ReviewState | str = ReviewState.NOT_REQUIRED,
+        dataset_snapshot_ref: Optional[str] = None,
+        dataset_content_hash: Optional[str] = None,
+        confidence_summary: ConfidenceSummary | dict[str, Any] | None = None,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+        child_run_ids: Optional[list[str]] = None,
+        run_id: Optional[str] = None,
+    ) -> str:
+        """Create a recipe run row and optional child links."""
+
+        run_id = run_id or f"recipe_run_{uuid.uuid4().hex[:12]}"
+        status_value = self._coerce_recipe_run_status(status)
+        review_value = self._coerce_review_state(review_state)
+        if not dataset_snapshot_ref and not dataset_content_hash:
+            raise ValueError("A recipe run requires dataset_snapshot_ref or dataset_content_hash")
+        recommendation_slots_payload = self._normalize_recommendation_slots(recommendation_slots)
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO evaluation_recipe_runs (
+                        run_id,
+                        recipe_id,
+                        recipe_version,
+                        status,
+                        review_state,
+                        dataset_snapshot_ref,
+                        dataset_content_hash,
+                        confidence_summary_json,
+                        recommendation_slots_json,
+                        metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        recipe_id,
+                        recipe_version,
+                        status_value,
+                        review_value,
+                        dataset_snapshot_ref,
+                        dataset_content_hash,
+                        self._json_dump_value(confidence_summary),
+                        self._json_dump_mapping(recommendation_slots_payload),
+                        self._json_dump_mapping(metadata or {}),
+                    ),
+                )
+                if child_run_ids is not None:
+                    self._replace_recipe_run_children(cursor, run_id, child_run_ids)
+                conn.commit()
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
+        return run_id
+
+    def get_recipe_run(self, run_id: str) -> RecipeRunRecord | None:
+        """Fetch a recipe run by id."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM evaluation_recipe_runs WHERE run_id = ?", (run_id,))
+            row = cursor.fetchone()
+            if row:
+                return self._row_to_recipe_run_record(row)
+        return None
+
+    def update_recipe_run(
+        self,
+        run_id: str,
+        *,
+        status: RunStatus | str | None = None,
+        review_state: ReviewState | str | None = None,
+        confidence_summary: ConfidenceSummary | dict[str, Any] | None = None,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Update persisted recipe run state with tightly scoped mutable fields."""
+
+        has_updates = any(
+            value is not None
+            for value in (
+                status,
+                review_state,
+                confidence_summary,
+                recommendation_slots,
+                metadata,
+            )
+        )
+        if not has_updates:
+            return False
+
+        status_value = self._coerce_recipe_run_status(status) if status is not None else None
+        review_value = self._coerce_review_state(review_state) if review_state is not None else None
+        confidence_payload = (
+            self._json_dump_value(confidence_summary)
+            if confidence_summary is not None
+            else None
+        )
+        recommendation_payload = (
+            self._json_dump_mapping(self._normalize_recommendation_slots(recommendation_slots))
+            if recommendation_slots is not None
+            else None
+        )
+        metadata_payload = self._json_dump_mapping(metadata) if metadata is not None else None
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE evaluation_recipe_runs
+                    SET
+                        status = COALESCE(?, status),
+                        review_state = COALESCE(?, review_state),
+                        confidence_summary_json = COALESCE(?, confidence_summary_json),
+                        recommendation_slots_json = COALESCE(?, recommendation_slots_json),
+                        metadata_json = COALESCE(?, metadata_json),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE run_id = ?
+                    """,
+                    (
+                        status_value,
+                        review_value,
+                        confidence_payload,
+                        recommendation_payload,
+                        metadata_payload,
+                        run_id,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
+    def list_recipe_run_children(self, parent_run_id: str) -> list[str]:
+        """List child run ids for a parent recipe run."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT child_run_id
+                FROM evaluation_recipe_run_children
+                WHERE parent_run_id = ?
+                ORDER BY child_order ASC, created_at ASC
+                """,
+                (parent_run_id,),
+            )
+            rows = cursor.fetchall()
+            result: list[str] = []
+            for row in rows:
+                if isinstance(row, dict):
+                    result.append(str(row["child_run_id"]))
+                else:
+                    result.append(str(row[0]))
+            return result
+
+    def set_recipe_run_children(self, parent_run_id: str, child_run_ids: list[str]) -> None:
+        """Replace the child run ids for a parent recipe run."""
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                self._ensure_recipe_run_exists(cursor, parent_run_id)
+                self._replace_recipe_run_children(cursor, parent_run_id, child_run_ids)
+                conn.commit()
+            except Exception:
+                with suppress(_EVAL_DB_NONCRITICAL_EXCEPTIONS):
+                    conn.rollback()
+                raise
+
     # ============= Helper Methods =============
+
+    def _coerce_recipe_run_status(self, status: RunStatus | str) -> str:
+        if isinstance(status, RunStatus):
+            return status.value
+        return RunStatus(str(status)).value
+
+    def _coerce_review_state(self, review_state: ReviewState | str) -> str:
+        if isinstance(review_state, ReviewState):
+            return review_state.value
+        return ReviewState(str(review_state)).value
+
+    def _ensure_recipe_run_exists(self, cursor: Any, run_id: str) -> None:
+        cursor.execute(
+            "SELECT 1 FROM evaluation_recipe_runs WHERE run_id = ?",
+            (run_id,),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("parent recipe run does not exist")
+
+    def _replace_recipe_run_children(self, cursor: Any, parent_run_id: str, child_run_ids: list[str]) -> None:
+        cursor.execute(
+            "DELETE FROM evaluation_recipe_run_children WHERE parent_run_id = ?",
+            (parent_run_id,),
+        )
+        for child_order, child_run_id in enumerate(child_run_ids):
+            cursor.execute(
+                """
+                INSERT INTO evaluation_recipe_run_children (
+                    parent_run_id,
+                    child_run_id,
+                    child_order
+                )
+                VALUES (?, ?, ?)
+                """,
+                (parent_run_id, child_run_id, child_order),
+            )
+
+    def _normalize_recommendation_slots(
+        self,
+        recommendation_slots: Optional[dict[str, RecommendationSlot | dict[str, Any] | None]],
+    ) -> Optional[dict[str, RecommendationSlot | dict[str, Any]]]:
+        if recommendation_slots is None:
+            return None
+        normalized: dict[str, RecommendationSlot | dict[str, Any]] = {}
+        for slot_name, slot_value in recommendation_slots.items():
+            if slot_value is None:
+                raise ValueError(
+                    "RecommendationSlot values cannot be None; use RecommendationSlot(candidate_run_id=None, reason_code=...)"
+                )
+            normalized[slot_name] = slot_value
+        return normalized
+    def _json_dump_value(self, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if hasattr(value, "model_dump"):
+            payload = value.model_dump(mode="json")
+        else:
+            payload = value
+        return json.dumps(payload, sort_keys=True)
+
+    def _json_dump_mapping(self, value: Optional[dict[str, Any]]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if item is None:
+                normalized[key] = None
+            elif hasattr(item, "model_dump"):
+                normalized[key] = item.model_dump(mode="json")
+            else:
+                normalized[key] = item
+        return json.dumps(normalized, sort_keys=True)
+
+    def _parse_recipe_datetime(self, value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if value is None:
+            return datetime.now(timezone.utc)
+        text = str(value).strip()
+        if not text:
+            return datetime.now(timezone.utc)
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(timezone.utc)
+
+    def _row_to_recipe_run_record(self, row: Any) -> RecipeRunRecord:
+        confidence_summary = self._json_maybe(row["confidence_summary_json"], default=None)
+        recommendation_slots = self._json_maybe(row["recommendation_slots_json"], default={}) or {}
+        metadata = self._json_maybe(row["metadata_json"], default={}) or {}
+        child_run_ids = self.list_recipe_run_children(str(row["run_id"]))
+
+        payload = {
+            "run_id": row["run_id"],
+            "recipe_id": row["recipe_id"],
+            "recipe_version": row["recipe_version"],
+            "status": row["status"],
+            "review_state": row["review_state"],
+            "dataset_snapshot_ref": row["dataset_snapshot_ref"],
+            "dataset_content_hash": row["dataset_content_hash"],
+            "confidence_summary": confidence_summary,
+            "recommendation_slots": recommendation_slots,
+            "child_run_ids": child_run_ids,
+            "created_at": self._parse_recipe_datetime(row["created_at"]),
+            "updated_at": self._parse_recipe_datetime(row["updated_at"]) if row["updated_at"] else None,
+            "metadata": metadata,
+        }
+        return RecipeRunRecord.model_validate(payload)
 
     def _ensure_unix_timestamp(self, value: Any, *, fallback_now: bool = False) -> Optional[int]:
         """Convert various timestamp representations to a Unix epoch int.
@@ -1940,7 +2605,13 @@ class EvaluationsDatabase:
             "usage": self._json_maybe(row["usage"], default=None),
         }
 
-    def _row_to_dataset_dict(self, row, include_samples: bool = True) -> dict[str, Any]:
+    def _row_to_dataset_dict(
+        self,
+        row,
+        include_samples: bool = True,
+        sample_limit: Optional[int] = None,
+        sample_offset: int = 0,
+    ) -> dict[str, Any]:
         """Convert database row to dataset dictionary"""
         created_timestamp = self._ensure_unix_timestamp(row["created_at"], fallback_now=True)
 
@@ -1957,7 +2628,14 @@ class EvaluationsDatabase:
         }
 
         if include_samples:
-            result["samples"] = self._json_maybe(row["samples"], default=[])
+            samples = self._json_maybe(row["samples"], default=[])
+            normalized_offset = max(0, int(sample_offset or 0))
+            if sample_limit is not None:
+                normalized_limit = max(0, int(sample_limit))
+                samples = samples[normalized_offset:normalized_offset + normalized_limit]
+            elif normalized_offset:
+                samples = samples[normalized_offset:]
+            result["samples"] = samples
 
         return result
 

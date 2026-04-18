@@ -27,9 +27,9 @@ Alternatives:
 
 Important current-repo realities:
 
-- current config defaults still ship with explicit STT defaults of `parakeet-onnx`
-- current `/setup` bundle docs may recommend a different first-run STT path for some hardware classes
-- the stock Docker profile does not expose GPU runtime configuration for the main app container by default
+- The shipped `config.txt` defaults use `parakeet-onnx` for STT (the CPU-friendly default). This guide shows you how to change those defaults to GPU-optimized engines.
+- The `/setup` bundle docs may recommend a different first-run STT path for some hardware classes.
+- The stock Docker profile does not expose GPU runtime configuration for the main app container by default.
 
 ## Choose Your Hardware Lane First
 

@@ -323,6 +323,23 @@ class SandboxStore:
             except (TypeError, ValueError):
                 raise ValueError(f"Invalid created_at filter: {value!r}") from None
 
+    # Durable run queue methods for cross-restart persistence.
+    def enqueue_run(self, run_id: str, user_id: str, priority: int = 0) -> None:
+        """Add a run to the persistent queue."""
+        raise NotImplementedError
+
+    def dequeue_run(self, worker_id: str) -> dict | None:
+        """Remove and return the highest-priority queued run, or None.
+
+        Returns a dict with keys: run_id, user_id, priority, enqueued_at.
+        Within the same priority, FIFO order (earliest enqueued_at first).
+        """
+        raise NotImplementedError
+
+    def remove_from_queue(self, run_id: str) -> bool:
+        """Remove a specific run from the queue. Returns True if it was present."""
+        raise NotImplementedError
+
     # Optional: TTL GC for idempotency
     def gc_idempotency(self) -> int:
         """Garbage-collect expired idempotency records.
@@ -342,6 +359,7 @@ class InMemoryStore(SandboxStore):
         self._sessions: dict[str, dict[str, Any]] = {}
         self._acp_sessions: dict[str, dict[str, Any]] = {}
         self._user_bytes: dict[str, int] = {}
+        self._run_queue: list[dict[str, Any]] = []
         self._lock = threading.RLock()
 
     def _fp(self, body: dict[str, Any]) -> str:
@@ -900,6 +918,31 @@ class InMemoryStore(SandboxStore):
         items.sort(key=lambda r: r.get("user_id") or "", reverse=bool(sort_desc))
         return items[offset: offset + limit]
 
+    # -- Durable run queue (in-memory) ------------------------------------------
+    def enqueue_run(self, run_id: str, user_id: str, priority: int = 0) -> None:
+        with self._lock:
+            self._run_queue.append({
+                "run_id": str(run_id),
+                "user_id": str(user_id),
+                "priority": int(priority),
+                "enqueued_at": time.time(),
+            })
+            # Keep sorted: highest priority first, then earliest enqueued_at
+            self._run_queue.sort(key=lambda e: (-e["priority"], e["enqueued_at"]))
+
+    def dequeue_run(self, worker_id: str) -> dict | None:
+        with self._lock:
+            if not self._run_queue:
+                return None
+            return self._run_queue.pop(0)
+
+    def remove_from_queue(self, run_id: str) -> bool:
+        rid = str(run_id)
+        with self._lock:
+            before = len(self._run_queue)
+            self._run_queue = [e for e in self._run_queue if e["run_id"] != rid]
+            return len(self._run_queue) < before
+
     def count_usage(
         self,
         *,
@@ -921,6 +964,10 @@ class SQLiteStore(SandboxStore):
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_db()
+
+        # Delegate run queue SQL to DB_Management abstraction
+        from tldw_Server_API.app.core.DB_Management.Sandbox_Queue_DB import SQLiteRunQueueDB
+        self._queue_db = SQLiteRunQueueDB(conn_factory=self._conn, lock=self._lock)
 
     def _conn(self) -> sqlite3.Connection:
         con = sqlite3.connect(self.db_path)
@@ -1010,6 +1057,12 @@ class SQLiteStore(SandboxStore):
                     scope_snapshot_id TEXT,
                     created_at REAL,
                     updated_at REAL
+                );
+                CREATE TABLE IF NOT EXISTS run_queue (
+                    run_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    priority INTEGER DEFAULT 0,
+                    enqueued_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
                 """
             )
@@ -2037,6 +2090,27 @@ class SQLiteStore(SandboxStore):
         items.sort(key=lambda r: r.get("user_id") or "", reverse=bool(sort_desc))
         return items[offset: offset + limit]
 
+    # -- Durable run queue (SQLite) — delegated to DB_Management -----------------
+    def enqueue_run(self, run_id: str, user_id: str, priority: int = 0) -> None:
+        try:
+            self._queue_db.enqueue(run_id, user_id, priority)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"enqueue_run failed (sqlite): {e}")
+
+    def dequeue_run(self, worker_id: str) -> dict | None:
+        try:
+            return self._queue_db.dequeue(worker_id)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"dequeue_run failed (sqlite): {e}")
+            return None
+
+    def remove_from_queue(self, run_id: str) -> bool:
+        try:
+            return self._queue_db.remove(run_id)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"remove_from_queue failed (sqlite): {e}")
+            return False
+
     def count_usage(
         self,
         *,
@@ -2063,6 +2137,10 @@ class PostgresStore(SandboxStore):
         except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover
             raise RuntimeError("psycopg is required for PostgresStore") from e
         self._init_db()
+
+        # Delegate run queue SQL to DB_Management abstraction
+        from tldw_Server_API.app.core.DB_Management.Sandbox_Queue_DB import PostgresRunQueueDB
+        self._queue_db = PostgresRunQueueDB(conn_factory=self._conn, lock=self._lock)
 
     def _conn(self):
         import psycopg
@@ -2162,6 +2240,16 @@ class PostgresStore(SandboxStore):
                         scope_snapshot_id TEXT,
                         created_at DOUBLE PRECISION,
                         updated_at DOUBLE PRECISION
+                    );
+                    """
+            )
+            cur.execute(
+                """
+                    CREATE TABLE IF NOT EXISTS run_queue (
+                        run_id TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        priority INTEGER DEFAULT 0,
+                        enqueued_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
                     );
                     """
             )
@@ -3198,6 +3286,27 @@ class PostgresStore(SandboxStore):
                     "artifact_bytes": int(usage_rows.get(u, 0)),
                 })
             return items[offset: offset + limit]
+
+    # -- Durable run queue (Postgres) — delegated to DB_Management ----------------
+    def enqueue_run(self, run_id: str, user_id: str, priority: int = 0) -> None:
+        try:
+            self._queue_db.enqueue(run_id, user_id, priority)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"enqueue_run failed (pg): {e}")
+
+    def dequeue_run(self, worker_id: str) -> dict | None:
+        try:
+            return self._queue_db.dequeue(worker_id)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"dequeue_run failed (pg): {e}")
+            return None
+
+    def remove_from_queue(self, run_id: str) -> bool:
+        try:
+            return self._queue_db.remove(run_id)
+        except _SANDBOX_STORE_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"remove_from_queue failed (pg): {e}")
+            return False
 
     def count_usage(
         self,

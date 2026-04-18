@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next"
 import { Drawer, Tabs, Modal, Input, Empty, Skeleton, Button, message } from "antd"
 import type { InputRef } from "antd"
 import {
+  AlertTriangle,
   FileText,
   MessageSquare,
   Sparkles,
@@ -10,7 +11,7 @@ import {
   Command,
   Loader2
 } from "lucide-react"
-import { useWorkspaceStore } from "@/store/workspace"
+import { createWorkspaceStorage, useWorkspaceStore } from "@/store/workspace"
 import { useTutorialStore } from "@/store/tutorials"
 import {
   WORKSPACE_CONFLICT_NOTICE_THROTTLE_MS,
@@ -38,6 +39,7 @@ import { SharedWorkspaceBanner } from "./SharedWorkspaceBanner"
 import { SharedWorkspaceProvider } from "./SharedWorkspaceContext"
 import { WorkspaceStatusBar } from "./WorkspaceStatusBar"
 import { ChatPane } from "./ChatPane"
+import { WorkspaceShortcutsModal } from "./WorkspaceShortcutsModal"
 import {
   TransferSourcesModal,
   type TransferSourcesModalLaunchRequest
@@ -821,6 +823,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const workspaceTransitionTimerRef = React.useRef<number | null>(null)
   const [showStorageQuotaWarning, setShowStorageQuotaWarning] =
     React.useState(false)
+  const [storageHighUsageDismissed, setStorageHighUsageDismissed] =
+    React.useState(false)
   const [showCrossTabSyncWarning, setShowCrossTabSyncWarning] =
     React.useState(false)
   const [crossTabChangedFields, setCrossTabChangedFields] = React.useState<
@@ -835,8 +839,29 @@ const WorkspacePlaygroundBody: React.FC = () => {
     accountUsedBytes: null,
     accountQuotaBytes: null
   })
+  const storageUsagePercent = React.useMemo(() => {
+    if (
+      workspaceStorageUsage.quotaBytes <= 0 ||
+      !Number.isFinite(workspaceStorageUsage.usedBytes) ||
+      !Number.isFinite(workspaceStorageUsage.quotaBytes)
+    ) {
+      return 0
+    }
+    return Math.round(
+      (workspaceStorageUsage.usedBytes / workspaceStorageUsage.quotaBytes) * 100
+    )
+  }, [workspaceStorageUsage.usedBytes, workspaceStorageUsage.quotaBytes])
+
+  const showStorageHighUsageWarning =
+    statusGuardrailsEnabled &&
+    !storageHighUsageDismissed &&
+    !showStorageQuotaWarning &&
+    storageUsagePercent >= 80
+
   const lastCrossTabSyncWarningRef = React.useRef(0)
   const onboardingInitializedRef = React.useRef(false)
+  const [showTutorialPrompt, setShowTutorialPrompt] = React.useState(false)
+  const [showShortcutsModal, setShowShortcutsModal] = React.useState(false)
   const startTutorial = useTutorialStore((s) => s.startTutorial)
 
   // Shared workspace state (from ?shared= query param)
@@ -1207,14 +1232,14 @@ const WorkspacePlaygroundBody: React.FC = () => {
   const dismissOnboardingOverlay = React.useCallback(() => {
     if (typeof window === "undefined") return
 
-    try {
-      window.localStorage.setItem(
+    void Promise.resolve(
+      createWorkspaceStorage().setItem(
         WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY,
         "1"
       )
-    } catch {
+    ).catch(() => {
       // Ignore storage errors.
-    }
+    })
   }, [])
 
   useEffect(() => {
@@ -1671,20 +1696,26 @@ const WorkspacePlaygroundBody: React.FC = () => {
     onboardingInitializedRef.current = true
 
     if (typeof window === "undefined") return
-    try {
-      const dismissed = window.localStorage.getItem(
+    let isActive = true
+
+    void Promise.resolve(
+      createWorkspaceStorage().getItem(
         WORKSPACE_ONBOARDING_DISMISSED_STORAGE_KEY
       )
-      if (dismissed !== "1") {
-        // Auto-start the guided Joyride tour for first-time users
-        startTutorial("workspace-playground-basics")
-        dismissOnboardingOverlay()
-      }
-    } catch {
-      // On storage error, start the tour anyway for this session
-      startTutorial("workspace-playground-basics")
+    )
+      .then((dismissed) => {
+        if (isActive && dismissed !== "1") {
+          setShowTutorialPrompt(true)
+        }
+      })
+      .catch(() => {
+        // Ignore storage errors.
+      })
+
+    return () => {
+      isActive = false
     }
-  }, [isStoreHydrated, workspaceId, startTutorial, dismissOnboardingOverlay])
+  }, [isStoreHydrated, workspaceId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -1766,6 +1797,26 @@ const WorkspacePlaygroundBody: React.FC = () => {
       if (event.key === "Escape") {
         event.preventDefault()
         closeGlobalSearch()
+        return
+      }
+
+      if (
+        event.key === "?" &&
+        !hasModifier &&
+        !event.altKey
+      ) {
+        const target = event.target as HTMLElement | null
+        const tag = target?.tagName?.toLowerCase()
+        if (
+          tag === "input" ||
+          tag === "textarea" ||
+          tag === "select" ||
+          target?.isContentEditable
+        ) {
+          return
+        }
+        event.preventDefault()
+        setShowShortcutsModal(true)
       }
     }
 
@@ -2147,6 +2198,35 @@ const WorkspacePlaygroundBody: React.FC = () => {
     return <WorkspacePlaygroundSkeleton isMobile={isMobile} />
   }
 
+  const tutorialPromptBanner = showTutorialPrompt ? (
+    <div className="mx-4 mt-2 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm">
+      <span><strong>New here?</strong> Take a quick tour of the workspace.</span>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            startTutorial("workspace-playground-basics")
+            dismissOnboardingOverlay()
+            setShowTutorialPrompt(false)
+          }}
+          className="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primaryStrong transition-colors"
+        >
+          Start tour
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            dismissOnboardingOverlay()
+            setShowTutorialPrompt(false)
+          }}
+          className="rounded-md border border-border px-3 py-1 text-xs text-text-muted hover:bg-surface2 transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  ) : null
+
   return (
     <SharedWorkspaceProvider
       shareId={sharedShareId}
@@ -2176,7 +2256,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       </a>
 
       {statusGuardrailsEnabled &&
-        (showStorageQuotaWarning || showCrossTabSyncWarning) && (
+        (showStorageQuotaWarning || showStorageHighUsageWarning || showCrossTabSyncWarning) && (
         <div className="space-y-2 border-b border-border bg-surface px-3 py-2">
           {showStorageQuotaWarning && (
             <div
@@ -2195,6 +2275,33 @@ const WorkspacePlaygroundBody: React.FC = () => {
                 type="button"
                 className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
                 onClick={() => setShowStorageQuotaWarning(false)}
+              >
+                {t("common:dismiss", "Dismiss")}
+              </button>
+            </div>
+          )}
+
+          {showStorageHighUsageWarning && (
+            <div
+              data-testid="workspace-storage-high-usage-banner"
+              className="flex flex-wrap items-center justify-between gap-2 rounded border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-text"
+              role="status"
+              aria-live="polite"
+            >
+              <span className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+                <span>
+                  {t(
+                    "playground:workspace.storageHighUsage",
+                    "Storage is {{percent}}% full. Consider archiving unused workspaces to free space.",
+                    { percent: storageUsagePercent }
+                  )}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="rounded border border-border px-2 py-1 text-xs font-medium hover:bg-surface2"
+                onClick={() => setStorageHighUsageDismissed(true)}
               >
                 {t("common:dismiss", "Dismiss")}
               </button>
@@ -2226,10 +2333,16 @@ const WorkspacePlaygroundBody: React.FC = () => {
                     )}
                   </p>
                 )}
+                <p className="text-xs font-medium text-primary">
+                  {t(
+                    "playground:workspace.externalUpdateRecommendation",
+                    "Recommended: Reload to get the latest version."
+                  )}
+                </p>
                 <p className="text-xs text-text-muted">
                   {t(
                     "playground:workspace.externalUpdateActionHint",
-                    "Reload from other tab refreshes this tab. Keep this version ignores the update. Save as new workspace copies your current state."
+                    "Keep this version ignores the update. Save as new workspace copies your current state."
                   )}
                 </p>
               </div>
@@ -2265,6 +2378,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
       )}
 
 
+      {/* Mobile vs desktop layout */}
       {isMobile ? (
         <>
           <WorkspaceHeader
@@ -2290,6 +2404,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
             isMobile
           />
           <SharedWorkspaceBanner />
+
+          {tutorialPromptBanner}
 
           <WorkspaceStatusBar
             storageUsedBytes={workspaceStorageUsage.usedBytes}
@@ -2332,6 +2448,8 @@ const WorkspacePlaygroundBody: React.FC = () => {
             isMobile={false}
           />
           <SharedWorkspaceBanner />
+
+          {tutorialPromptBanner}
 
           <div className="flex min-h-0 flex-1 gap-2 px-2 py-2">
             {leftPaneOpen && (
@@ -2469,6 +2587,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
               </span>
             }
           />
+          <p className="text-xs text-text-muted mt-0.5">
+            {t(
+              "playground:search.prefixHint",
+              "Tip: Type source: chat: or note: to filter by category"
+            )}
+          </p>
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-text-subtle">
               {t("playground:search.filterBy", "Filter:")}
@@ -2584,6 +2708,12 @@ const WorkspacePlaygroundBody: React.FC = () => {
         open={transferSourcesRequest !== null}
         request={transferSourcesRequest}
         onCancel={closeTransferSourcesModal}
+      />
+
+      <WorkspaceShortcutsModal
+        open={showShortcutsModal}
+        onClose={() => setShowShortcutsModal(false)}
+        includeShowShortcutsShortcut
       />
 
       {showWorkspaceTransitionCue && (

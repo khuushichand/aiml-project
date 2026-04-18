@@ -889,17 +889,6 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
                   {t("watchlists:runs.detail.openMonitor", "Open monitor settings")}
                 </Button>
               </Descriptions.Item>
-              <Descriptions.Item label={t("watchlists:runs.detail.statsLabels.outputs", "Reports")}>
-                <Button
-                  size="small"
-                  type="link"
-                  className="px-0"
-                  onClick={handleOpenOutputs}
-                  data-testid="watchlists-run-detail-open-outputs"
-                >
-                  {t("watchlists:runs.detail.openOutputs", "Open reports for this run")}
-                </Button>
-              </Descriptions.Item>
             </Descriptions>
           )}
 
@@ -1139,11 +1128,13 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
     }
   ]
 
+  const runStatus = data ? String(data.status || "").toLowerCase() : ""
+
   return (
     <Drawer
       title={t("watchlists:runs.detail.title", "Run Details")}
       extra={
-        data && ["running", "pending", "queued"].includes(String(data.status || "").toLowerCase()) ? (
+        data && ["running", "pending", "queued"].includes(runStatus) ? (
           <Button
             danger
             size="small"
@@ -1162,6 +1153,16 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
               : cancelState === "failed-to-cancel"
                 ? t("watchlists:runs.cancelFailedRetry", "Cancel failed. Retry.")
                 : t("watchlists:runs.cancelRun", "Cancel run")}
+          </Button>
+        ) : data && runStatus === "failed" && !data.error_msg ? (
+          <Button
+            size="small"
+            type="primary"
+            loading={retryingRun}
+            aria-label={t("watchlists:runs.detail.retryRun", "Retry run")}
+            onClick={handleRetryRun}
+          >
+            {t("watchlists:runs.detail.retryRun", "Retry run")}
           </Button>
         ) : undefined
       }

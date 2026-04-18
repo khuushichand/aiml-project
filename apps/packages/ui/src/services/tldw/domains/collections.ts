@@ -1,4 +1,5 @@
 import { bgRequest } from "@/services/background-proxy"
+import { getTldwTTSModel, getTldwTTSVoice } from "@/services/tts"
 import { buildQuery } from "../client-utils"
 import type {
   CreateReadingSavedSearchRequest,
@@ -636,17 +637,20 @@ export const collectionsMethods = {
 
   async generateReadingItemTts(
     itemId: string,
-    options?: { voice?: string }
+    options?: { model?: string; voice?: string }
   ): Promise<{ audio_url: string }> {
     const path = `/api/v1/reading/items/${encodeURIComponent(itemId)}/tts` as const
+    const model = options?.model || (await getTldwTTSModel())
+    const voice = options?.voice || (await getTldwTTSVoice())
     const data = await bgRequest<ArrayBuffer>({
       path,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: {
+        model,
+        voice,
         response_format: "mp3",
         stream: false,
-        ...(options || {})
       },
       responseType: "arrayBuffer"
     })

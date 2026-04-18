@@ -22,6 +22,7 @@ export type ServerCapabilities = {
   hasChatbooks: boolean
   hasChatQueue: boolean
   hasChatSaveToDb: boolean
+  hasWebClipper: boolean
   hasStt: boolean
   hasTts: boolean
   hasVoiceChat: boolean
@@ -40,6 +41,7 @@ export type ServerCapabilities = {
   hasPersonalization: boolean
   hasGuardian: boolean
   hasSelfMonitoring: boolean
+  ffmpegAvailable: boolean | null
   specVersion: string | null
   specSource: "authoritative" | "fallback"
 }
@@ -64,6 +66,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasChatbooks: false,
   hasChatQueue: false,
   hasChatSaveToDb: false,
+  hasWebClipper: false,
   hasStt: false,
   hasTts: false,
   hasVoiceChat: false,
@@ -82,6 +85,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasPersonalization: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
+  ffmpegAvailable: null,
   specVersion: null,
   specSource: "authoritative"
 }
@@ -178,10 +182,11 @@ const fallbackSpec = {
 type DocsInfoResponse = {
   capabilities?: Record<string, unknown> | null
   supported_features?: Record<string, unknown> | null
+  ffmpeg_available?: boolean | null
 }
 
 const CAPABILITIES_CACHE_TTL_MS = 5 * 60 * 1000
-const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV2"
+const CAPABILITIES_STORAGE_KEY = "__tldwServerCapabilitiesCacheV3"
 
 type CapabilitiesCachePayload = {
   key: string
@@ -402,7 +407,11 @@ const applyDocsInfoFeatureGates = (
     hasPersonalization:
       personalizationFeatureEnabled === null
         ? capabilities.hasPersonalization
-        : capabilities.hasPersonalization && personalizationFeatureEnabled
+        : capabilities.hasPersonalization && personalizationFeatureEnabled,
+    ffmpegAvailable:
+      docsInfo?.ffmpeg_available != null
+        ? Boolean(docsInfo.ffmpeg_available)
+        : capabilities.ffmpegAvailable
   }
 }
 
@@ -476,6 +485,7 @@ const computeCapabilities = (
     hasChatbooks: has("/api/v1/chatbooks/export") || has("/api/v1/chatbooks/health"),
     hasChatQueue: has("/api/v1/chat/queue/status") || has("/api/v1/chat/queue/activity"),
     hasChatSaveToDb,
+    hasWebClipper: has("/api/v1/web-clipper/save"),
     hasStt,
     hasTts,
     hasVoiceChat,
@@ -512,6 +522,7 @@ const computeCapabilities = (
       has("/api/v1/self-monitoring/rules") ||
       has("/api/v1/self-monitoring/alerts") ||
       has("/api/v1/self-monitoring/crisis-resources"),
+    ffmpegAvailable: null,
     specVersion: spec?.info?.version ?? null,
     specSource
   }
@@ -628,7 +639,13 @@ const readPersistedCapabilities = async (
       capabilitiesDiagnostics.stalePersistedMisses += 1
       return null
     }
-    return raw
+    return {
+      ...raw,
+      capabilities: {
+        ...defaultCapabilities,
+        ...raw.capabilities
+      }
+    }
   } catch {
     return null
   }

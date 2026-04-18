@@ -35,6 +35,8 @@ const { Text } = Typography
 export const DatasetsTab: React.FC = () => {
   const { t } = useTranslation(["evaluations", "common"])
   const [form] = Form.useForm()
+  const [loadingDatasetId, setLoadingDatasetId] = React.useState<string | null>(null)
+  const [deletingDatasetId, setDeletingDatasetId] = React.useState<string | null>(null)
 
   // Store state
   const {
@@ -45,7 +47,8 @@ export const DatasetsTab: React.FC = () => {
     datasetSamples,
     datasetSamplesPage,
     datasetSamplesPageSize,
-    datasetSamplesTotal
+    datasetSamplesTotal,
+    setDatasetSamplesPage
   } = useEvaluationsStore((s) => ({
     createDatasetOpen: s.createDatasetOpen,
     openCreateDataset: s.openCreateDataset,
@@ -54,7 +57,8 @@ export const DatasetsTab: React.FC = () => {
     datasetSamples: s.datasetSamples,
     datasetSamplesPage: s.datasetSamplesPage,
     datasetSamplesPageSize: s.datasetSamplesPageSize,
-    datasetSamplesTotal: s.datasetSamplesTotal
+    datasetSamplesTotal: s.datasetSamplesTotal,
+    setDatasetSamplesPage: s.setDatasetSamplesPage
   }))
 
   // Queries & mutations
@@ -68,6 +72,7 @@ export const DatasetsTab: React.FC = () => {
   const datasets: DatasetResponse[] = datasetListResp?.data?.data || []
   const samplesJsonValue = Form.useWatch("samplesJson", form) || ""
   const metadataJsonValue = Form.useWatch("metadataJson", form) || ""
+  const pagedSamples = datasetSamples
 
   const handleSubmitCreate = async () => {
     try {
@@ -131,8 +136,30 @@ export const DatasetsTab: React.FC = () => {
           "This will permanently remove the dataset. Evaluations using it will need a new dataset."
       }),
       okButtonProps: { danger: true },
-      onOk: () => deleteDatasetMutation.mutateAsync(datasetId)
+      onOk: async () => {
+        setDeletingDatasetId(datasetId)
+        try {
+          await deleteDatasetMutation.mutateAsync(datasetId)
+        } finally {
+          setDeletingDatasetId((current) =>
+            current === datasetId ? null : current
+          )
+        }
+      }
     })
+  }
+
+  const handleViewDataset = async (datasetId: string) => {
+    setLoadingDatasetId(datasetId)
+    try {
+      await loadDatasetMutation.mutateAsync({
+        datasetId,
+        page: 1,
+        pageSize: datasetSamplesPageSize
+      })
+    } finally {
+      setLoadingDatasetId((current) => (current === datasetId ? null : current))
+    }
   }
 
   return (
@@ -179,7 +206,7 @@ export const DatasetsTab: React.FC = () => {
                 key={ds.id}
                 size="small"
                 className="hover:border-primary/70"
-                bodyStyle={{ padding: "8px 12px" }}
+                styles={{ body: { padding: "8px 12px" } }}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col">
@@ -202,17 +229,15 @@ export const DatasetsTab: React.FC = () => {
                   <Space>
                     <Button
                       size="small"
-                      loading={loadDatasetMutation.isPending}
-                      onClick={() =>
-                        loadDatasetMutation.mutate({ datasetId: ds.id, page: 1 })
-                      }
+                      loading={loadingDatasetId === ds.id}
+                      onClick={() => void handleViewDataset(ds.id)}
                     >
                       {t("common:view", { defaultValue: "View" })}
                     </Button>
                     <Button
                       size="small"
                       danger
-                      loading={deleteDatasetMutation.isPending}
+                      loading={deletingDatasetId === ds.id}
                       onClick={() => handleDeleteDataset(ds.id)}
                     >
                       {t("common:delete", { defaultValue: "Delete" })}
@@ -392,7 +417,7 @@ export const DatasetsTab: React.FC = () => {
                   defaultValue: "Samples preview"
                 })}
               </Text>
-              {datasetSamples.length === 0 ? (
+              {pagedSamples.length === 0 ? (
                 <Empty
                   description={t("evaluations:noSamplesPreview", {
                     defaultValue: "No samples to preview"
@@ -400,9 +425,9 @@ export const DatasetsTab: React.FC = () => {
                 />
               ) : (
                 <div className="space-y-2">
-                  {datasetSamples.map((sample, idx) => (
+                  {pagedSamples.map((sample, idx) => (
                     <pre
-                      key={idx}
+                      key={`${datasetSamplesPage}-${idx}`}
                       className="max-h-32 overflow-auto rounded bg-surface2 p-2 text-[11px] text-text"
                     >
                       {JSON.stringify(sample, null, 2)}
@@ -419,12 +444,17 @@ export const DatasetsTab: React.FC = () => {
                   pageSize={datasetSamplesPageSize}
                   total={datasetSamplesTotal}
                   size="small"
-                  onChange={(page) =>
+                  onChange={(page) => {
+                    if (!viewingDataset?.id) {
+                      setDatasetSamplesPage(page)
+                      return
+                    }
                     loadDatasetMutation.mutate({
                       datasetId: viewingDataset.id,
-                      page
+                      page,
+                      pageSize: datasetSamplesPageSize
                     })
-                  }
+                  }}
                 />
               )}
           </div>

@@ -7,6 +7,7 @@ import {
 } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 
+import { useSetBuddyShellRenderContext } from "@/components/Common/PersonaBuddy"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { PersonaPolicySummary } from "@/components/Option/MCPHub"
 import type { PersonaTurnDetectionValues } from "@/components/PersonaGarden/PersonaTurnDetectionControls"
@@ -160,6 +161,11 @@ const SidepanelPersona = ({
     React.useState<PersonaVoiceDefaults | null>(null)
   const [savedPersonaSetup, setSavedPersonaSetup] =
     React.useState<any>(null)
+  const [savedPersonaBuddySummary, setSavedPersonaBuddySummary] = React.useState<
+    PersonaInfo["buddy_summary"] | null
+  >(null)
+  const [savedPersonaBuddySummaryPersonaId, setSavedPersonaBuddySummaryPersonaId] =
+    React.useState<string | null>(null)
   const [savedPersonaProfileVersion, setSavedPersonaProfileVersion] = React.useState<
     number | null
   >(null)
@@ -191,15 +197,70 @@ const SidepanelPersona = ({
     setActiveTab,
     setSelectedPersonaId
   })
+  const setBuddyShellRenderContext = useSetBuddyShellRenderContext()
+  const selectedCatalogPersona = React.useMemo(
+    () =>
+      catalog.find((persona) => String(persona.id || "") === String(selectedPersonaId || "")) ??
+      null,
+    [catalog, selectedPersonaId]
+  )
 
   React.useEffect(() => {
     activeTabRef.current = activeTab
   }, [activeTab])
 
+  React.useEffect(() => {
+    const activePersonaId = String(selectedPersonaId || "").trim() || null
+    const personaSurfaceActive =
+      !isCompanionMode &&
+      !capsLoading &&
+      Boolean(capabilities?.hasPersona) &&
+      isOnline &&
+      uxState === "connected_ok"
+
+    let context: Parameters<typeof setBuddyShellRenderContext>[0] = null
+
+    if (personaSurfaceActive && activePersonaId) {
+      context = {
+        surface_id: "persona-garden",
+        surface_active: true,
+        active_persona_id: activePersonaId,
+        position_bucket:
+          shell === "sidepanel" ? "sidepanel-desktop" : "web-desktop",
+        buddy_summary:
+          (savedPersonaBuddySummaryPersonaId === activePersonaId
+            ? savedPersonaBuddySummary
+            : null) ??
+          selectedCatalogPersona?.buddy_summary ??
+          null,
+        persona_source: "route-local"
+      }
+    }
+
+    setBuddyShellRenderContext(context)
+    return () => {
+      setBuddyShellRenderContext(null)
+    }
+  }, [
+    capabilities?.hasPersona,
+    capsLoading,
+    isCompanionMode,
+    isOnline,
+    selectedPersonaId,
+    selectedCatalogPersona,
+    savedPersonaBuddySummary,
+    savedPersonaBuddySummaryPersonaId,
+    setBuddyShellRenderContext,
+    shell,
+    uxState
+  ])
+
   // ── Profile fetch ──
   React.useEffect(() => {
     const normalizedPersonaId = String(selectedPersonaId || "").trim()
     if (!normalizedPersonaId || isCompanionMode) {
+      setSavedPersonaBuddySummary(null)
+      setSavedPersonaBuddySummaryPersonaId(null)
       setSavedPersonaVoiceDefaults(null)
       setSavedPersonaSetup(null)
       setSavedPersonaProfileVersion(null)
@@ -211,6 +272,8 @@ const SidepanelPersona = ({
     }
 
     let cancelled = false
+    setSavedPersonaBuddySummary(null)
+    setSavedPersonaBuddySummaryPersonaId(null)
     setPersonaProfileLoading(true)
     ;(async () => {
       try {
@@ -223,6 +286,8 @@ const SidepanelPersona = ({
         }
         const payload = (await response.json()) as PersonaProfileResponse
         if (!cancelled) {
+          setSavedPersonaBuddySummary(payload?.buddy_summary ?? null)
+          setSavedPersonaBuddySummaryPersonaId(normalizedPersonaId)
           setSavedPersonaVoiceDefaults(payload?.voice_defaults || null)
           setSavedPersonaSetup(payload?.setup || null)
           setSavedPersonaProfileVersion(
@@ -231,6 +296,8 @@ const SidepanelPersona = ({
         }
       } catch {
         if (!cancelled) {
+          setSavedPersonaBuddySummary(null)
+          setSavedPersonaBuddySummaryPersonaId(null)
           setSavedPersonaVoiceDefaults(null)
           setSavedPersonaSetup(null)
           setSavedPersonaProfileVersion(null)
@@ -786,8 +853,7 @@ const SidepanelPersona = ({
       (isCompanionMode && !capabilities.hasPersonalization))
 
   const selectedPersonaName =
-    catalog.find((persona) => String(persona.id || "") === selectedPersonaId)?.name ||
-    selectedPersonaId
+    selectedCatalogPersona?.name || selectedPersonaId
 
   // ── Route header ──
   const routeHeader =

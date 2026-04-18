@@ -243,13 +243,25 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
       }
     )
 
-    const searchInput = screen.getByPlaceholderText("Search titles & content...")
+    const searchInput = screen.getByPlaceholderText("Search notes... (use quotes for exact match)")
     fireEvent.focus(searchInput)
     fireEvent.keyDown(searchInput, { key: "s", ctrlKey: true })
     fireEvent.keyDown(searchInput, { key: "s", metaKey: true })
 
     await waitFor(() => {
       expect(createCalls()).toHaveLength(0)
+    })
+  })
+
+  it("hides the welcome state after starting a new draft", async () => {
+    renderPage()
+
+    expect(screen.getByTestId("notes-editor-empty-state")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("notes-editor-empty-create"))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notes-editor-empty-state")).not.toBeInTheDocument()
     })
   })
 
@@ -287,6 +299,63 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
       expect(mockMessageError).toHaveBeenCalledWith("Failed to load note")
     })
     expect(mockClearSetting).not.toHaveBeenCalled()
+  })
+
+  it("blocks study-pack launch while the selected note has unsaved edits", async () => {
+    mockGetSetting.mockResolvedValue("11")
+    mockBgRequest.mockImplementation(async (request: { path?: string; method?: string }) => {
+      const path = String(request.path || "")
+      const method = String(request.method || "GET").toUpperCase()
+
+      if (path.startsWith("/api/v1/notes/?")) {
+        return {
+          items: [
+            {
+              id: "11",
+              title: "Saved note",
+              content: "Original saved content",
+              metadata: { keywords: [] },
+              version: 1
+            }
+          ],
+          pagination: { total_items: 1, total_pages: 1 }
+        }
+      }
+
+      if (path === "/api/v1/notes/11" && method === "GET") {
+        return {
+          id: 11,
+          title: "Saved note",
+          content: "Original saved content",
+          metadata: { keywords: [] },
+          version: 1
+        }
+      }
+
+      return {}
+    })
+
+    renderPage()
+
+    const contentInput = await screen.findByPlaceholderText(
+      "Write your note here... (Markdown supported)"
+    )
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Saved note")).toBeInTheDocument()
+    })
+
+    fireEvent.change(contentInput, {
+      target: { value: "Unsaved update for study pack launch" }
+    })
+
+    const createStudyPackButton = screen.getByTestId("notes-create-study-pack-button")
+    await waitFor(() => {
+      expect(createStudyPackButton).toBeDisabled()
+    })
+
+    fireEvent.click(createStudyPackButton)
+
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 
   it("autosaves after idle delay without success toast spam", async () => {

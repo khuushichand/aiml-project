@@ -1,6 +1,6 @@
 [Setup]
-enable_first_time_setup = false
-setup_completed = true
+enable_first_time_setup = true
+setup_completed = false
 # When true, bypasses the local-only guard for setup API requests.
 allow_remote_setup_access = false
 # Optional: restrict which remote clients can access /setup
@@ -109,6 +109,10 @@ runner_cwd = ../tldw-agent
 runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/acp_runner_home,PYTHONUNBUFFERED=1
 # Startup timeout for runner initialize.
 startup_timeout_ms = 10000
+# Phase 2b default-on rollout for the stable provider:model cohort.
+run_first_rollout_mode = default_on
+run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash
+run_first_presentation_variant = acp_phase2b_v1
 
 [ACP-WORKSPACE]
 # Optional. If set, workspace root_path must be under one of these paths (comma-separated).
@@ -224,6 +228,10 @@ rate_limit_per_minute = 60
 rate_limit_per_conversation_per_minute = 20
 # Per-user token budget (legacy limiter). Default is 10000 if omitted.
 rate_limit_tokens_per_minute = 100000
+# Phase 2b default-on rollout for the stable provider:model cohort.
+run_first_rollout_mode = default_on
+run_first_provider_allowlist = openai:gpt-4o-mini,anthropic:claude-3-7-sonnet,openai:gpt-4o,google:gemini-2.5-flash
+run_first_presentation_variant = chat_phase2b_v1
 # Controls how much historical context is loaded for each chat request.
 # Accepts 1-500; values outside range are clamped. Default: 20.
 history_messages_limit = 20

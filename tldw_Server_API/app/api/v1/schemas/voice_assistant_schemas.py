@@ -79,6 +79,10 @@ class WSConfigMessage(BaseModel):
         default=None,
         description="TTS provider (e.g., 'kokoro', 'openai')"
     )
+    tts_model: Optional[str] = Field(
+        default=None,
+        description="TTS model identifier (e.g., 'kokoro', 'tts-1')"
+    )
     tts_voice: Optional[str] = Field(
         default=None,
         description="TTS voice identifier"
@@ -141,6 +145,7 @@ class WSConfigAckMessage(BaseModel):
     session_id: str = Field(..., description="Session ID")
     stt_model: str = Field(..., description="Active STT model")
     tts_provider: str = Field(..., description="Active TTS provider")
+    tts_model: str = Field(..., description="Active TTS model")
 
 
 class WSTranscriptionMessage(BaseModel):
@@ -253,6 +258,7 @@ class VoiceCommandRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, description="Session ID for context")
     include_tts: bool = Field(default=True, description="Whether to generate TTS audio")
     tts_provider: Optional[str] = Field(default=None, description="TTS provider override")
+    tts_model: Optional[str] = Field(default=None, description="TTS model override")
     tts_voice: Optional[str] = Field(default=None, description="TTS voice override")
     tts_format: Literal["mp3", "opus", "wav", "pcm"] = Field(default="mp3")
 
@@ -417,6 +423,30 @@ class VoiceWorkflowTemplateListResponse(BaseModel):
     """Response listing available voice workflow templates."""
     templates: list[VoiceWorkflowTemplateInfo] = Field(..., description="Available templates")
     total: int = Field(..., description="Total count")
+
+
+# Dry-Run Validation Schemas
+
+class VoiceCommandValidationStep(BaseModel):
+    """Result for a single validation step in a dry-run check."""
+    name: str = Field(..., description="Step name (e.g. 'config_schema', 'action_target')")
+    passed: bool = Field(..., description="Whether this validation step passed")
+    message: str = Field(..., description="Human-readable result description")
+    details: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Extra details (e.g. available tools, missing fields)",
+    )
+
+
+class VoiceCommandValidationResponse(BaseModel):
+    """Aggregate dry-run validation report for a voice command."""
+    command_id: str = Field(..., description="Validated command ID")
+    command_name: str = Field(..., description="Command name")
+    action_type: VoiceActionType = Field(..., description="Configured action type")
+    valid: bool = Field(..., description="True when every step passed")
+    steps: list[VoiceCommandValidationStep] = Field(
+        ..., description="Per-step validation results"
+    )
 
 
 #

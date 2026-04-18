@@ -347,6 +347,7 @@ async def _handle_job(job: dict[str, Any], jm: JobManager, progress: _ProgressSt
                 "media_uuid": result_item.get("media_uuid"),
                 "error": result_item.get("error"),
                 "warnings": result_item.get("warnings"),
+                "db_message": result_item.get("db_message"),
             }
         return {"status": "Error", "error": "No result produced"}
 

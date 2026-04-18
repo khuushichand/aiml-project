@@ -136,6 +136,16 @@ export const FloatingProgressWidget: React.FC = () => {
           </div>
         </div>
 
+        {/* Processing description */}
+        {!allDone && (
+          <p className="text-[11px] leading-tight text-text-muted">
+            {qi(
+              "widget.processingHint",
+              "Transcribing and indexing content..."
+            )}
+          </p>
+        )}
+
         {/* Progress bar + percentage + Open button */}
         <div className="flex items-center gap-2">
           <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface2">

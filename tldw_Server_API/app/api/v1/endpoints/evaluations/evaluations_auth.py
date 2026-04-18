@@ -31,6 +31,10 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     verify_jwt_and_fetch_user,
 )
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.Evaluations.identity import (
+    EvaluationIdentity,
+    evaluations_identity_from_user,
+)
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 security = HTTPBearer(auto_error=False)
@@ -277,6 +281,11 @@ async def get_eval_request_user(
     )
 
 
+def get_evaluation_identity(current_user: User) -> EvaluationIdentity:
+    """Return the canonical evaluations identity for the authenticated user."""
+    return evaluations_identity_from_user(current_user)
+
+
 def require_eval_permissions(*permissions: str):
     """Evaluation-specific permission gate with consistent auth errors."""
     perms = [str(p) for p in permissions if str(p).strip()]
@@ -385,7 +394,7 @@ def enforce_heavy_evaluations_admin(principal: Optional[AuthPrincipal]) -> None:
     Raises:
         HTTPException: 403 if admin privileges are required but not present.
     """
-    if os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
+    if not _evals_heavy_admin_only_enabled():
         return
     if principal is None:
         raise HTTPException(

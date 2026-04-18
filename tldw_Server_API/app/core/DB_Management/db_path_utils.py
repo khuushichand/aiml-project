@@ -7,6 +7,7 @@ Ensures consistent database file locations across the application.
 import hashlib
 import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Callable, Optional, Union
@@ -19,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.media_db.constants import (
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 UserId = Union[int, str]
@@ -114,6 +116,87 @@ def _ensure_dir(path: Path, *, label: str) -> None:
     except OSError as e:
         logger.error(f"Failed to create {label} directory {path}: {e}")
         raise StorageUnavailableError(f"Failed to create {label} directory") from e
+
+
+def _resolve_candidate_for_containment(candidate: Path) -> Path:
+    parent = candidate.parent.resolve(strict=False)
+    return parent / candidate.name
+
+
+def resolve_trusted_database_path(
+    db_path: str | Path,
+    *,
+    label: str = "database",
+    extra_roots: Optional[list[Path]] = None,
+) -> Path:
+    """Resolve a database path and require containment within trusted roots."""
+    raw_path = str(db_path or "").strip()
+    if not raw_path:
+        raise InvalidStoragePathError("invalid_path")
+
+    trusted_roots: list[Path] = []
+    project_root = Path(get_project_root()).resolve()
+    trusted_roots.append(project_root)
+
+    try:
+        user_db_base_dir = DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True).resolve()
+    except Exception as exc:
+        logger.debug("Skipping user database trusted root discovery: {}", exc)
+    else:
+        trusted_roots.append(user_db_base_dir)
+
+    if extra_roots:
+        for root in extra_roots:
+            try:
+                resolved_root = Path(root).expanduser().resolve(strict=False)
+            except Exception as exc:
+                logger.debug("Skipping invalid trusted root {}: {}", root, exc)
+            else:
+                trusted_roots.append(resolved_root)
+
+    if _is_test_context():
+        trusted_roots.append(Path(tempfile.gettempdir()).resolve())
+        trusted_roots.append(Path.cwd().resolve())
+
+    unique_roots: list[Path] = []
+    for root in trusted_roots:
+        if root not in unique_roots:
+            unique_roots.append(root)
+
+    try:
+        expanded_path = os.path.expanduser(raw_path)
+    except Exception as exc:
+        raise InvalidStoragePathError("invalid_path") from exc
+    if raw_path.startswith("~") and (
+        expanded_path == raw_path or expanded_path.startswith("~")
+    ):
+        raise InvalidStoragePathError("invalid_path")
+
+    if os.path.isabs(expanded_path):
+        normalized_absolute = os.path.normpath(expanded_path)
+        try:
+            candidate_resolved = Path(normalized_absolute).resolve(strict=False)
+        except Exception as exc:
+            raise InvalidStoragePathError("invalid_path") from exc
+
+        for root in unique_roots:
+            root_resolved = root.resolve(strict=False)
+            with_context = _resolve_candidate_for_containment(candidate_resolved)
+            try:
+                with_context.relative_to(root_resolved)
+            except ValueError:
+                continue
+            return candidate_resolved
+
+        logger.warning("Rejected {} path outside trusted roots: {}", label, normalized_absolute)
+        raise InvalidStoragePathError("invalid_path")
+
+    safe_candidate = safe_join(str(project_root), expanded_path)
+    if safe_candidate is not None:
+        return Path(safe_candidate)
+
+    logger.warning("Rejected {} path outside trusted roots: {}", label, expanded_path)
+    raise InvalidStoragePathError("invalid_path")
 
 
 def _build_user_dir(base_path: Path, user_id: Optional[UserId]) -> Path:

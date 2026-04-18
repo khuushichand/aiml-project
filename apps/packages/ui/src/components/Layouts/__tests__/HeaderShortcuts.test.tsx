@@ -21,7 +21,7 @@ const ALL_SHORTCUT_IDS = [
   "knowledge-qa", "media", "document-workspace",
   "repo2txt",
   "multi-item-review", "collections",
-  "watchlists", "integrations", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
+  "watchlists", "integrations", "mcp-hub", "scheduled-tasks", "notes", "chatbooks-playground", "flashcards",
   "quizzes", "evaluations", "chunking-playground",
   "stt-playground", "tts-playground", "audiobook-studio",
   "workflows", "writing-playground", "acp-playground",
@@ -52,14 +52,18 @@ vi.mock("@/hooks/useSetting", () => ({
   useSetting: mockUseSetting
 }))
 
-vi.mock("@/services/settings/ui-settings", () => ({
-  HEADER_SHORTCUTS_EXPANDED_SETTING: { key: "header_shortcuts_expanded", defaultValue: false },
-  HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING: {
-    key: "header_shortcuts_launcher_view",
-    defaultValue: "current"
-  },
-  HEADER_SHORTCUT_SELECTION_SETTING: { key: "header_shortcut_selection", defaultValue: [] }
-}))
+vi.mock("@/services/settings/ui-settings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/settings/ui-settings")>()
+  return {
+    ...actual,
+    HEADER_SHORTCUTS_EXPANDED_SETTING: { key: "header_shortcuts_expanded", defaultValue: false },
+    HEADER_SHORTCUTS_LAUNCHER_VIEW_SETTING: {
+      key: "header_shortcuts_launcher_view",
+      defaultValue: "current"
+    },
+    HEADER_SHORTCUT_SELECTION_SETTING: { key: "header_shortcut_selection", defaultValue: [] }
+  }
+})
 
 const renderWithRouter = (ui: React.ReactElement, initialRoute = "/") =>
   render(<MemoryRouter initialEntries={[initialRoute]}>{ui}</MemoryRouter>)
@@ -109,6 +113,10 @@ describe("HeaderShortcuts launcher modal", () => {
           labelDefault: "Integrations"
         }),
         expect.objectContaining({
+          to: "/mcp-hub",
+          labelDefault: "MCP Hub"
+        }),
+        expect.objectContaining({
           to: "/scheduled-tasks",
           labelDefault: "Scheduled Tasks"
         }),
@@ -118,6 +126,23 @@ describe("HeaderShortcuts launcher modal", () => {
         })
       ])
     )
+  })
+
+  it("shows MCP Hub in the automation launcher group and search results", () => {
+    renderWithRouter(
+      <HeaderShortcuts expanded={true} onExpandedChange={vi.fn()} />
+    )
+
+    const nav = screen.getByLabelText("Categories")
+    fireEvent.click(within(nav).getByText("Automation & Agents"))
+
+    expect(screen.getByText("MCP Hub")).toBeInTheDocument()
+
+    const input = screen.getByPlaceholderText("Search pages...")
+    fireEvent.change(input, { target: { value: "mcp" } })
+
+    const listbox = screen.getByRole("listbox")
+    expect(within(listbox).getByText("MCP Hub")).toBeInTheDocument()
   })
 
   it("renders a dialog when open (expanded=true)", () => {
@@ -293,8 +318,7 @@ describe("HeaderShortcuts launcher modal", () => {
     )
 
     const dialog = screen.getByRole("dialog")
-    expect(dialog.className).toContain("max-w-[960px]")
-    expect(dialog).toHaveStyle({ maxHeight: "80vh" })
+    expect(dialog).toHaveStyle({ maxWidth: "var(--content-max-width)", maxHeight: "80vh" })
   })
 
   it("uses a wider left category column", () => {

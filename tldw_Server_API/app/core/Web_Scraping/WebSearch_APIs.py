@@ -153,7 +153,11 @@ def _get_llm_timeouts() -> dict[str, float]:
     return {"llm": llm_to, "scrape": scrape_to}
 
 
-def _get_websearch_circuit_breaker(fail_threshold: int = 3, reset_after_s: float = 30.0):
+def _get_websearch_circuit_breaker(
+    fail_threshold: int = 3,
+    reset_after_s: float = 30.0,
+    provider_key: str | None = None,
+):
     """Return the shared WebSearch circuit breaker (singleton via registry)."""
     from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
         CircuitBreakerConfig as _Cfg,
@@ -161,8 +165,13 @@ def _get_websearch_circuit_breaker(fail_threshold: int = 3, reset_after_s: float
     from tldw_Server_API.app.core.Infrastructure.circuit_breaker import (
         registry as _cb_registry,
     )
+    normalized_provider = normalize_provider(provider_key)
+    if not normalized_provider:
+        normalized_provider = str(provider_key or "default").strip().lower() or "default"
+    normalized_provider = re.sub(r"[^a-z0-9_.:-]+", "-", normalized_provider)
+
     return _cb_registry.get_or_create(
-        "websearch_llm",
+        f"websearch_llm:{normalized_provider}",
         config=_Cfg(
             failure_threshold=int(fail_threshold),
             recovery_timeout=float(reset_after_s),
@@ -270,6 +279,47 @@ def _sanitize_sub_questions(raw_values: Any) -> list[str]:
         seen.add(key)
         sanitized.append(text)
     return sanitized
+
+
+def _summarize_relevant_results_for_log(
+    relevant_results: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return compact debug metadata without logging result bodies."""
+    summaries: list[dict[str, Any]] = []
+    for result_id, result in relevant_results.items():
+        summaries.append(
+            {
+                "id": result_id,
+                "reasoning": _truncate_text(result.get("reasoning"), max_len=160),
+                "content_chars": len(str(result.get("content") or "")),
+                "original_content_chars": len(str(result.get("original_content") or "")),
+            }
+        )
+    return summaries
+
+
+def _build_result_fallback_content(result: dict[str, Any]) -> str:
+    """Construct a safe fallback text blob from the normalized result payload."""
+    metadata = result.get("metadata")
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    parts: list[str] = []
+    seen: set[str] = set()
+
+    def _append(label: str, value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        parts.append(f"{label}: {text}")
+
+    _append("Title", result.get("title"))
+    _append("Snippet", result.get("content"))
+    _append("Snippet", metadata_dict.get("snippet"))
+    _append("URL", result.get("url"))
+    return "\n".join(parts).strip()
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
@@ -593,15 +643,14 @@ async def analyze_and_aggregate(web_search_results_dict: dict, sub_query_dict: d
         search_params.get('relevance_analysis_llm'),
         cancel_event=cancel_event,
     )
-    # FIXME
     logging.debug("Relevant results returned by search_result_relevance:")
-    logging.debug(json.dumps(relevant_results, indent=2))
+    logging.debug(json.dumps(_summarize_relevant_results_for_log(relevant_results), indent=2))
 
     # 5. Allow user to review and select relevant results (if enabled)
     logging.info("Reviewing and selecting relevant results")
     if search_params.get("user_review", False):
         logging.info("User review enabled")
-        relevant_results = review_and_select_results({"results": list(relevant_results.values())})
+        relevant_results = review_and_select_results(relevant_results)
 
     # 6. Summarize/aggregate final answer
     final_answer = aggregate_results(
@@ -773,6 +822,7 @@ async def search_result_relevance(
     breaker = _get_websearch_circuit_breaker(
         fail_threshold=int(ws_section.get('llm_cb_fail_threshold', 3) or 3),
         reset_after_s=float(ws_section.get('llm_cb_reset_after_s', 30) or 30.0),
+        provider_key=api_endpoint,
     )
 
     timeouts = _get_llm_timeouts()
@@ -781,7 +831,7 @@ async def search_result_relevance(
     for idx, result in enumerate(search_results):
         if cancel_event and cancel_event.is_set():
             break
-        content = result.get("content", "")
+        content = _build_result_fallback_content(result)
         if not content:
             logging.error("No Content found in search results array!")
             continue
@@ -858,24 +908,39 @@ async def search_result_relevance(
                         logging.debug("Relevant result found.")
                         # Use the 'id' from the result if available, otherwise use idx
                         result_id = result.get("id", str(idx))
-                        # Scrape the content of the relevant result
-                        scraped_content = await asyncio.wait_for(
-                            scrape_article(result['url']), timeout=timeouts["scrape"]
-                        )
+                        source_content = content
+                        try:
+                            scraped_content = await asyncio.wait_for(
+                                scrape_article(result['url']), timeout=timeouts["scrape"]
+                            )
+                            scraped_text = ""
+                            if isinstance(scraped_content, dict):
+                                scraped_text = str(scraped_content.get('content') or "").strip()
+                            elif isinstance(scraped_content, str):
+                                scraped_text = scraped_content.strip()
+                            if scraped_text:
+                                source_content = scraped_text
+                        except asyncio.CancelledError:
+                            raise
+                        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as scrape_error:
+                            logging.warning(
+                                f"Scrape failed for relevant result {result_id}; "
+                                f"falling back to search snippet/title/url: {scrape_error}"
+                            )
 
                         # Create Summarization prompt
                         logging.debug(f"Creating Summarization Prompt for result idx={idx}")
                         summary_prompt = summarization_prompt.format(
                             question=original_question,
-                            content=scraped_content['content']
+                            content=source_content
                         )
 
                         # Generate summary using the summarize function with timeout
                         logging.info(f"Summarizing relevant result: ID={result_id}")
-                        async def _summ_call(_scraped_content=scraped_content, _summary_prompt=summary_prompt):
+                        async def _summ_call(_source_content=source_content, _summary_prompt=summary_prompt):
                             return await asyncio.to_thread(
-                                lambda _sc=_scraped_content, _sp=_summary_prompt: summarize(
-                                    input_data=_sc['content'],
+                                lambda _sc=_source_content, _sp=_summary_prompt: summarize(
+                                    input_data=_sc,
                                     custom_prompt_arg=_sp,
                                     api_name=api_endpoint,
                                     api_key=None,
@@ -888,11 +953,11 @@ async def search_result_relevance(
                             summary = await asyncio.wait_for(_summ_call(), timeout=timeouts["llm"])
                         except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
                             logging.error(f"Summary generation failed: {e}")
-                            summary = "Summary generation failed"
+                            summary = _truncate_text(source_content, max_len=2000) or "Summary generation failed"
 
                         relevant_results[result_id] = {
                             "content": summary,  # Store the summary instead of full content
-                            "original_content": scraped_content['content'],  # Keep original content if needed
+                            "original_content": source_content,  # Keep original content if needed
                             "reasoning": reasoning
                         }
                         logging.info(f"Relevant result found and summarized: ID={result_id}; Reasoning={reasoning}")
@@ -925,15 +990,34 @@ def review_and_select_results(web_search_results_dict: dict, selector: callable 
     Returns:
         Dict: A dictionary containing only the user-selected relevant results.
     """
-    # If no selector provided, default to keeping all results as relevant
+    if not isinstance(web_search_results_dict, dict):
+        return {}
+
+    if "results" in web_search_results_dict and isinstance(web_search_results_dict.get("results"), list):
+        candidates = [
+            (
+                str(result.get("id", idx)) if isinstance(result, dict) else str(idx),
+                result,
+            )
+            for idx, result in enumerate(web_search_results_dict.get("results", []))
+            if isinstance(result, dict)
+        ]
+    else:
+        candidates = [
+            (str(result_id), result)
+            for result_id, result in web_search_results_dict.items()
+            if isinstance(result, dict)
+        ]
+
+    # If no selector provided, default to keeping all results as relevant while preserving IDs
     if selector is None:
-        return {str(idx): res for idx, res in enumerate(web_search_results_dict.get("results", []))}
+        return {result_id: result for result_id, result in candidates}
 
     relevant_results: dict[str, dict] = {}
-    for idx, result in enumerate(web_search_results_dict.get("results", [])):
+    for result_id, result in candidates:
         try:
             if selector(result):
-                relevant_results[str(idx)] = result
+                relevant_results[result_id] = result
         except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
             # If selector throws, skip selection for this item
             continue

@@ -89,6 +89,15 @@ vi.mock("antd", () => ({
   ),
 }))
 
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>()
+  return { ...actual, useNavigate: () => vi.fn() }
+})
+
+vi.mock("@/routes/route-paths", () => ({
+  DOCUMENT_WORKSPACE_PATH: "/document-workspace",
+}))
+
 vi.mock("lucide-react", () => {
   const icon = (name: string) => (props: any) => (
     <span data-icon={name} aria-hidden={props?.["aria-hidden"]} />
@@ -213,6 +222,11 @@ vi.mock("@/components/Common/QuickIngest/WizardResultsStep", async () => {
       return (
         <div data-testid="wizard-results">
           {state.processingState.status}:{state.results.length}
+          {state.results.map((item) => (
+            <div key={item.id} data-testid={`wizard-result-${item.id}`}>
+              {item.id}:{item.outcome}:{item.message || ""}
+            </div>
+          ))}
         </div>
       )
     },
@@ -422,6 +436,51 @@ describe("QuickIngestWizardModal session runtime", () => {
     await waitFor(() => {
       expect(screen.getByTestId("wizard-results")).toHaveTextContent("complete:1")
     })
+  })
+
+  it("normalizes runtime duplicate results from db_message into skipped items", async () => {
+    const user = userEvent.setup()
+    useQuickIngestSessionStore.getState().createDraftSession()
+    mocks.startQuickIngestSession.mockResolvedValue({
+      ok: true,
+      sessionId: "qi-runtime-duplicate",
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole("button", { name: "Queue And Process" }))
+
+    await waitFor(() => {
+      expect(mocks.startQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+
+    emitRuntimeMessage({
+      type: "tldw:quick-ingest/completed",
+      payload: {
+        sessionId: "qi-runtime-duplicate",
+        results: [
+          {
+            id: "queued-url-1",
+            status: "ok",
+            url: "https://example.com/article",
+            type: "html",
+            data: {
+              db_message:
+                "Media 'https://example.com/article' already exists. Overwrite not enabled.",
+            },
+          },
+        ],
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId("wizard-result-queued-url-1")).toHaveTextContent(
+        "queued-url-1:skipped"
+      )
+    })
+    expect(screen.getByTestId("wizard-result-queued-url-1")).toHaveTextContent(
+      "already exists in your library"
+    )
   })
 
   it("rehydrates a hidden processing session when the modal is reopened", () => {

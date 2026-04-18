@@ -30,7 +30,10 @@ from loguru import logger
 from starlette.responses import StreamingResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventType,
+    MandatoryAuditWriteError,
+)
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
@@ -70,8 +73,18 @@ from tldw_Server_API.app.core.Chat.streaming_utils import (
     STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
 )
 from tldw_Server_API.app.core.Chat.chat_loop_engine import is_chat_loop_mode_enabled
+from tldw_Server_API.app.core.Chat.run_first_presentation import (
+    present_chat_tools,
+    tool_names_from_definitions,
+)
 from tldw_Server_API.app.core.Chat.tool_auto_exec import execute_assistant_tool_calls
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.config import (
+    resolve_chat_run_first_provider_allowlist,
+    resolve_chat_run_first_presentation_variant,
+    resolve_chat_run_first_rollout_mode,
+    resolve_run_first_cohort_label,
+)
 from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
 from tldw_Server_API.app.core.LLM_Calls.openrouter_model_inventory import (
     clear_openrouter_model_cache as _clear_openrouter_model_cache_shared,
@@ -122,6 +135,13 @@ _CHAT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     _json.JSONDecodeError,
     asyncio.CancelledError,
+)
+
+_CHAT_RUN_FIRST_METRIC_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    RuntimeError,
+    TypeError,
+    ValueError,
 )
 
 _config = load_comprehensive_config()
@@ -268,6 +288,8 @@ def _discover_openrouter_models_for_chat(*, force_refresh: bool = False) -> tupl
 
 def _normalize_conversation_assistant_context(
     conversation: dict[str, Any] | None,
+    *,
+    default_character_id: int | None = None,
 ) -> dict[str, Any]:
     """Normalize persisted conversation assistant identity into a small runtime dict."""
     if not conversation:
@@ -275,19 +297,140 @@ def _normalize_conversation_assistant_context(
             "assistant_kind": None,
             "assistant_id": None,
             "persona_memory_mode": None,
+            "is_default_character": False,
         }
 
     character_id = conversation.get("character_id")
-    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     assistant_id = conversation.get("assistant_id")
+    # Mirror the assistant_id fallback used by _resolve_assistant_context_for_chat
+    # so moderation scope stays consistent with the runtime character resolution.
+    if character_id is None and assistant_id is not None:
+        character_id = assistant_id
+    assistant_kind = conversation.get("assistant_kind") or ("character" if character_id is not None else None)
     if assistant_id is None and character_id is not None:
         assistant_id = str(character_id)
+    is_default_character = _is_default_character_reference(
+        character_id if character_id is not None else assistant_id,
+        default_character_id=default_character_id,
+    )
+    if assistant_kind == "character" and is_default_character:
+        assistant_kind = "regular"
 
     return {
         "assistant_kind": assistant_kind,
         "assistant_id": assistant_id,
         "persona_memory_mode": conversation.get("persona_memory_mode"),
+        "is_default_character": is_default_character,
     }
+
+
+def resolve_moderation_chat_type(
+    *,
+    request_data: Any | None,
+    assistant_context: dict[str, Any] | None = None,
+    default_character_id: int | None = None,
+) -> str:
+    """Resolve moderation chat scope, treating the default assistant as regular when that context is available."""
+    if isinstance(assistant_context, dict):
+        assistant_kind = str(assistant_context.get("assistant_kind") or "").strip().lower()
+        if assistant_kind == "character" and not bool(assistant_context.get("is_default_character")):
+            return "character"
+        if assistant_kind in {"regular", "persona"} or bool(assistant_context.get("is_default_character")):
+            return "regular"
+
+    requested_character_id = getattr(request_data, "character_id", None) if request_data is not None else None
+    if requested_character_id:
+        return "regular" if _is_default_character_reference(
+            requested_character_id,
+            default_character_id=default_character_id,
+        ) else "character"
+
+    return "regular"
+
+
+async def _resolve_default_character_id(
+    chat_db: Any,
+    loop: Any,
+) -> int | None:
+    """Return the persisted default assistant character ID when available."""
+    get_character_card_by_name = getattr(chat_db, "get_character_card_by_name", None)
+    if not callable(get_character_card_by_name):
+        return None
+
+    try:
+        default_character = await loop.run_in_executor(
+            None,
+            get_character_card_by_name,
+            DEFAULT_CHARACTER_NAME,
+        )
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
+        return None
+    if not isinstance(default_character, dict):
+        return None
+
+    try:
+        return int(default_character.get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_default_character_reference(
+    character_reference: Any,
+    *,
+    default_character_id: int | None,
+) -> bool:
+    """Return whether the provided character reference points at the default assistant."""
+    normalized_reference = str(character_reference or "").strip()
+    if not normalized_reference:
+        return False
+    if normalized_reference == DEFAULT_CHARACTER_NAME:
+        return True
+    if default_character_id is None:
+        return False
+    try:
+        return int(normalized_reference) == int(default_character_id)
+    except (TypeError, ValueError):
+        return False
+
+
+async def resolve_input_moderation_chat_type(
+    *,
+    chat_db: Any,
+    request_data: Any,
+    loop: Any,
+) -> str:
+    """Resolve chat_type for input moderation from request fields and saved conversation state."""
+    default_character_id = await _resolve_default_character_id(chat_db, loop)
+    requested_character_id = getattr(request_data, "character_id", None)
+    # Also check legacy persona_id alias so moderation scope is consistent
+    # even before the endpoint normalizes persona_id -> character_id.
+    if not requested_character_id:
+        raw_persona_id = getattr(request_data, "persona_id", None)
+        if raw_persona_id is not None:
+            persona_id_str = str(raw_persona_id).strip()
+            if persona_id_str:
+                requested_character_id = persona_id_str
+    if requested_character_id:
+        return "regular" if _is_default_character_reference(
+            requested_character_id,
+            default_character_id=default_character_id,
+        ) else "character"
+
+    conversation_id = getattr(request_data, "conversation_id", None)
+    existing_conversation: dict[str, Any] | None = None
+    get_conversation_by_id = getattr(chat_db, "get_conversation_by_id", None)
+    if conversation_id and callable(get_conversation_by_id):
+        existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
+
+    assistant_context = _normalize_conversation_assistant_context(
+        existing_conversation,
+        default_character_id=default_character_id,
+    )
+    return resolve_moderation_chat_type(
+        request_data=request_data,
+        assistant_context=assistant_context,
+        default_character_id=default_character_id,
+    )
 
 
 def _build_persona_chat_projection(
@@ -320,7 +463,11 @@ async def _resolve_assistant_context_for_chat(
     if conversation_id and callable(get_conversation_by_id):
         existing_conversation = await loop.run_in_executor(None, get_conversation_by_id, conversation_id)
 
-    assistant_context = _normalize_conversation_assistant_context(existing_conversation)
+    default_character_id = await _resolve_default_character_id(chat_db, loop)
+    assistant_context = _normalize_conversation_assistant_context(
+        existing_conversation,
+        default_character_id=default_character_id,
+    )
     assistant_kind = assistant_context.get("assistant_kind")
     assistant_id = assistant_context.get("assistant_id")
 
@@ -358,10 +505,15 @@ async def _resolve_assistant_context_for_chat(
 
     character_card, character_db_id = await get_or_create_character_context(chat_db, character_lookup, loop)
     if character_db_id is not None:
+        is_default_character = _is_default_character_reference(
+            character_db_id,
+            default_character_id=default_character_id,
+        )
         assistant_context = {
-            "assistant_kind": "character",
+            "assistant_kind": "regular" if is_default_character else "character",
             "assistant_id": str(character_db_id),
             "persona_memory_mode": assistant_context.get("persona_memory_mode"),
+            "is_default_character": is_default_character,
         }
     return character_card, character_db_id, existing_conversation, assistant_context
 
@@ -635,6 +787,220 @@ def should_auto_continue_tools_once() -> bool:
     if raw is not None:
         return _coerce_bool(raw, CHAT_TOOL_AUTO_CONTINUE_ONCE)
     return CHAT_TOOL_AUTO_CONTINUE_ONCE
+
+
+def _resolve_chat_effective_tool_names(cleaned_args: dict[str, Any] | None) -> list[str]:
+    """Return the resolved effective tool names for a chat call."""
+    if not isinstance(cleaned_args, dict):
+        return []
+
+    names = cleaned_args.get("_chat_effective_tool_names")
+    if isinstance(names, list) and all(isinstance(name, str) and name.strip() for name in names):
+        return [name.strip() for name in names]
+
+    tools = cleaned_args.get("tools")
+    if not isinstance(tools, list):
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for tool in tools:
+        for name in tool_names_from_definitions(tool):
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _resolve_chat_autoexec_allow_catalog(cleaned_args: dict[str, Any] | None) -> list[str]:
+    """Return the allow-catalog derived from the presented chat tool set."""
+    if not isinstance(cleaned_args, dict):
+        return get_chat_tool_allow_catalog()
+
+    if "_chat_effective_tool_names" in cleaned_args:
+        return _resolve_chat_effective_tool_names(cleaned_args)
+    derived_names = _resolve_chat_effective_tool_names(cleaned_args)
+    if derived_names:
+        return derived_names
+
+    return get_chat_tool_allow_catalog()
+
+
+def _resolve_chat_run_first_metric_context(
+    cleaned_args: dict[str, Any] | None,
+    *,
+    provider: str,
+    model: str,
+    streaming: bool,
+) -> dict[str, Any] | None:
+    """Build normalized run-first telemetry labels for one chat execution."""
+    if not isinstance(cleaned_args, dict):
+        return None
+
+    presentation_variant = cleaned_args.get("_chat_run_first_presentation_variant")
+    if not isinstance(presentation_variant, str) or not presentation_variant.strip():
+        return None
+
+    eligible = bool(cleaned_args.get("_chat_run_first_eligible"))
+    ineligible_reason = cleaned_args.get("_chat_run_first_ineligible_reason")
+    if not isinstance(ineligible_reason, str) or not ineligible_reason.strip():
+        ineligible_reason = None
+
+    cohort = cleaned_args.get("_chat_run_first_cohort")
+    if not isinstance(cohort, str) or not cohort.strip():
+        cohort = "gated" if eligible else "control"
+
+    return {
+        "presentation_variant": presentation_variant.strip(),
+        "cohort": cohort.strip(),
+        "provider": str(provider or "").strip() or "unknown",
+        "model": str(model or "").strip() or "unknown",
+        "streaming": bool(streaming),
+        "eligible": eligible,
+        "ineligible_reason": ineligible_reason,
+    }
+
+
+def _tool_choice_name(tool_choice: Any) -> str | None:
+    """Extract a pinned tool name from an OpenAI-style tool_choice payload."""
+    if not isinstance(tool_choice, dict):
+        return None
+
+    function_block = tool_choice.get("function")
+    if isinstance(function_block, dict):
+        raw_name = function_block.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            return raw_name.strip()
+
+    raw_name = tool_choice.get("name")
+    if isinstance(raw_name, str) and raw_name.strip():
+        return raw_name.strip()
+
+    return None
+
+
+def _tool_path_metric_context(context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Drop rollout-only labels that tool-path/completion collectors do not accept."""
+    if context is None:
+        return None
+
+    trimmed = dict(context)
+    trimmed.pop("ineligible_reason", None)
+    trimmed.pop("_completion_emitted", None)
+    return trimmed
+
+
+def _resolve_run_first_completion_outcome(exc: Exception) -> str:
+    """Map post-provider exceptions into the completion-proxy outcome label."""
+    if isinstance(exc, HTTPException):
+        detail = str(getattr(exc, "detail", "") or "").strip().lower()
+        if exc.status_code == status.HTTP_400_BAD_REQUEST and (
+            "block" in detail or "moderation" in detail
+        ):
+            return "blocked"
+    return "error"
+def _tool_names_from_tool_calls(tool_calls: Any) -> list[str]:
+    """Extract normalized tool names from OpenAI-style tool call payloads."""
+    if not isinstance(tool_calls, list):
+        return []
+
+    names: list[str] = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function_block = tool_call.get("function")
+        if not isinstance(function_block, dict):
+            continue
+        raw_name = function_block.get("name")
+        if not isinstance(raw_name, str):
+            continue
+        name = raw_name.strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _emit_chat_run_first_rollout_metrics(
+    metrics: Any,
+    *,
+    cleaned_args: dict[str, Any] | None,
+    provider: str,
+    model: str,
+    streaming: bool,
+) -> dict[str, Any] | None:
+    """Emit the rollout exposure metric and return the normalized context."""
+    context = _resolve_chat_run_first_metric_context(
+        cleaned_args,
+        provider=provider,
+        model=model,
+        streaming=streaming,
+    )
+    if context is None:
+        return None
+
+    try:
+        metrics.track_run_first_rollout(**context)
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
+        logger.warning("Chat run-first rollout metric emission failed: {}", exc)
+    return context
+
+def _emit_chat_run_first_tool_path_metrics(
+    metrics: Any,
+    *,
+    context: dict[str, Any] | None,
+    tool_calls: Any,
+    function_call: Any = None,
+) -> None:
+    """Emit first-tool and fallback-after-run metrics for one assistant turn."""
+    metric_context = _tool_path_metric_context(context)
+    if metric_context is None:
+        return
+
+    tool_names = _tool_names_from_tool_calls(tool_calls)
+    if not tool_names and isinstance(function_call, dict):
+        raw_name = function_call.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            tool_names = [raw_name.strip()]
+    if not tool_names:
+        return
+
+    first_tool = tool_names[0]
+    try:
+        metrics.track_run_first_first_tool(**metric_context, first_tool=first_tool)
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
+        logger.warning("Chat run-first first-tool metric emission failed: {}", exc)
+
+    if first_tool != "run":
+        return
+
+    fallback_tool = next((name for name in tool_names[1:] if name and name != "run"), None)
+    if fallback_tool is None:
+        return
+
+    try:
+        metrics.track_run_first_fallback_after_run(**metric_context, fallback_tool=fallback_tool)
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
+        logger.warning("Chat run-first fallback metric emission failed: {}", exc)
+
+
+def _emit_chat_run_first_completion_metric(
+    metrics: Any,
+    *,
+    context: dict[str, Any] | None,
+    outcome: str,
+) -> None:
+    """Emit the completion-proxy metric for one chat execution."""
+    metric_context = _tool_path_metric_context(context)
+    if context is None or metric_context is None:
+        return
+    if context.get("_completion_emitted"):
+        return
+    context["_completion_emitted"] = True
+    try:
+        metrics.track_run_first_completion_proxy(**metric_context, outcome=outcome)
+    except _CHAT_RUN_FIRST_METRIC_EXCEPTIONS as exc:
+        logger.warning("Chat run-first completion metric emission failed: {}", exc)
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -1426,7 +1792,7 @@ def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[st
         "slash_command_injection_mode",
     }
     for key, value in chat_args.items():
-        if key in skip_keys or value is None:
+        if key in skip_keys or key.startswith("_chat_") or value is None:
             continue
         if key not in request:
             request[key] = value
@@ -1541,6 +1907,7 @@ def build_call_params_from_request(
     final_system_message: str | None,
     app_config: dict[str, Any] | None = None,
     grammar_record: Mapping[str, Any] | None = None,
+    resolved_model: str | None = None,
 ) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
@@ -1574,6 +1941,8 @@ def build_call_params_from_request(
             "grammar_override",
         },
     )
+    if not call_params.get("model") and resolved_model:
+        call_params["model"] = resolved_model
 
     # Rename keys to match chat_api_call's generic signature
     if "temperature" in call_params:
@@ -1594,6 +1963,49 @@ def build_call_params_from_request(
             )
             call_params["_structured_requested_response_format"] = dict(response_format)
             call_params["response_format"] = decision.response_format
+
+    chat_tools = call_params.get("tools")
+    rollout_mode = resolve_chat_run_first_rollout_mode()
+    presentation_variant = resolve_chat_run_first_presentation_variant()
+    provider_allowlist = resolve_chat_run_first_provider_allowlist()
+    run_first_presentation = present_chat_tools(
+        tools=chat_tools if isinstance(chat_tools, list) else None,
+        allow_catalog=get_chat_tool_allow_catalog(),
+        rollout_mode=rollout_mode,
+        provider_key=f"{target_api_provider}:{call_params.get('model') or getattr(request_data, 'model', None) or ''}",
+        provider_allowlist=provider_allowlist,
+        streaming=bool(getattr(request_data, "stream", False)),
+        presentation_variant=presentation_variant,
+    )
+    if run_first_presentation.llm_tools:
+        call_params["tools"] = run_first_presentation.llm_tools
+    else:
+        call_params.pop("tools", None)
+    if run_first_presentation.tool_choice is not None:
+        call_params["tool_choice"] = run_first_presentation.tool_choice
+    else:
+        pinned_tool_choice = call_params.get("tool_choice")
+        pinned_tool_name = _tool_choice_name(pinned_tool_choice)
+        effective_tool_names = set(run_first_presentation.effective_tool_names)
+        if pinned_tool_name and pinned_tool_name not in effective_tool_names:
+            call_params.pop("tool_choice", None)
+        elif not effective_tool_names and pinned_tool_name:
+            call_params.pop("tool_choice", None)
+    call_params["_chat_effective_tool_names"] = run_first_presentation.effective_tool_names
+    call_params["_chat_run_first_eligible"] = run_first_presentation.eligible
+    if run_first_presentation.ineligible_reason is not None:
+        call_params["_chat_run_first_ineligible_reason"] = run_first_presentation.ineligible_reason
+    call_params["_chat_run_first_presentation_variant"] = run_first_presentation.presentation_variant
+    call_params["_chat_run_first_cohort"] = resolve_run_first_cohort_label(
+        rollout_mode,
+        eligible=run_first_presentation.eligible,
+        ineligible_reason=run_first_presentation.ineligible_reason,
+    )
+    if run_first_presentation.prompt_fragment:
+        if final_system_message and final_system_message.strip():
+            final_system_message = f"{final_system_message.rstrip()}\n\n{run_first_presentation.prompt_fragment}"
+        else:
+            final_system_message = run_first_presentation.prompt_fragment
 
     llamacpp_request_fields = {
         "thinking_budget_tokens": getattr(request_data, "thinking_budget_tokens", None),
@@ -2014,6 +2426,41 @@ def _build_assistant_message_payload(
     return message_payload
 
 
+async def write_mandatory_moderation_audit(
+    *,
+    audit_service: Any | None,
+    audit_context: Any | None,
+    audit_event_type: Any | None,
+    action: str,
+    result: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Write a moderation audit event and fail closed if persistence is unavailable."""
+    if audit_service is None or audit_context is None:
+        raise MandatoryAuditWriteError("Mandatory audit persistence unavailable")
+
+    try:
+        await audit_service.log_event(
+            event_type=audit_event_type or AuditEventType.SECURITY_VIOLATION,
+            context=audit_context,
+            action=action,
+            result=result,
+            metadata=metadata,
+        )
+        await audit_service.flush(raise_on_failure=True)
+    except MandatoryAuditWriteError:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Mandatory moderation audit write failed for {} ({}): {}",
+            action,
+            result,
+            exc,
+            exc_info=True,
+        )
+        raise MandatoryAuditWriteError("Mandatory audit persistence unavailable") from exc
+
+
 async def moderate_input_messages(
     request_data: Any,
     request: Any,
@@ -2195,20 +2642,14 @@ async def moderate_input_messages(
 
         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
-        try:
-            if audit_service and audit_context:
-                _schedule_background_task(
-                    audit_service.log_event(
-                        event_type=audit_event_type,
-                        context=audit_context,
-                        action="moderation.input",
-                        result=("failure" if resolved_action == "block" else "success"),
-                        metadata={"phase": "input", "action": resolved_action, "pattern": sample},
-                    ),
-                    task_name="chat.moderation.input.audit",
-                )
-        except _CHAT_NONCRITICAL_EXCEPTIONS:
-            pass
+        await write_mandatory_moderation_audit(
+            audit_service=audit_service,
+            audit_context=audit_context,
+            audit_event_type=audit_event_type,
+            action="moderation.input",
+            result=("failure" if resolved_action == "block" else "success"),
+            metadata={"phase": "input", "action": resolved_action, "pattern": sample},
+        )
 
         if resolved_action == "block":
             block_detail = "Input violates moderation policy"
@@ -2239,6 +2680,8 @@ async def moderate_input_messages(
                             if isinstance(current, str):
                                 part.text = await _moderate_text_in_place(current)
     except HTTPException:
+        raise
+    except MandatoryAuditWriteError:
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation input processing error: {e}")
@@ -2949,6 +3392,13 @@ async def execute_streaming_call(
         if isinstance(continuation_metadata, dict) and continuation_metadata
         else None
     )
+    run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+        metrics,
+        cleaned_args=cleaned_args,
+        provider=selected_provider,
+        model=model,
+        streaming=True,
+    )
     stream_metrics_recorded = False
     stream_failure_recorded = False
     raw_stream_iter: AsyncIterator[str] | Iterator[str] | None = None
@@ -3074,6 +3524,10 @@ async def execute_streaming_call(
                                 try:
                                     result = llm_call_func_fb()
                                     selected_provider = fallback_provider
+                                    # Update run-first metric context to reflect fallback provider/model
+                                    if run_first_metric_context is not None:
+                                        run_first_metric_context["provider"] = str(fallback_provider or "").strip() or "unknown"
+                                        run_first_metric_context["model"] = str(model or "").strip() or "unknown"
                                     llm_call_func = llm_call_func_fb
                                     with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                                         metrics.track_provider_fallback_success(
@@ -3192,6 +3646,11 @@ async def execute_streaming_call(
                         queued=False,
                     )
     except HTTPException as he:
+        _emit_chat_run_first_completion_metric(
+            metrics,
+            context=run_first_metric_context,
+            outcome="error",
+        )
         if getattr(he, "_chat_queue_admission", False):
             raise
         metrics.track_llm_call(
@@ -3247,6 +3706,7 @@ async def execute_streaming_call(
             success=False,
             error_type=type(e).__name__,
         )
+        _fallback_stream_ok = False
         if provider_manager and not queue_enabled:
             provider_manager.record_failure(selected_provider, e)
             # Only fallback on upstream/server errors; skip fallback for client/config errors
@@ -3297,7 +3757,15 @@ async def execute_streaming_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+                            metrics,
+                            cleaned_args=cleaned_args,
+                            provider=selected_provider,
+                            model=model,
+                            streaming=True,
+                        )
                         llm_call_func = llm_call_func_fb
+                        _fallback_stream_ok = True
                         # Explicit telemetry for direct (non-queued) streaming fallback success
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
@@ -3309,56 +3777,56 @@ async def execute_streaming_call(
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
                         raise
-                else:
-                    # No fallback available: stream SSE error (200) instead of raising
-                    pass
-            else:
-                # Client/config errors in streaming mode: stream SSE error (200)
-                pass
-        else:
-            # Queue path: stream SSE error as well
-            pass
 
-        # Safely capture exception details for streaming outside the closure
-        _err_message = str(e)
-        _err_type = type(e).__name__
+        if not _fallback_stream_ok:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
 
-        # New safe variant that does not reference the except-scope variable directly
-        async def _safe_err_stream():
-            try:
-                import json as _json
-                payload = {"error": {"message": _err_message, "type": _err_type}}
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    payload["conversation_id"] = final_conversation_id
-                    payload["tldw_conversation_id"] = final_conversation_id
-                    if system_message_id:
-                        payload["tldw_system_message_id"] = system_message_id
-                    if normalized_continuation_metadata:
-                        payload["tldw_continuation"] = normalized_continuation_metadata
-                yield f"data: {_json.dumps(payload)}\n\n"
-            except _CHAT_NONCRITICAL_EXCEPTIONS:
-                if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
-                    yield (
-                        f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
-                        f"\"conversation_id\":\"{final_conversation_id}\","
-                        f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
-                    )
-                else:
-                    yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
-            yield "data: [DONE]\n\n"
+            # Safely capture exception details for streaming outside the closure
+            _err_message = str(e)
+            _err_type = type(e).__name__
 
-        await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
-        return StreamingResponse(
-            _safe_err_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+            # New safe variant that does not reference the except-scope variable directly
+            async def _safe_err_stream():
+                try:
+                    import json as _json
+                    payload = {"error": {"message": _err_message, "type": _err_type}}
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        payload["conversation_id"] = final_conversation_id
+                        payload["tldw_conversation_id"] = final_conversation_id
+                        if system_message_id:
+                            payload["tldw_system_message_id"] = system_message_id
+                        if normalized_continuation_metadata:
+                            payload["tldw_continuation"] = normalized_continuation_metadata
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
+                        yield (
+                            f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
+                            f"\"conversation_id\":\"{final_conversation_id}\","
+                            f"\"tldw_conversation_id\":\"{final_conversation_id}\"}}\n\n"
+                        )
+                    else:
+                        yield f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}}}}\n\n"
+                yield "data: [DONE]\n\n"
+
+            await _maybe_refund_streaming_rg(rg_refund_cb, cancelled=False, error=True)
+            return StreamingResponse(
+                _safe_err_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
     if not (hasattr(raw_stream_iter, "__aiter__") or hasattr(raw_stream_iter, "__iter__")):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Provider did not return a valid stream.")
+    if hasattr(raw_stream_iter, "__iter__") and not hasattr(raw_stream_iter, "__aiter__"):
+        raw_stream_iter = wrap_sync_stream(raw_stream_iter)
 
     stream_mod_state = {"block_logged": False, "redact_logged": False}
     loop_compat_enabled = False
@@ -3562,6 +4030,18 @@ async def execute_streaming_call(
             except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
 
+        _emit_chat_run_first_tool_path_metrics(
+            metrics,
+            context=run_first_metric_context,
+            tool_calls=tool_calls,
+            function_call=function_call,
+        )
+        _emit_chat_run_first_completion_metric(
+            metrics,
+            context=run_first_metric_context,
+            outcome="blocked" if post_stream_blocked else "success",
+        )
+
         if should_persist and final_conversation_id and not post_stream_blocked and (
             full_reply_to_save or tool_calls or function_call
         ):
@@ -3607,7 +4087,7 @@ async def execute_streaming_call(
                     client_id=client_id,
                     max_tool_calls=get_chat_max_tool_calls(),
                     timeout_ms=get_chat_tool_timeout_ms(),
-                    allow_catalog=get_chat_tool_allow_catalog(),
+                    allow_catalog=_resolve_chat_autoexec_allow_catalog(cleaned_args),
                     attach_idempotency=should_attach_tool_idempotency(),
                     idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
                 )
@@ -3766,7 +4246,7 @@ async def execute_streaming_call(
 
             from tldw_Server_API.app.core.Chat.streaming_utils import StopStreamWithError
 
-            pending_audit_tasks: list[asyncio.Task[Any]] = []
+            mandatory_moderation_audit_tasks: list[asyncio.Task[Any]] = []
             stream_id = _uuid.uuid4().hex
             chunk_seq = 0
 
@@ -3800,8 +4280,36 @@ async def execute_streaming_call(
                 stream_holdback = ""
                 return out
 
+            async def _await_mandatory_moderation_audits() -> None:
+                pending_tasks = list(mandatory_moderation_audit_tasks)
+                mandatory_moderation_audit_tasks.clear()
+                failures: list[BaseException] = []
+                if pending_tasks:
+                    results = await asyncio.gather(
+                        *pending_tasks,
+                        return_exceptions=True,
+                    )
+                    failures = [result for result in results if isinstance(result, BaseException)]
+                if failures:
+                    for failure in failures:
+                        logger.error(
+                            "Mandatory moderation audit task failed for {}: {}",
+                            final_conversation_id,
+                            failure,
+                            exc_info=True,
+                        )
+                    raise StopStreamWithError(
+                        message="Mandatory audit persistence unavailable",
+                        error_type="audit_persistence_failure",
+                    ) from failures[0]
+                pending_stopper = stream_mod_state.pop("pending_stop_error", None)
+                if pending_stopper is not None:
+                    raise pending_stopper
+
             def _out_transform(s: str) -> str:
-                nonlocal chunk_seq
+                nonlocal chunk_seq, stream_holdback
+                if stream_mod_state.get("pending_stop_error") is not None:
+                    return ""
                 try:
                     mon = None
                     try:
@@ -3887,52 +4395,51 @@ async def execute_streaming_call(
                     if not stream_mod_state["block_logged"]:
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                        try:
-                            if audit_service and audit_context:
-                                _schedule_background_task(
-                                    audit_service.log_event(
-                                        event_type=AuditEventType.SECURITY_VIOLATION,
-                                        context=audit_context,
-                                        action="moderation.output",
-                                        result="failure",
-                                        metadata={
-                                            "phase": "output",
-                                            "streaming": True,
-                                            "action": "block",
-                                            "pattern": sample,
-                                        },
-                                    ),
-                                    task_name="chat.streaming.output.block.audit",
-                                    pending_tasks=pending_audit_tasks,
+                        mandatory_moderation_audit_tasks.append(
+                            asyncio.create_task(
+                                write_mandatory_moderation_audit(
+                                    audit_service=audit_service,
+                                    audit_context=audit_context,
+                                    audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                                    action="moderation.output",
+                                    result="failure",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "block",
+                                        "pattern": sample,
+                                    },
                                 )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
+                            )
+                        )
                         stream_mod_state["block_logged"] = True
-                    raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
+                    stream_holdback = ""
+                    stream_mod_state["pending_stop_error"] = StopStreamWithError(
+                        message="Output violates moderation policy",
+                        error_type="output_moderation_block",
+                    )
+                    return ""
                 if resolved_action == "redact":
                     if not stream_mod_state["redact_logged"]:
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                        try:
-                            if audit_service and audit_context:
-                                _schedule_background_task(
-                                    audit_service.log_event(
-                                        event_type=AuditEventType.SECURITY_VIOLATION,
-                                        context=audit_context,
-                                        action="moderation.output",
-                                        result="success",
-                                        metadata={
-                                            "phase": "output",
-                                            "streaming": True,
-                                            "action": "redact",
-                                            "pattern": sample,
-                                        },
-                                    ),
-                                    task_name="chat.streaming.output.redact.audit",
-                                    pending_tasks=pending_audit_tasks,
+                        mandatory_moderation_audit_tasks.append(
+                            asyncio.create_task(
+                                write_mandatory_moderation_audit(
+                                    audit_service=audit_service,
+                                    audit_context=audit_context,
+                                    audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                                    action="moderation.output",
+                                    result="success",
+                                    metadata={
+                                        "phase": "output",
+                                        "streaming": True,
+                                        "action": "redact",
+                                        "pattern": sample,
+                                    },
                                 )
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
+                            )
+                        )
                         stream_mod_state["redact_logged"] = True
                     redacted_out = (
                         redacted_combined
@@ -3985,6 +4492,7 @@ async def execute_streaming_call(
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
+                before_success_callback=_await_mandatory_moderation_audits,
                 system_message_id=system_message_id,
                 continuation_metadata=normalized_continuation_metadata,
             )
@@ -3996,8 +4504,8 @@ async def execute_streaming_call(
                         stream_tracker.add_chunk()
                     yield chunk
             finally:
-                if pending_audit_tasks:
-                    await asyncio.gather(*pending_audit_tasks, return_exceptions=True)
+                if mandatory_moderation_audit_tasks:
+                    await asyncio.gather(*mandatory_moderation_audit_tasks, return_exceptions=True)
 
     streaming_generator = tracked_streaming_generator()
 
@@ -4118,6 +4626,13 @@ async def execute_non_stream_call(
         if isinstance(continuation_metadata, dict) and continuation_metadata
         else None
     )
+    run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+        metrics,
+        cleaned_args=cleaned_args,
+        provider=selected_provider,
+        model=model,
+        streaming=False,
+    )
     llm_response = None
     metrics_recorded = False
     queue_failure_recorded = False
@@ -4237,6 +4752,11 @@ async def execute_non_stream_call(
                         queued=False,
                     )
     except HTTPException as he:
+        _emit_chat_run_first_completion_metric(
+            metrics,
+            context=run_first_metric_context,
+            outcome="error",
+        )
         if getattr(he, "_chat_queue_admission", False):
             raise
         raise
@@ -4291,6 +4811,11 @@ async def execute_non_stream_call(
                         )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics,
+                            context=run_first_metric_context,
+                            outcome="error",
+                        )
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
@@ -4301,6 +4826,13 @@ async def execute_non_stream_call(
                         provider_manager.record_success(fallback_provider, fallback_latency)
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
+                        run_first_metric_context = _emit_chat_run_first_rollout_metrics(
+                            metrics,
+                            cleaned_args=cleaned_args,
+                            provider=selected_provider,
+                            model=model,
+                            streaming=False,
+                        )
                         metrics_recorded = True
                         with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
@@ -4311,12 +4843,32 @@ async def execute_non_stream_call(
                             )
                     except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
+                        _emit_chat_run_first_completion_metric(
+                            metrics,
+                            context=run_first_metric_context,
+                            outcome="error",
+                        )
                         raise
                 else:
+                    _emit_chat_run_first_completion_metric(
+                        metrics,
+                        context=run_first_metric_context,
+                        outcome="error",
+                    )
                     raise
             else:
+                _emit_chat_run_first_completion_metric(
+                    metrics,
+                    context=run_first_metric_context,
+                    outcome="error",
+                )
                 raise
         else:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise
 
     if isinstance(llm_response, str) and should_force_normalize_string_responses():
@@ -4325,6 +4877,8 @@ async def execute_non_stream_call(
     content_to_save: str | None = None
     tool_calls_to_save: Any | None = None
     function_call_to_save: Any | None = None
+    first_turn_tool_calls: Any | None = None
+    first_turn_function_call: Any | None = None
     if llm_response and isinstance(llm_response, dict):
         choices = llm_response.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
@@ -4333,6 +4887,8 @@ async def execute_non_stream_call(
                 content_to_save = message_block.get("content")
                 tool_calls_to_save = message_block.get("tool_calls")
                 function_call_to_save = message_block.get("function_call")
+                first_turn_tool_calls = tool_calls_to_save
+                first_turn_function_call = function_call_to_save
         usage = llm_response.get("usage")
         if usage:
             try:
@@ -4410,6 +4966,11 @@ async def execute_non_stream_call(
     elif isinstance(llm_response, str):
         content_to_save = llm_response
     elif llm_response is None:
+        _emit_chat_run_first_completion_metric(
+            metrics,
+            context=run_first_metric_context,
+            outcome="error",
+        )
         raise ChatProviderError(provider=provider, message="Provider unavailable or returned no response", status_code=502)
 
     # Cache content text for moderation/usage when content is non-string
@@ -4436,6 +4997,11 @@ async def execute_non_stream_call(
                 ),
             )
             if sm_result.action == "block":
+                _emit_chat_run_first_completion_metric(
+                    metrics,
+                    context=run_first_metric_context,
+                    outcome="blocked",
+                )
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=sm_result.block_message or "Output blocked by self-monitoring rule",
@@ -4543,6 +5109,25 @@ async def execute_non_stream_call(
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
 
                 if resolved_action == "block":
+                    if audit_service and audit_context:
+                        await write_mandatory_moderation_audit(
+                            audit_service=audit_service,
+                            audit_context=audit_context,
+                            audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                            action="moderation.output",
+                            result="failure",
+                            metadata={
+                                "phase": "output",
+                                "streaming": False,
+                                "action": "block",
+                                "pattern": sample,
+                            },
+                        )
+                    _emit_chat_run_first_completion_metric(
+                        metrics,
+                        context=run_first_metric_context,
+                        outcome="blocked",
+                    )
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Output violates moderation policy")
                 if resolved_action == "redact":
                     try:
@@ -4552,9 +5137,10 @@ async def execute_non_stream_call(
                         pass
                     try:
                         if audit_service and audit_context:
-                            await audit_service.log_event(
-                                event_type=AuditEventType.SECURITY_VIOLATION,
-                                context=audit_context,
+                            await write_mandatory_moderation_audit(
+                                audit_service=audit_service,
+                                audit_context=audit_context,
+                                audit_event_type=AuditEventType.SECURITY_VIOLATION,
                                 action="moderation.output",
                                 result="success",
                                 metadata={
@@ -4564,8 +5150,8 @@ async def execute_non_stream_call(
                                     "pattern": sample,
                                 },
                             )
-                    except _CHAT_NONCRITICAL_EXCEPTIONS:
-                        pass
+                    except MandatoryAuditWriteError:
+                        raise
                     if isinstance(content_to_save, str):
                         content_to_save = (
                             redacted_val
@@ -4584,6 +5170,8 @@ async def execute_non_stream_call(
                     except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
     except HTTPException:
+        raise
+    except MandatoryAuditWriteError:
         raise
     except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation output processing error: {e}")
@@ -4609,6 +5197,11 @@ async def execute_non_stream_call(
             StructuredGenerationParseError,
             StructuredGenerationSchemaError,
         ) as structured_exc:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise build_structured_http_exception(structured_exc) from structured_exc
 
     should_save_response = (
@@ -4654,7 +5247,7 @@ async def execute_non_stream_call(
                 client_id=client_id,
                 max_tool_calls=get_chat_max_tool_calls(),
                 timeout_ms=get_chat_tool_timeout_ms(),
-                allow_catalog=get_chat_tool_allow_catalog(),
+                allow_catalog=_resolve_chat_autoexec_allow_catalog(cleaned_args),
                 attach_idempotency=should_attach_tool_idempotency(),
                 idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
             )
@@ -4733,6 +5326,11 @@ async def execute_non_stream_call(
                             StructuredGenerationParseError,
                             StructuredGenerationSchemaError,
                         ) as structured_exc:
+                            _emit_chat_run_first_completion_metric(
+                                metrics,
+                                context=run_first_metric_context,
+                                outcome="error",
+                            )
                             raise build_structured_http_exception(structured_exc) from structured_exc
                         llm_response = continuation_response
                         content_to_save = continuation_content
@@ -4797,6 +5395,11 @@ async def execute_non_stream_call(
             StructuredGenerationParseError,
             StructuredGenerationSchemaError,
         ) as structured_exc:
+            _emit_chat_run_first_completion_metric(
+                metrics,
+                context=run_first_metric_context,
+                outcome="error",
+            )
             raise build_structured_http_exception(structured_exc) from structured_exc
 
     if pending_assistant_payload is not None and should_persist and final_conversation_id:
@@ -4816,6 +5419,18 @@ async def execute_non_stream_call(
                 use_transaction=True,
             )
         pending_tool_messages = []
+
+    _emit_chat_run_first_tool_path_metrics(
+        metrics,
+        context=run_first_metric_context,
+        tool_calls=first_turn_tool_calls,
+        function_call=first_turn_function_call,
+    )
+    _emit_chat_run_first_completion_metric(
+        metrics,
+        context=run_first_metric_context,
+        outcome="success",
+    )
 
     if INJECT_ASSISTANT_NAME and isinstance(llm_response, dict):
         try:

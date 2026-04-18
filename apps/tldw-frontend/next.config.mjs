@@ -90,4 +90,18 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+// Sentry wrapping (optional — only active when NEXT_PUBLIC_SENTRY_DSN is set)
+let withSentryConfig = (/** @type {import('next').NextConfig} */ c) => c;
+if (process.env.NEXT_PUBLIC_SENTRY_DSN) {
+  try {
+    const sentry = await import('@sentry/nextjs');
+    withSentryConfig = sentry.withSentryConfig;
+  } catch (error) {
+    console.warn('[next.config] Skipping Sentry integration:', error)
+  }
+}
+
+export default withSentryConfig(nextConfig, {
+  silent: true,
+  disableLogger: true,
+});

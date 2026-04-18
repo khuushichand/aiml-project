@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useDemoMode } from "@/context/demo-mode"
+import { useIsConnected } from "@/hooks/useConnectionState"
 import { useHelpModal } from "@/store/tutorials"
 import { buildResearchLaunchPath } from "@/routes/route-paths"
 import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
@@ -19,6 +20,7 @@ import { requestQuickIngestOpen } from "@/utils/quick-ingest-open"
 export const PlaygroundEmpty = () => {
   const { t } = useTranslation(["playground", "common"])
   const { demoEnabled } = useDemoMode()
+  const isConnected = useIsConnected()
   const { open: openHelpModal } = useHelpModal()
   const navigate = useNavigate()
 
@@ -89,40 +91,40 @@ export const PlaygroundEmpty = () => {
       {
         key: "compare",
         icon: <GitBranch className="h-4 w-4" />,
-        title: t("playground:empty.starterCompareTitle", "Compare models"),
+        title: t("playground:empty.starterCompareTitle", "Compare AI models side-by-side"),
         description: t(
           "playground:empty.starterCompareBody",
-          "Send one prompt to multiple models and pick a winner."
+          "Send the same question to multiple models and compare their answers."
         ),
         action: () => dispatchStarter("compare")
       },
       {
         key: "character",
         icon: <UserCircle2 className="h-4 w-4" />,
-        title: t("playground:empty.starterCharacterTitle", "Character chat"),
+        title: t("playground:empty.starterCharacterTitle", "Chat as a character"),
         description: t(
           "playground:empty.starterCharacterBody",
-          "Choose a character and respond in persona."
+          "Pick a character persona and have the AI respond in their style."
         ),
         action: () => dispatchStarter("character")
       },
       {
         key: "rag",
         icon: <Search className="h-4 w-4" />,
-        title: t("playground:empty.starterKnowledgeTitle", "Knowledge-grounded Q&A"),
+        title: t("playground:empty.starterKnowledgeTitle", "Search your documents"),
         description: t(
           "playground:empty.starterKnowledgeBody",
-          "Open Search & Context, pin sources, then ask."
+          "Ask questions about your ingested content with cited answers."
         ),
         action: () => dispatchStarter("rag")
       },
       {
         key: "research",
         icon: <Microscope className="h-4 w-4" />,
-        title: t("playground:empty.starterResearchTitle", "Deep Research"),
+        title: t("playground:empty.starterResearchTitle", "Deep research"),
         description: t(
           "playground:empty.starterResearchBody",
-          "Open the long-running research console for cited, checkpointed investigations."
+          "Run a thorough, multi-step investigation with citations and checkpoints."
         ),
         action: handleOpenDeepResearch
       }
@@ -143,10 +145,28 @@ export const PlaygroundEmpty = () => {
                 defaultValue:
                   "You're in demo mode — try asking a question to see how the assistant responds. You can connect your own tldw server later."
               })
-            : t("playground:empty.description", {
-                defaultValue:
-                  "Experiment with different models, prompts, and knowledge sources here."
-              })
+            : !isConnected
+              ? (
+                  <>
+                    {t("playground:empty.disconnectedDescription", {
+                      defaultValue:
+                        "Connect to a tldw server to start chatting."
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => navigate("/settings/tldw")}
+                      className="mt-2 block text-sm font-medium text-primary hover:underline"
+                    >
+                      {t("playground:empty.openSettings", {
+                        defaultValue: "Open Settings"
+                      })}
+                    </button>
+                  </>
+                )
+              : t("playground:empty.description", {
+                  defaultValue:
+                    "Experiment with different models, prompts, and knowledge sources here."
+                })
         }
         primaryActionLabel={t("playground:empty.primaryCta", {
           defaultValue: "Start chatting"
@@ -156,41 +176,6 @@ export const PlaygroundEmpty = () => {
         onSecondaryAction={handleOpenQuickIngest}
         secondaryDisabled={false}
       />
-      <div className="mt-6 rounded-xl border border-border bg-surface2/20 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
-          {t("playground:empty.layoutGuideTitle", "Page regions")}
-        </p>
-        <p className="mt-1 text-sm text-text-muted">
-          {t(
-            "playground:empty.layoutGuideBody",
-            "History (left), timeline (center), composer (bottom), Search & Context (right)."
-          )}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleOpenHistoryRegion}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-          >
-            {t("playground:empty.jumpHistory", "Open history")}
-          </button>
-          <button
-            type="button"
-            onClick={handleStartChat}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-          >
-            {t("playground:empty.jumpComposer", "Jump to composer")}
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenKnowledgeRegion}
-            className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-          >
-            {t("playground:empty.jumpKnowledge", "Open Search & Context")}
-          </button>
-        </div>
-      </div>
-
       <div className="mt-6">
         <p className="text-sm font-medium text-text-muted mb-2">
           {t("playground:empty.starterTitle", "Start with a guided mode:")}
@@ -213,15 +198,38 @@ export const PlaygroundEmpty = () => {
         </div>
       </div>
 
-      <div className="mt-6">
-        <div className="mt-5 text-center">
-          <button
-            type="button"
-            onClick={openHelpModal}
-            className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline transition"
-          >
-            <HelpCircle className="h-3.5 w-3.5" />
-            {t("playground:empty.takeTour", "Take a quick tour")}
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-text-muted">
+        <span>{t("playground:empty.tipSlash", "Type / for commands like /search or /web")}</span>
+        <span>{t("playground:empty.tipPrompt", "Set a system prompt to customize AI behavior")}</span>
+      </div>
+
+      <div className="mt-3 text-center">
+        <button
+          type="button"
+          onClick={openHelpModal}
+          className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline transition"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          {t("playground:empty.takeTour", "Take a quick tour")}
+        </button>
+      </div>
+
+      <div className="mt-4 rounded-xl border border-border bg-surface2/20 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+          {t("playground:empty.layoutGuideTitle", "Page layout")}
+        </p>
+        <p className="mt-1 text-sm text-text-muted">
+          {t("playground:empty.layoutGuideBody", "Chat history (left), conversation (center), message input (bottom), sources & tools (right).")}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={handleOpenHistoryRegion} className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text">
+            {t("playground:empty.jumpHistory", "Open history")}
+          </button>
+          <button type="button" onClick={handleStartChat} className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text">
+            {t("playground:empty.jumpComposer", "Start typing")}
+          </button>
+          <button type="button" onClick={handleOpenKnowledgeRegion} className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text">
+            {t("playground:empty.jumpKnowledge", "Open sources & tools")}
           </button>
         </div>
       </div>

@@ -11,8 +11,10 @@ from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
 )
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_service import (
+    EmbeddingsABTestRunError,
     _compute_collection_hash,
     build_collections_vector_only,
+    get_collection_manager,
     run_vector_search_and_score,
 )
 
@@ -62,14 +64,18 @@ class _DummyChromaReuse:
         raise AssertionError("store_in_chroma should not be called during reuse")
 
 
+class _FactoryManager:
+    def __init__(self):
+        self.collection_names = []
+
+    def get_or_create_collection(self, name):
+        self.collection_names.append(name)
+        return _DummyCollection()
+
+
 class _StubMediaDB:
     def get_media_by_id(self, _mid):
         return None
-
-
-class _FailIfChromaInitialized:
-    def __init__(self, user_id, user_embedding_config):
-        raise AssertionError("ChromaDBManager should not be initialized for hybrid search")
 
 
 @pytest.mark.unit
@@ -111,7 +117,6 @@ async def test_abtest_hybrid_results_are_recorded(tmp_path, monkeypatch):
     import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as unified_pipeline
 
     monkeypatch.setattr(service, "_embed_texts", _fake_embed)
-    monkeypatch.setattr(service, "ChromaDBManager", _FailIfChromaInitialized)
     monkeypatch.setattr(unified_pipeline, "unified_rag_pipeline", _fake_unified)
 
     await run_vector_search_and_score(
@@ -225,3 +230,46 @@ async def test_abtest_reuses_collection_across_tests(tmp_path, monkeypatch):
     arms = db.get_abtest_arms(test_id_2)
     meta = json.loads(arms[0].get("metadata_json") or "{}")
     assert meta.get("shared_origin_test_id") == test_id_1
+
+
+def test_get_collection_manager_uses_injected_factory() -> None:
+    captured = {}
+
+    def _factory(*, user_id, embedding_config):
+        captured["user_id"] = user_id
+        captured["embedding_config"] = embedding_config
+        return _FactoryManager()
+
+    manager = get_collection_manager(
+        user_id="user-123",
+        embedding_config={"USER_DB_BASE_DIR": "/tmp/evals"},
+        manager_factory=_factory,
+    )
+
+    assert isinstance(manager, _FactoryManager)
+    assert captured["user_id"] == "user-123"
+    assert captured["embedding_config"]["USER_DB_BASE_DIR"] == "/tmp/evals"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_abtest_rejects_fts_search_mode(tmp_path) -> None:
+    db = EvaluationsDatabase(str(tmp_path / "evals.db"))
+    config = EmbeddingsABTestConfig(
+        arms=[ABTestArm(provider="stub", model="m1")],
+        media_ids=[],
+        chunking=ABTestChunking(method="words", size=20, overlap=0),
+        retrieval=ABTestRetrieval(k=1, search_mode="fts"),
+        queries=[ABTestQuery(text="hello", expected_ids=[1])],
+    )
+
+    with pytest.raises(EmbeddingsABTestRunError, match="fts search_mode") as exc:
+        await run_vector_search_and_score(
+            db=db,
+            config=config,
+            test_id="test-fts",
+            user_id="user-1",
+            arm_collections=[{"arm_id": "arm_test-fts_0", "collection_name": "ignored"}],
+        )
+
+    assert exc.value.retryable is False

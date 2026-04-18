@@ -26,6 +26,7 @@
 <summary>Expand table of contents</summary>
 
 - [Overview](#overview)
+- [Start Here](#start-here)
 - [Current Status](#current-status)
 - [What's New (in the last few releases)](#whats-new-in-the-last-few-releases)
 - [Privacy & Security](#privacy--security)
@@ -79,34 +80,32 @@ Good fit for:
 - Running local or hosted LLMs behind a consistent OpenAI-compatible API.
 - Building research workflows with RAG, evaluation, and prompt tooling.
 
-**New here?** Start with the profile chooser in [Docs/Getting_Started/README.md](Docs/Getting_Started/README.md), then use [Quickstart](#quickstart) for command details. If your first goal is local speech, follow the hardware-specific audio guides after your base profile is healthy: [CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md) or [GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md).
+## Start Here
 
-## Start Here (Self-Hosting Profiles)
+1. **Check prerequisites:** `make quickstart-prereqs` (or verify Python 3.10+ and ffmpeg manually; Docker is only required for the Docker-based profiles)
+2. **Pick your setup profile:**
 
-Choose one base onboarding path.
+| Profile | Best for | Command |
+|---------|----------|---------|
+| [Docker single-user + WebUI](Docs/Getting_Started/Profile_Docker_Single_User.md) | Most users (Recommended) | `make quickstart` |
+| [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) | Teams, public deployments | See profile guide |
+| [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md) | Development, debugging | `make quickstart-install` |
 
-Recommended default:
-- Run `make quickstart` for the Docker single-user + WebUI setup most users want. The default browser path uses same-origin browser API requests through the WebUI proxy.
-- Use [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) if you are deploying for a team or exposing the app publicly.
-- Keep local setup in [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md) and the local profile docs.
+1. **Follow your profile guide** end-to-end — it covers install, run, verify, and next steps.
 
-1. [Local single-user](Docs/Getting_Started/Profile_Local_Single_User.md)
-2. [Docker single-user](Docs/Getting_Started/Profile_Docker_Single_User.md)
-3. [Docker multi-user + Postgres](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md)
+Developers working on the WebUI, extension, or shared app packages should also start with [apps/DEVELOPMENT.md](apps/DEVELOPMENT.md).
 
-Optional add-on:
-
+Optional add-ons (apply AFTER your base profile is healthy):
 - [First-time audio setup: CPU systems](Docs/Getting_Started/First_Time_Audio_Setup_CPU.md)
-- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md) for NVIDIA GPUs and Apple Silicon
-- [GPU/STT Add-on](Docs/Getting_Started/GPU_STT_Addon.md) now redirects to the accelerated guide
+- [First-time audio setup: GPU/accelerated systems](Docs/Getting_Started/First_Time_Audio_Setup_GPU_Accelerated.md)
 
 
 ## Current Status
 
-Latest release:
-- 0.1.28 (2026-03-15) Beta status - expect rough edges;
-  * please report issues.
-- See `CHANGELOG.md` for release history.
+Current release line:
+- `0.3.1` Beta status. Expect rough edges and please report issues.
+- Primary client surfaces are the Next.js WebUI, Admin UI, and browser extension.
+- The `dev` branch currently contains additional unreleased work beyond `0.3.1`; see [CHANGELOG.md](CHANGELOG.md) for branch-level detail and [Docs/Published/RELEASE_NOTES.md](Docs/Published/RELEASE_NOTES.md) for the published release entry point.
 
 <details>
 <summary>Current focus and migration notes from the old Gradio version</summary>
@@ -140,17 +139,27 @@ Latest release:
 
 ## What's New (in the last few releases)
 
-- FastAPI-first backend with OpenAI-compatible Chat, Audio (STT/TTS + voice catalog), Embeddings, and Evals APIs
-- Unified RAG + Evaluations modules (hybrid BM25 + vector with re-ranking; unified metrics)
-- Expanded audio stack: multi-provider TTS/STT, streaming, and audio jobs queue
-- MCP Unified module with JWT/RBAC, tool execution APIs, WebSockets, and metrics
-- Next.js WebUI and Admin UI (primary web client)
-- Research & ingestion upgrades: OCR, web search + academic search, connectors, outputs/artifacts, watchlists/workflows
-- Reminder tasks + in-app notifications inbox, including realtime SSE stream and snooze actions
-- Strict OpenAI compatibility mode for local/self-hosted providers
-- PostgreSQL content mode + backup/restore helpers; Prometheus/Grafana monitoring + admin usage reporting
+Recently shipped:
+- Evaluations Recipe Framework for guided retrieval tuning, answer-quality runs, and recipe-first eval workflows.
+- MCP Virtual CLI plus follow-on hardening for governed, workspace-bounded command execution.
+- Writing Suite Phase 1 with manuscript CRUD, TipTap editor surfaces, tree/focus mode, and reorder support.
+- Study Packs Phase 1 for jobs-backed study-material generation and remediation handoffs.
+- Container snapshot publishing to GHCR with a unified `container-build-check` rollup job.
+- FTUE / FTUX expansion across onboarding, LLM setup, chat, watchlists, MCP Hub, moderation, quiz, and flashcards.
+- Deep Research with jobs-backed runs, SSE progress, checkpoint review, and chat handoffs.
+- Shared workspace cloning plus "Shared With Me" flows and privilege-aware sharing rules.
+- Companion Home dashboard, notifications surfaces, and integrations / scheduled-task management.
+- MCP Hub governance pack management and broader ACP workspace discovery/health support.
+- Audio installer and bundle follow-through, including curated `kitten_tts` and `pocket_tts_cpp` paths.
 
-See: `Docs/Published/RELEASE_NOTES.md` for detailed release notes.
+Currently landing on `dev` (post-`0.3.1` branch work):
+- Writing Suite Phases 2-4 with characters, world info, plot/research tools, AI analysis, agent chat, and live writing feedback.
+- Persona-routed onboarding, Mission Control home flows, and storage quota warnings.
+- Browser web clipper support for capturing pages into the research workflow.
+- Study suggestions for quiz and flashcard workflows.
+- Additional sandbox / ACP ergonomics and `llama.cpp` / `chatllm` OCR backend expansion.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full running history and [Docs/Published/RELEASE_NOTES.md](Docs/Published/RELEASE_NOTES.md) for published release notes.
 
 ## Privacy & Security
 
@@ -432,6 +441,7 @@ See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details
 | Build apps against the API locally | [Local Single-User Profile](Docs/Getting_Started/Profile_Local_Single_User.md) |
 | Run on my home server with Docker | [Docker Single-User Profile](Docs/Getting_Started/Profile_Docker_Single_User.md) |
 | Deploy for a team with proper security | [Docker Multi-User + Postgres Profile](Docs/Getting_Started/Profile_Docker_Multi_User_Postgres.md) |
+| Develop the WebUI or browser extension | [Extension & Web UI Development Guide](apps/DEVELOPMENT.md) |
 
 ### Local Profile: Add the WebUI
 

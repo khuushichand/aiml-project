@@ -26,6 +26,8 @@ export type ResultItem = {
   type: string
   data?: unknown
   error?: string
+  /** Whether the original file was persisted during this ingest run. */
+  persisted?: boolean
 }
 
 export type ResultOutcome =
@@ -280,6 +282,8 @@ export type WizardResultItem = ResultItem & {
   mediaId?: string | number | null
   /** Title extracted or assigned during processing. */
   title?: string | null
+  /** Non-error informational message (e.g., "Already exists in library"). */
+  message?: string
 }
 
 /**

@@ -59,7 +59,11 @@ from tldw_Server_API.app.api.v1.schemas.auth_schemas import (
     SessionResponse,
     TokenResponse,
 )
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventType,
+    MandatoryAuditWriteError,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.csrf_protection import (
@@ -1855,63 +1859,66 @@ async def logout(
             # Revoke current access token and session.
             auth_header = request.headers.get("Authorization", "") if request is not None else ""
             token = _extract_bearer_token(auth_header)
+            if not token:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Current-session logout requires a bearer token. Use all_devices=true to revoke all sessions.",
+                )
             blacklist = get_token_blacklist()
             payload = {}
-            if token:
-                try:
-                    # NOTE: Using sync verify_token() here is acceptable - we're extracting
-                    # claims for revocation cleanup, not making authorization decisions.
-                    # The user has already been authenticated via the claim-first dependency.
-                    payload = jwt_service.verify_token(token)
-                except _AUTH_NONCRITICAL_EXCEPTIONS:
-                    payload = {}
+            try:
+                # NOTE: Using sync verify_token() here is acceptable - we're extracting
+                # claims for revocation cleanup, not making authorization decisions.
+                # The user has already been authenticated via the claim-first dependency.
+                payload = jwt_service.verify_token(token)
+            except _AUTH_NONCRITICAL_EXCEPTIONS:
+                payload = {}
 
-            if token:
+            try:
+                jti = jwt_service.extract_jti(token)
+            except _AUTH_NONCRITICAL_EXCEPTIONS:
+                jti = None
+            if jti:
                 try:
-                    jti = jwt_service.extract_jti(token)
-                except _AUTH_NONCRITICAL_EXCEPTIONS:
-                    jti = None
-                if jti:
-                    try:
-                        exp = payload.get("exp")
-                        expires_at = datetime.utcfromtimestamp(exp) if exp else datetime.utcnow()
-                        await blacklist.revoke_token(
-                            jti=jti,
-                            expires_at=expires_at,
-                            user_id=user_id,
-                            token_type="access",
-                            reason="User logout",
-                        )
-                    except _AUTH_NONCRITICAL_EXCEPTIONS as revoke_exc:
-                        logger.error(f"Failed to revoke access token for logout: {revoke_exc}")
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Failed to revoke access token during logout",
-                        ) from revoke_exc
-                session_id = payload.get("session_id")
-                if session_id is not None:
-                    try:
-                        await session_manager.revoke_session(
-                            session_id=session_id,
-                            revoked_by=user_id,
-                            reason="User logout",
-                        )
-                    except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
-                        logger.error(f"Failed to revoke session {session_id} during logout: {cleanup_exc}")
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Failed to revoke session during logout",
-                        ) from cleanup_exc
-                else:
-                    # Fallback to full session revoke if the token lacks a session id.
-                    try:
-                        await session_manager.revoke_all_user_sessions(user_id=user_id)
-                    except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
-                        logger.error(f"Failed to revoke user sessions during logout: {cleanup_exc}")
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Failed to revoke sessions during logout",
-                        ) from cleanup_exc
+                    exp = payload.get("exp")
+                    expires_at = datetime.utcfromtimestamp(exp) if exp else datetime.utcnow()
+                    await blacklist.revoke_token(
+                        jti=jti,
+                        expires_at=expires_at,
+                        user_id=user_id,
+                        token_type="access",
+                        reason="User logout",
+                    )
+                except _AUTH_NONCRITICAL_EXCEPTIONS as revoke_exc:
+                    logger.error(f"Failed to revoke access token for logout: {revoke_exc}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to revoke access token during logout",
+                    ) from revoke_exc
+            session_id = payload.get("session_id")
+            if session_id is not None:
+                try:
+                    await session_manager.revoke_session(
+                        session_id=session_id,
+                        revoked_by=user_id,
+                        reason="User logout",
+                    )
+                except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
+                    logger.error(f"Failed to revoke session {session_id} during logout: {cleanup_exc}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to revoke session during logout",
+                    ) from cleanup_exc
+            else:
+                # Fallback to full session revoke if the token lacks a session id.
+                try:
+                    await session_manager.revoke_all_user_sessions(user_id=user_id)
+                except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
+                    logger.error(f"Failed to revoke user sessions during logout: {cleanup_exc}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to revoke sessions during logout",
+                    ) from cleanup_exc
 
             message = "Successfully logged out"
 
@@ -3525,6 +3532,23 @@ async def register(
                     expires_in_days=365
                 )
                 api_key_value = key_result.get('key')
+        except MandatoryAuditWriteError as exc:
+            logger.error(
+                "Mandatory audit write failed while auto-generating default API key for new user {}: {}",
+                user_info["user_id"],
+                exc,
+                exc_info=exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": {
+                        "message": "Mandatory audit persistence unavailable",
+                        "type": "audit_persistence_failure",
+                        "code": "audit_persistence_failure",
+                    }
+                },
+            ) from exc
         except _AUTH_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to auto-generate API key for new user {user_info['user_id']}: {_e}")
 

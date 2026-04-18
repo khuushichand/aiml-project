@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -38,6 +40,19 @@ class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
 
 
+class RecipeEnqueueError(RuntimeError):
+    """Raised when a recipe run cannot be enqueued into Jobs."""
+
+    def __init__(
+        self,
+        message: str = "Failed to enqueue recipe run.",
+        *,
+        error_code: str = "recipe_run_enqueue_failed",
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
 class AuditLogError(RuntimeError):
     """Raised when persisting an audit event fails."""
 
@@ -48,6 +63,10 @@ class ValidationError(BadRequestError):
 
 class IngestionSourceValidationError(ValidationError):
     """Raised when an ingestion source payload fails validation."""
+
+
+class ReferenceImportError(RuntimeError):
+    """Raised when a reference-manager item cannot be persisted correctly."""
 
 
 class StructuredOutputParseError(ValueError):

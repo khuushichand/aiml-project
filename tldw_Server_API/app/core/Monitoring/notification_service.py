@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
@@ -242,17 +242,15 @@ class NotificationService:
     def _send_webhook(self, payload: dict[str, Any]) -> None:
         from tldw_Server_API.app.core.http_client import create_client, fetch
         # 3s connect, 5s read/write aligns with defaults but explicit here
-        try:
-            with create_client(timeout=5.0) as client:
-                headers = {"Content-Type": "application/json"}
-                fetch(method="POST", url=self.webhook_url, client=client, headers=headers, json=payload, timeout=5.0)
-        except Exception:
-            # Let retry decorator handle; raise to trigger retry
-            raise
+        with create_client(timeout=5.0) as client:
+            headers = {"Content-Type": "application/json"}
+            fetch(method="POST", url=self.webhook_url, client=client, headers=headers, json=payload, timeout=5.0)
 
     def _send_webhook_safe(self, payload: dict[str, Any]) -> None:
         try:
             self._send_webhook(payload)
+        except RetryError as e:
+            logger.info(f"Webhook notify failed: {e}")
         except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.info(f"Webhook notify failed: {e}")
 
@@ -342,6 +340,8 @@ class NotificationService:
     def _send_email_safe(self, alert: TopicAlert) -> None:
         try:
             self._send_email(alert)
+        except RetryError as e:
+            logger.info(f"Email notify failed: {e}")
         except (OSError, RuntimeError, TypeError, ValueError, smtplib.SMTPException) as e:
             logger.info(f"Email notify failed: {e}")
 

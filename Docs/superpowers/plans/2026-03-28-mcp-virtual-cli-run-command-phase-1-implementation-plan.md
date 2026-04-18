@@ -506,6 +506,17 @@ if len(buffer_bytes) > self._spill_threshold_bytes:
     stdout_ref = SpillReference(path=spill_path, byte_count=len(buffer_bytes))
 ```
 
+For this task, treat pipe handoff semantically rather than as a required in-memory string:
+
+- small pipe payloads may stay inline
+- oversized pipe payloads may move through the runtime as spill-backed text-stream carriers
+- downstream commands must still be able to recover the exact upstream UTF-8 text payload
+- no footer, truncation notice, or other presentation text may be mixed into the pipe carrier
+- tests should assert semantic recovery of upstream text, not require that oversized stdin remain a plain Python `str`
+
+Execute operators with strict semantics:
+
+- `|` passes prior stdout into the next command's stdin, inline or through the spill-backed text-stream carrier
 Execute operators with strict semantics:
 
 - `|` passes prior stdout into the next command's stdin
@@ -554,6 +565,8 @@ Full output: /tmp/mcp-run-command/cmd-3.txt
 Explore: cat /tmp/mcp-run-command/cmd-3.txt | grep <pattern>
          cat /tmp/mcp-run-command/cmd-3.txt | tail 100
 ```
+
+If presentation truncates output that the execution layer did not already spill, it should materialize a spill reference at presentation time so the rendered result still points to a real path and the same CLI exploration guidance.
 
 - [ ] **Step 6: Re-run the execution and presentation tests**
 

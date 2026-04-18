@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.routing import APIRoute
 from loguru import logger
 from starlette import status as _starlette_status
@@ -39,6 +39,7 @@ from tldw_Server_API.app.api.v1.router_registry import include_router_idempotent
 from tldw_Server_API.app.services.app_lifecycle import (
     mark_lifecycle_shutdown,
     mark_lifecycle_startup,
+    get_or_create_lifecycle_state,
 )
 from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _shared_env_flag_enabled,
@@ -51,6 +52,10 @@ from tldw_Server_API.app.core.testing import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
+)
+from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
+    ensure_chacha_rls,
+    ensure_prompt_studio_rls,
 )
 from tldw_Server_API.app.core.DB_Management.media_db.api import (
     managed_media_database,
@@ -114,6 +119,10 @@ _REQUEST_GUARD_EXCEPTIONS = (
     UnicodeDecodeError,
     ValueError,
 )
+_READINESS_GUARD_EXCEPTIONS = _REQUEST_GUARD_EXCEPTIONS + (
+    ImportError,
+    ModuleNotFoundError,
+)
 
 
 @contextmanager
@@ -130,6 +139,160 @@ def _claims_rebuild_db_session(
         initialize=False,
     ) as db:
         yield user_id, db_path, db
+
+
+def _run_pg_rls_auto_ensure(backend: Any) -> tuple[bool, bool]:
+    """Apply both PostgreSQL RLS installers and log the combined result."""
+    prompt_ok = ensure_prompt_studio_rls(backend)
+    chacha_ok = ensure_chacha_rls(backend)
+    logger.info(
+        "PG RLS ensure invoked (prompt_studio_applied={}, chacha_applied={})",
+        prompt_ok,
+        chacha_ok,
+    )
+    return prompt_ok, chacha_ok
+
+
+def _apply_shutdown_transition_gate(app: FastAPI, readiness_state: Any | None) -> None:
+    """Move the app into draining mode and gate new jobs."""
+    try:
+        lifecycle_state = get_or_create_lifecycle_state(app)
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
+        lifecycle_state = None
+        logger.debug(f"Shutdown transition gate: lifecycle state lookup skipped: {exc}")
+
+    try:
+        if lifecycle_state is None or lifecycle_state.phase != "draining" or not lifecycle_state.draining:
+            mark_lifecycle_shutdown(app, readiness_state)
+    except _STARTUP_GUARD_EXCEPTIONS as exc:
+        logger.warning(f"Shutdown transition gate: failed to mark lifecycle shutdown: {exc}")
+
+    try:
+        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+
+        _JM.set_acquire_gate(True)
+    except _IMPORT_EXCEPTIONS as exc:
+        logger.debug(f"Shutdown transition gate: job acquire gate unavailable: {exc}")
+
+
+def _build_legacy_shutdown_context(
+    *,
+    readiness_state: Any | None,
+    usage_task: Any = None,
+    llm_usage_task: Any = None,
+    authnz_scheduler_started: bool = False,
+    chatbooks_cleanup_task: Any = None,
+    chatbooks_cleanup_stop_event: Any = None,
+    storage_cleanup_service: Any = None,
+) -> "LegacyShutdownContext":
+    """Collect the explicit shutdown dependencies used by legacy adapters."""
+    from tldw_Server_API.app.services.shutdown_legacy_adapters import LegacyShutdownContext
+
+    return LegacyShutdownContext(
+        readiness_state=readiness_state,
+        usage_task=usage_task,
+        llm_usage_task=llm_usage_task,
+        authnz_scheduler_started=authnz_scheduler_started,
+        chatbooks_cleanup_task=chatbooks_cleanup_task,
+        chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+        storage_cleanup_service=storage_cleanup_service,
+    )
+
+
+def _build_coordinated_shutdown_coordinator(
+    app: FastAPI,
+    legacy_shutdown_plan: list[Any],
+    *,
+    transport_registry: Any | None = None,
+) -> tuple["ShutdownCoordinator", list["ShutdownComponent"], list["ShutdownComponent"]]:
+    """Assemble the production drain coordinator with legacy and transport owners."""
+    from tldw_Server_API.app.services.shutdown_coordinator import ShutdownCoordinator
+    from tldw_Server_API.app.services.shutdown_transport_registry import (
+        build_shutdown_components,
+    )
+
+    coordinator = ShutdownCoordinator(profile="prod_drain")
+    legacy_components: list[Any] = []
+    try:
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            register_legacy_shutdown_components,
+        )
+
+        legacy_components = register_legacy_shutdown_components(
+            coordinator,
+            legacy_shutdown_plan,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS):
+        legacy_components = []
+    transport_components = build_shutdown_components(transport_registry)
+    for component in transport_components:
+        coordinator.register(component)
+
+    try:
+        app.state._tldw_shutdown_transport_component_names = [
+            component.name for component in transport_components
+        ]
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
+
+    return coordinator, legacy_components, transport_components
+
+
+async def _run_coordinated_shutdown(
+    app: FastAPI,
+    legacy_shutdown_plan: list[Any],
+    *,
+    transport_registry: Any | None = None,
+) -> set[str]:
+    """Run the coordinated shutdown slice used by the real lifespan teardown."""
+    try:
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            get_legacy_shutdown_suppressed_component_names,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS):
+        get_legacy_shutdown_suppressed_component_names = lambda _summary: set()
+
+    (
+        coordinated_legacy_coordinator,
+        coordinated_legacy_components,
+        coordinated_transport_components,
+    ) = _build_coordinated_shutdown_coordinator(
+        app,
+        legacy_shutdown_plan,
+        transport_registry=transport_registry,
+    )
+    all_components = list(coordinated_legacy_components) + list(coordinated_transport_components)
+    if not all_components:
+        return set()
+
+    coordinated_legacy_summary = await coordinated_legacy_coordinator.shutdown()
+    legacy_component_name_set = {component.name for component in coordinated_legacy_components}
+    coordinated_legacy_component_names = {
+        name
+        for name in get_legacy_shutdown_suppressed_component_names(coordinated_legacy_summary)
+        if name in legacy_component_name_set
+    }
+    try:
+        app.state._tldw_shutdown_legacy_coordinator_summary = coordinated_legacy_summary
+        app.state._tldw_shutdown_legacy_coordinator_component_names = [
+            component.name for component in all_components
+        ]
+        app.state._tldw_shutdown_legacy_coordinator_phase_groups = {
+            phase.value: phase_summary.component_names
+            for phase, phase_summary in coordinated_legacy_summary.phases.items()
+        }
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
+    logger.info(
+        "App Shutdown: legacy coordinator summary components={} phase_groups={} wall_time_ms={}",
+        [component.name for component in all_components],
+        {
+            phase.value: phase_summary.component_names
+            for phase, phase_summary in coordinated_legacy_summary.phases.items()
+        },
+        coordinated_legacy_summary.wall_time_ms,
+    )
+    return coordinated_legacy_component_names
 
 _early_os.environ.setdefault("MCP_INHERIT_GLOBAL_LOGGER", "1")
 try:
@@ -1077,6 +1240,13 @@ else:
     from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
     from tldw_Server_API.app.api.v1.endpoints.slides import router as slides_router
     from tldw_Server_API.app.api.v1.endpoints.translate import router as translate_router
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        _HAS_WEB_CLIPPER = True
+    except _IMPORT_EXCEPTIONS as _wc_err:
+        logger.warning(f"Web clipper endpoints unavailable; skipping import: {_wc_err}")
+        _HAS_WEB_CLIPPER = False
 
     # Notes Graph (stub, RBAC-wired)
     try:
@@ -1259,6 +1429,27 @@ else:
     except _IMPORT_EXCEPTIONS as _acp_import_err:
         logger.warning(f"ACP endpoints unavailable at import time; deferring: {_acp_import_err}")
         acp_router = None  # type: ignore[assignment]
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+    except _IMPORT_EXCEPTIONS as _acp_sched_err:
+        logger.warning(f"ACP schedules endpoints unavailable at import time; deferring: {_acp_sched_err}")
+        acp_schedules_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+    except _IMPORT_EXCEPTIONS as _acp_trig_err:
+        logger.warning(f"ACP triggers endpoints unavailable at import time; deferring: {_acp_trig_err}")
+        acp_triggers_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+    except _IMPORT_EXCEPTIONS as _acp_perm_err:
+        logger.warning(f"ACP permissions endpoints unavailable at import time; deferring: {_acp_perm_err}")
+        acp_permissions_router = None  # type: ignore[assignment]
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_multiplex import router as acp_multiplex_router
+    except _IMPORT_EXCEPTIONS as _acp_mpx_err:
+        logger.warning(f"ACP multiplex endpoints unavailable at import time; deferring: {_acp_mpx_err}")
+        acp_multiplex_router = None  # type: ignore[assignment]
     # Users Endpoint (NEW)
     # Chatbooks Endpoint
     from tldw_Server_API.app.api.v1.endpoints.chatbooks import router as chatbooks_router
@@ -1268,6 +1459,9 @@ else:
 
     # Flashcards Endpoint (V5 - ChaChaNotes)
     from tldw_Server_API.app.api.v1.endpoints.flashcards import router as flashcards_router
+    from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+        router as study_suggestions_router,
+    )
     from tldw_Server_API.app.api.v1.endpoints.llamacpp import (
         public_router as llamacpp_public_router,
     )
@@ -1313,6 +1507,13 @@ else:
     except _IMPORT_EXCEPTIONS as _writing_import_err:
         logger.warning(f"Writing endpoints unavailable at import time; deferring: {_writing_import_err}")
         writing_router = None  # type: ignore[assignment]
+
+    # Manuscript Management Endpoints (ChaChaNotes)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing_manuscripts import router as manuscripts_router
+    except _IMPORT_EXCEPTIONS as _manuscripts_import_err:
+        logger.warning(f"Manuscript endpoints unavailable at import time; deferring: {_manuscripts_import_err}")
+        manuscripts_router = None  # type: ignore[assignment]
 
     # Sandbox Endpoint (scaffold)
     try:
@@ -1434,13 +1635,22 @@ async def lifespan(app: FastAPI):
         _JM.set_acquire_gate(False)
     except _IMPORT_EXCEPTIONS:
         pass
+    usage_task = None
+    llm_usage_task = None
+    chatbooks_cleanup_task = None
+    chatbooks_cleanup_stop_event = None
+    storage_cleanup_service = None
+    _authnz_sched_started = False
     # Fail fast if the assembled app contains duplicate method+path route registrations.
     _fail_on_duplicate_route_method_pairs(app, context="lifespan startup")
     # Run environmental preflight checks before heavy initialization.
+    # Executed in a worker thread because some checks (e.g. database
+    # connectivity) perform blocking network I/O.
     try:
+        import asyncio as _preflight_asyncio
         from tldw_Server_API.app.core.startup_preflight import run_preflight_checks
 
-        preflight = run_preflight_checks()
+        preflight = await _preflight_asyncio.to_thread(run_preflight_checks)
         logger.info(
             "Preflight: {} checks, {} warnings, {} failures",
             len(preflight.checks),
@@ -1491,6 +1701,23 @@ async def lifespan(app: FastAPI):
         # Abort startup on validation errors
         logger.exception(f"Startup aborted due to insecure MCP configuration: {_mcp_val_err}")
         raise
+
+    # Startup: Validate ACP runner configuration (non-fatal warnings)
+    try:
+        if route_enabled("acp", default_stable=False):
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import (
+                load_acp_runner_config as _load_acp_cfg,
+                validate_acp_config as _validate_acp_cfg,
+            )
+
+            _acp_cfg = _load_acp_cfg()
+            _acp_warnings = _validate_acp_cfg(_acp_cfg)
+            for _acp_w in _acp_warnings:
+                logger.warning("ACP config: {}", _acp_w)
+            if not _acp_warnings:
+                logger.info("App Startup: ACP runner configuration validated")
+    except _STARTUP_GUARD_EXCEPTIONS as _acp_val_err:
+        logger.debug("App Startup: ACP config validation skipped: {}", _acp_val_err)
 
     # Startup: Validate Postgres content backend when enabled
     try:
@@ -1570,6 +1797,22 @@ async def lifespan(app: FastAPI):
             logger.debug(f"App Startup: FastAPI instrumentation skipped: {_otel_app_err}")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Startup: Failed to initialize telemetry: {e}")
+
+    # Startup: Initialize Sentry error tracking (optional)
+    _sentry_dsn = os.getenv("SENTRY_DSN", "")
+    if _sentry_dsn:
+        try:
+            import sentry_sdk
+            sentry_sdk.init(
+                dsn=_sentry_dsn,
+                traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+                environment=os.getenv("DEPLOYMENT_ENV", "development"),
+                release=os.getenv("OTEL_SERVICE_VERSION", "1.0.0"),
+                send_default_pii=False,
+            )
+            logger.info("App Startup: Sentry error tracking initialized")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _sentry_err:
+            logger.warning("App Startup: Sentry initialization failed: {}", _sentry_err)
 
     # Startup: Warn if first-time setup is enabled (local-only, no proxies)
     try:
@@ -2281,6 +2524,19 @@ async def lifespan(app: FastAPI):
         if deferred:
             logger.info("Deferred startup: completed non-critical initializations")
 
+    # Load persona archetypes and MCP server catalog (lightweight YAML reads).
+    try:
+        from pathlib import Path as _ArchPath
+
+        from tldw_Server_API.app.core.Persona.archetype_loader import load_archetypes_from_directory
+        from tldw_Server_API.app.core.MCP_unified.catalog_loader import load_mcp_catalog
+
+        _config_dir = _ArchPath(__file__).resolve().parent.parent / "Config_Files"
+        load_archetypes_from_directory(_config_dir / "persona_archetypes")
+        load_mcp_catalog(_config_dir / "mcp_server_catalog.yaml")
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _archetype_err:
+        logger.debug("Archetype/catalog loading skipped: {}", _archetype_err)
+
     # Initialize Chat Module Components (single log retained)
     logger.info("App Startup: Initializing Chat module components...")
 
@@ -2312,6 +2568,8 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_task = None
     media_ingest_heavy_jobs_task = None
     reading_digest_jobs_task = None
+    study_pack_jobs_task = None
+    study_suggestions_jobs_task = None
     reminder_jobs_task = None
     admin_backup_jobs_task = None
     jobs_notifications_bridge_task = None
@@ -2324,6 +2582,8 @@ async def lifespan(app: FastAPI):
     media_ingest_jobs_stop_event = None
     media_ingest_heavy_jobs_stop_event = None
     reading_digest_jobs_stop_event = None
+    study_pack_jobs_stop_event = None
+    study_suggestions_jobs_stop_event = None
     claims_task = None
     jobs_metrics_task = None
     reminders_sched_task = None
@@ -2537,6 +2797,44 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS as e:
         # startup/shutdown guard; log and continue
         logger.warning(f"Failed to start Prompt Studio Jobs worker: {e}")
+
+    # Study-pack Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_PACK_JOBS_WORKER_ENABLED", "flashcards")
+        if _enabled:
+            from tldw_Server_API.app.services.study_pack_jobs_worker import (
+                run_study_pack_jobs_worker as _run_study_pack_jobs,
+            )
+
+            study_pack_jobs_stop_event = _asyncio.Event()
+            study_pack_jobs_task = _asyncio.create_task(_run_study_pack_jobs(study_pack_jobs_stop_event))
+            logger.info("Study-pack Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-pack Jobs worker disabled by flag (STUDY_PACK_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-pack Jobs worker: {e}")
+
+    # Study-suggestions Jobs worker
+    try:
+        import asyncio as _asyncio
+
+        _enabled = _should_start_worker("STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED", "study-suggestions")
+        if _enabled:
+            from tldw_Server_API.app.services.study_suggestions_jobs_worker import (
+                run_study_suggestions_jobs_worker as _run_study_suggestions_jobs,
+            )
+
+            study_suggestions_jobs_stop_event = _asyncio.Event()
+            study_suggestions_jobs_task = _asyncio.create_task(
+                _run_study_suggestions_jobs(study_suggestions_jobs_stop_event)
+            )
+            logger.info("Study-suggestions Jobs worker started with explicit stop_event signal")
+        else:
+            logger.info("Study-suggestions Jobs worker disabled by flag (STUDY_SUGGESTIONS_JOBS_WORKER_ENABLED)")
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start Study-suggestions Jobs worker: {e}")
 
     # Privilege snapshot worker
     try:
@@ -2797,7 +3095,47 @@ async def lifespan(app: FastAPI):
                     "(ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED != true)"
                 )
     except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.warning(f"Failed to start Admin maintenance rotation Jobs worker: {e}")
+        logger.warning("Failed to start Admin maintenance rotation Jobs worker: {}", e)
+
+    # Evaluations recipe-run Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+                start_recipe_run_jobs_worker,
+            )
+
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
+            if recipe_run_jobs_task:
+                logger.info("Evaluation recipe-run Jobs worker started")
+            else:
+                logger.info(
+                    "Evaluation recipe-run Jobs worker disabled "
+                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning("Failed to start evaluation recipe-run Jobs worker: {}", e)
+
+    # Evaluations recipe-run Jobs worker
+    try:
+        if _sidecar_mode:
+            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
+        else:
+            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
+                start_recipe_run_jobs_worker,
+            )
+
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
+            if recipe_run_jobs_task:
+                logger.info("Evaluation recipe-run Jobs worker started")
+            else:
+                logger.info(
+                    "Evaluation recipe-run Jobs worker disabled "
+                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
+                )
+    except _STARTUP_GUARD_EXCEPTIONS as e:
+        logger.warning(f"Failed to start evaluation recipe-run Jobs worker: {e}")
 
     # Jobs notifications bridge worker
     try:
@@ -3146,18 +3484,15 @@ async def lifespan(app: FastAPI):
     try:
         _ensure_rls = _shared_env_flag_enabled("RAG_ENSURE_PG_RLS")
         if _ensure_rls:
-            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
+            from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, DatabaseError
             from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-            from tldw_Server_API.app.core.DB_Management.backends.pg_rls_policies import (
-                ensure_chacha_rls,
-                ensure_prompt_studio_rls,
-            )
 
             _cfg = DatabaseConfig.from_env()
             _backend = DatabaseBackendFactory.create_backend(_cfg)
-            _ps_ok = ensure_prompt_studio_rls(_backend)
-            _cc_ok = ensure_chacha_rls(_backend)
-            logger.info(f"PG RLS ensure invoked (prompt_studio_applied={_ps_ok}, chacha_applied={_cc_ok})")
+            try:
+                _run_pg_rls_auto_ensure(_backend)
+            except DatabaseError as e:
+                logger.warning(f"Failed to apply PG RLS policies automatically: {e}")
         else:
             logger.info("PG RLS auto-ensure disabled (set RAG_ENSURE_PG_RLS=true to enable)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
@@ -3568,14 +3903,67 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Flip readiness early and gate new job acquisitions for graceful shutdown
+    # Build and record the legacy shutdown inventory first.
+    # Execute only the narrow transition gate handoff through the coordinator;
+    # the remaining legacy teardown paths stay on the existing direct teardown path.
+    transition_gate_applied = False
+    legacy_shutdown_plan: list[Any] = []
+    coordinated_legacy_component_names: set[str] = set()
     try:
-        mark_lifecycle_shutdown(app, READINESS_STATE)
-        from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
+        from tldw_Server_API.app.services.shutdown_coordinator import ShutdownCoordinator, ShutdownPhase
+        from tldw_Server_API.app.services.shutdown_legacy_adapters import (
+            build_legacy_shutdown_plan,
+        )
 
-        _JM.set_acquire_gate(True)
-    except _STARTUP_GUARD_EXCEPTIONS:
-        pass
+        shutdown_context = _build_legacy_shutdown_context(
+            readiness_state=READINESS_STATE,
+            usage_task=usage_task,
+            llm_usage_task=llm_usage_task,
+            authnz_scheduler_started=_authnz_sched_started,
+            chatbooks_cleanup_task=chatbooks_cleanup_task,
+            chatbooks_cleanup_stop_event=chatbooks_cleanup_stop_event,
+            storage_cleanup_service=storage_cleanup_service,
+        )
+        legacy_shutdown_plan = build_legacy_shutdown_plan(app, shutdown_context)
+        legacy_phase_groups: dict[str, list[str]] = {}
+        for component in legacy_shutdown_plan:
+            legacy_phase_groups.setdefault(component.phase.value, []).append(component.name)
+
+        try:
+            app.state._tldw_shutdown_legacy_plan = legacy_shutdown_plan
+            app.state._tldw_shutdown_legacy_phase_groups = legacy_phase_groups
+            app.state._tldw_shutdown_legacy_inventory_visible = bool(legacy_shutdown_plan)
+        except _STARTUP_GUARD_EXCEPTIONS:
+            pass
+
+        logger.info(
+            "App Shutdown: legacy inventory visible={} phase_groups={}",
+            bool(legacy_shutdown_plan),
+            legacy_phase_groups,
+        )
+
+        transition_coordinator = ShutdownCoordinator(profile="dev_fast")
+        for component in legacy_shutdown_plan:
+            if component.phase == ShutdownPhase.TRANSITION:
+                transition_coordinator.register(component)
+        if legacy_shutdown_plan:
+            transition_summary = await transition_coordinator.shutdown()
+            transition_gate_summary = transition_summary.components.get("lifecycle_gate")
+            transition_gate_applied = bool(
+                transition_gate_summary is not None and transition_gate_summary.result == "stopped"
+            )
+            if transition_gate_applied:
+                logger.info("App Shutdown: legacy transition gate handoff executed via coordinator")
+            else:
+                logger.warning(
+                    "App Shutdown: legacy transition gate handoff did not complete cleanly; "
+                    "falling back to direct drain",
+                )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _legacy_shutdown_err:
+        logger.debug(f"Legacy shutdown inventory skipped: {_legacy_shutdown_err}")
+    finally:
+        if not transition_gate_applied:
+            _apply_shutdown_transition_gate(app, READINESS_STATE)
 
     # Optionally wait for leases to finish (bounded wait)
     try:
@@ -3597,6 +3985,20 @@ async def lifespan(app: FastAPI):
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
 
+    # Execute the migrated legacy shutdown components through the coordinator.
+    try:
+        non_transition_legacy_shutdown_plan = [
+            component
+            for component in legacy_shutdown_plan
+            if getattr(getattr(component, "phase", None), "value", None) != "transition"
+        ]
+        coordinated_legacy_component_names = await _run_coordinated_shutdown(
+            app,
+            non_transition_legacy_shutdown_plan,
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _coordinated_legacy_shutdown_err:
+        logger.debug(f"Legacy coordinator shutdown skipped: {_coordinated_legacy_shutdown_err}")
+
     # Cancel/stop background worker(s)
     try:
         bg = getattr(app.state, "bg_tasks", None)
@@ -3610,17 +4012,19 @@ async def lifespan(app: FastAPI):
     try:
         if "cleanup_task" in locals() and cleanup_task:
             cleanup_task.cancel()
-        if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
-            chatbooks_cleanup_stop_event.set()
-        if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
-            chatbooks_cleanup_task.cancel()
+        if "chatbooks_cleanup" not in coordinated_legacy_component_names:
+            if "chatbooks_cleanup_stop_event" in locals() and chatbooks_cleanup_stop_event:
+                chatbooks_cleanup_stop_event.set()
+            if "chatbooks_cleanup_task" in locals() and chatbooks_cleanup_task:
+                chatbooks_cleanup_task.cancel()
         # Storage cleanup service shutdown
         if "storage_cleanup_service" in locals() and storage_cleanup_service:
-            try:
-                await storage_cleanup_service.stop()
-                logger.info("Storage cleanup worker stopped")
-            except _STARTUP_GUARD_EXCEPTIONS:
-                pass
+            if "storage_cleanup_service" not in coordinated_legacy_component_names:
+                try:
+                    await storage_cleanup_service.stop()
+                    logger.info("Storage cleanup worker stopped")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    pass
         try:
             from tldw_Server_API.app.services.storage_cleanup_service import (
                 reset_cleanup_service as _reset_cleanup_service,
@@ -3770,6 +4174,26 @@ async def lifespan(app: FastAPI):
                     reading_digest_jobs_task.cancel()
             else:
                 reading_digest_jobs_task.cancel()
+        if "study_pack_jobs_task" in locals() and study_pack_jobs_task:
+            if "study_pack_jobs_stop_event" in locals() and study_pack_jobs_stop_event:
+                try:
+                    study_pack_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_pack_jobs_task, timeout=5.0)
+                    logger.info("Study-pack Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_pack_jobs_task.cancel()
+            else:
+                study_pack_jobs_task.cancel()
+        if "study_suggestions_jobs_task" in locals() and study_suggestions_jobs_task:
+            if "study_suggestions_jobs_stop_event" in locals() and study_suggestions_jobs_stop_event:
+                try:
+                    study_suggestions_jobs_stop_event.set()
+                    await _asyncio.wait_for(study_suggestions_jobs_task, timeout=5.0)
+                    logger.info("Study-suggestions Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    study_suggestions_jobs_task.cancel()
+            else:
+                study_suggestions_jobs_task.cancel()
         if "companion_reflection_jobs_task" in locals() and companion_reflection_jobs_task:
             if "companion_reflection_jobs_stop_event" in locals() and companion_reflection_jobs_stop_event:
                 try:
@@ -3810,6 +4234,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_notifications_bridge_task.cancel()
+        if "recipe_run_jobs_task" in locals() and recipe_run_jobs_task:
+            try:
+                recipe_run_jobs_task.cancel()
+                await _asyncio.wait_for(recipe_run_jobs_task, timeout=5.0)
+                logger.info("Evaluation recipe-run Jobs worker cancelled")
+            except _asyncio.CancelledError:
+                pass
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    recipe_run_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and evals_abtest_jobs_task:
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
@@ -3843,18 +4277,26 @@ async def lifespan(app: FastAPI):
             logger.info("WebSub renewal worker cancelled")
         # Stop usage aggregators gracefully
         try:
-            if "usage_task" in locals() and usage_task:
-                from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator as _stop_usage
+            if "usage_aggregator" not in coordinated_legacy_component_names:
+                if "usage_task" in locals() and usage_task:
+                    from tldw_Server_API.app.services.usage_aggregator import (
+                        stop_usage_aggregator as _stop_usage,
+                    )
 
-                await _stop_usage(usage_task)
+                    await _stop_usage(usage_task)
+                    usage_task = None
         except _STARTUP_GUARD_EXCEPTIONS:
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 usage_task.cancel()
+                usage_task = None
         try:
-            if "llm_usage_task" in locals() and llm_usage_task:
-                from tldw_Server_API.app.services.llm_usage_aggregator import stop_llm_usage_aggregator as _stop_llm
+            if "llm_usage_aggregator" not in coordinated_legacy_component_names:
+                if "llm_usage_task" in locals() and llm_usage_task:
+                    from tldw_Server_API.app.services.llm_usage_aggregator import (
+                        stop_llm_usage_aggregator as _stop_llm,
+                    )
 
-                await _stop_llm(llm_usage_task)
+                    await _stop_llm(llm_usage_task)
         except _STARTUP_GUARD_EXCEPTIONS:
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 llm_usage_task.cancel()
@@ -4073,7 +4515,11 @@ async def lifespan(app: FastAPI):
 
     # Stop AuthNZ scheduler early so it can't keep the loop alive during shutdown.
     try:
-        if "_authnz_sched_started" in locals() and _authnz_sched_started:
+        if (
+            "_authnz_sched_started" in locals()
+            and _authnz_sched_started
+            and "authnz_scheduler" not in coordinated_legacy_component_names
+        ):
             from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
 
             await stop_authnz_scheduler()
@@ -4263,6 +4709,36 @@ async def lifespan(app: FastAPI):
         logger.info("App Shutdown: Shutting down unified audit services...")
         await shutdown_all_audit_services()
         logger.info("App Shutdown: Unified audit services stopped")
+
+        try:
+            from tldw_Server_API.app.api.v1.endpoints.sharing import (
+                shutdown_sharing_audit_service,
+            )
+
+            await shutdown_sharing_audit_service()
+            logger.info("App Shutdown: Sharing audit service stopped")
+        except (*_STARTUP_GUARD_EXCEPTIONS, ImportError, ModuleNotFoundError) as _e:
+            logger.debug(f"Sharing audit service shutdown skipped: {_e}")
+
+        try:
+            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
+                shutdown_local_audit_adapter_loop,
+            )
+
+            shutdown_local_audit_adapter_loop()
+            logger.info("App Shutdown: Embeddings audit adapter loop stopped")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Embeddings audit adapter loop shutdown skipped: {}", _e)
+
+        try:
+            from tldw_Server_API.app.core.Evaluations.audit_adapter import (
+                shutdown_local_evaluations_audit_loop,
+            )
+
+            shutdown_local_evaluations_audit_loop()
+            logger.info("App Shutdown: Evaluations audit adapter loop stopped")
+        except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _e:
+            logger.debug("Evaluations audit adapter loop shutdown skipped: {}", _e)
     except _IMPORT_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping unified audit services: {e}")
 
@@ -4293,11 +4769,13 @@ async def lifespan(app: FastAPI):
 
     # Stop usage aggregator
     try:
-        if "usage_task" in locals() and usage_task:
-            from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator
+        if "usage_aggregator" not in coordinated_legacy_component_names:
+            if "usage_task" in locals() and usage_task:
+                from tldw_Server_API.app.services.usage_aggregator import stop_usage_aggregator
 
-            await stop_usage_aggregator(usage_task)
-            logger.info("Usage aggregator stopped")
+                await stop_usage_aggregator(usage_task)
+                logger.info("Usage aggregator stopped")
+                usage_task = None
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.exception(f"App Shutdown: Error stopping usage aggregator: {e}")
 
@@ -4305,24 +4783,17 @@ async def lifespan(app: FastAPI):
     try:
         # Stop AuthNZ scheduler if started
         try:
-            if "_authnz_sched_started" in locals() and _authnz_sched_started:
+            if (
+                "_authnz_sched_started" in locals()
+                and _authnz_sched_started
+                and "authnz_scheduler" not in coordinated_legacy_component_names
+            ):
                 from tldw_Server_API.app.core.AuthNZ.scheduler import stop_authnz_scheduler
 
                 await stop_authnz_scheduler()
                 logger.info("AuthNZ scheduler stopped")
         except _IMPORT_EXCEPTIONS as _e:
             logger.debug(f"AuthNZ scheduler shutdown skipped: {_e}")
-
-        # Shutdown cached audit adapter services (Embeddings adapter)
-        try:
-            from tldw_Server_API.app.core.Embeddings.audit_adapter import (
-                shutdown_audit_adapter_services as _shutdown_audit_adapter,
-            )
-
-            await _shutdown_audit_adapter()
-            logger.info("Embeddings audit adapter services shutdown")
-        except _STARTUP_GUARD_EXCEPTIONS as _e:
-            logger.debug(f"Embeddings audit adapter shutdown skipped: {_e}")
 
         shutdown_telemetry()
         logger.info("App Shutdown: Telemetry shutdown")
@@ -5230,6 +5701,40 @@ else:
             "Using local browser defaults (localhost/127.0.0.1) so self-hosted setup keeps working. "
             "Set ALLOWED_ORIGINS only if you need a different browser origin."
         )
+
+    # C1: Auto-add common localhost origins in single-user mode when no explicit
+    # ALLOWED_ORIGINS env var is set. In multi-user mode, require explicit origins.
+    _env_allowed_origins_set = os.getenv("ALLOWED_ORIGINS") is not None
+    try:
+        from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_cors_settings
+        _cors_auth_mode = _get_cors_settings().AUTH_MODE
+    except Exception:
+        _cors_auth_mode = os.getenv("AUTH_MODE", "single_user")
+
+    _SINGLE_USER_LOCALHOST_ORIGINS = [
+        "http://localhost:8080",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:8080",
+    ]
+
+    if str(_cors_auth_mode) == "single_user" and not _env_allowed_origins_set:
+        _auto_added = []
+        for _origin in _SINGLE_USER_LOCALHOST_ORIGINS:
+            if _origin not in origins:
+                origins.append(_origin)
+                _auto_added.append(_origin)
+        if _auto_added:
+            logger.info(
+                f"CORS single-user auto-detect: added localhost origins {_auto_added}"
+            )
+        else:
+            logger.info("CORS single-user auto-detect: all common localhost origins already present.")
+    elif str(_cors_auth_mode) == "multi_user" and not origins:
+        logger.warning(
+            "CORS multi-user mode: ALLOWED_ORIGINS is empty. "
+            "Set ALLOWED_ORIGINS explicitly for multi-user deployments."
+        )
     origins = _resolve_cors_origins_or_raise(origins)
     _cors_allow_credentials = should_allow_cors_credentials()
     _cors_enforce_explicit_origins = is_production_environment()
@@ -5244,6 +5749,16 @@ else:
         enforce_explicit_origins=_cors_enforce_explicit_origins,
     )
     _cors_allowed_openapi_origins = {str(o).rstrip("/") for o in origins if isinstance(o, str)}
+    try:
+        app.state._tldw_drain_gate_cors_config = {
+            "allow_all_origins": _cors_allow_all_origins,
+            "allow_origin_regex": _cors_allow_origin_regex,
+            "allow_credentials": _cors_allow_credentials,
+            "allowed_origins": _cors_allowed_openapi_origins,
+            "expose_headers": "X-Request-ID, traceparent, X-Trace-Id",
+        }
+    except _STARTUP_GUARD_EXCEPTIONS:
+        pass
     # # -- If you have any global middleware, add it here --
     app.add_middleware(
         CORSMiddleware,
@@ -5304,6 +5819,7 @@ from tldw_Server_API.app.core.AuthNZ.llm_budget_middleware import LLMBudgetMiddl
 from tldw_Server_API.app.core.AuthNZ.usage_logging_middleware import UsageLoggingMiddleware
 from tldw_Server_API.app.core.Metrics.http_middleware import HTTPMetricsMiddleware
 from tldw_Server_API.app.core.Sandbox.middleware import SandboxArtifactTraversalGuardMiddleware
+from tldw_Server_API.app.core.Security.drain_gate_middleware import DrainGateMiddleware
 from tldw_Server_API.app.core.Security.middleware import SecurityHeadersMiddleware
 from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMiddleware
 from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
@@ -5331,8 +5847,6 @@ if _TEST_FLAGS_SET and not _EXPLICIT_PYTEST_RUNTIME:
 
 if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
-    # Provide request id + trace headers even in tests for assertions
-    app.add_middleware(RequestIDMiddleware)
     # Apply Setup CSP nonce injection even in tests to keep behavior consistent
     try:
         app.add_middleware(SetupCSPMiddleware)
@@ -5431,9 +5945,6 @@ else:
     except _IMPORT_EXCEPTIONS as _e:
         logger.debug(f"Skipping AccessLogMiddleware: {_e}")
 
-    # Request ID propagation (adds X-Request-ID header)
-    app.add_middleware(RequestIDMiddleware)
-
     # Sandbox artifact traversal guard (pre-routing)
     try:
         app.add_middleware(SandboxArtifactTraversalGuardMiddleware)
@@ -5499,6 +6010,11 @@ try:
     app.add_middleware(LLMBudgetMiddleware)
 except _STARTUP_GUARD_EXCEPTIONS as _e:
     logger.debug(f"Skipping LLMBudgetMiddleware: {_e}")
+
+# Request ID context should be available before the drain gate, and the drain gate
+# should reject work before the LLM budget middleware gets a chance to do heavier setup.
+app.add_middleware(DrainGateMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 # Keep Setup UI HTML outside the static mounts to avoid bypassing the
 # /setup gating via direct file access.
@@ -5570,29 +6086,9 @@ async def root():
 
 # Metrics endpoint for Prometheus scraping (registered conditionally below)
 async def metrics():
-    """Prometheus metrics endpoint.
+    from tldw_Server_API.app.api.v1.endpoints.metrics import build_prometheus_metrics_response
 
-    Exposes both the internal registry (JSON-backed) and the default
-    prometheus_client REGISTRY used by embeddings/orchestrator code paths.
-    """
-    from fastapi.responses import PlainTextResponse
-
-    try:
-        from prometheus_client import REGISTRY as PC_REGISTRY
-        from prometheus_client import generate_latest as pc_generate_latest
-    except _IMPORT_EXCEPTIONS:
-        PC_REGISTRY = None
-        pc_generate_latest = None
-
-    registry = get_metrics_registry()
-    combined = registry.export_prometheus_format() or ""
-    try:
-        if pc_generate_latest and PC_REGISTRY:
-            combined = (combined + "\n" + pc_generate_latest(PC_REGISTRY).decode("utf-8")).strip() + "\n"
-    except _REQUEST_GUARD_EXCEPTIONS:
-        # If prometheus_client is unavailable, ignore
-        pass
-    return PlainTextResponse(combined, media_type="text/plain; version=0.0.4")
+    return await build_prometheus_metrics_response()
 
 
 # OpenTelemetry metrics endpoint (if using OTLP) - registered conditionally below
@@ -5928,6 +6424,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])
     except _IMPORT_EXCEPTIONS as _persona_min_err:
         logger.debug(f"Skipping persona router in minimal test app: {_persona_min_err}")
+    # Archetype template endpoints (list / detail / preview)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.archetype_endpoints import router as archetype_router
+
+        app.include_router(archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"])
+    except _IMPORT_EXCEPTIONS as _archetype_min_err:
+        logger.debug("Skipping archetype router in minimal test app: {}", _archetype_min_err)
     # Notes endpoints (health + CRUD)
     try:
         from tldw_Server_API.app.api.v1.endpoints.notes import router as notes_router
@@ -5935,6 +6438,12 @@ elif _MINIMAL_TEST_APP:
         app.include_router(notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
     except _IMPORT_EXCEPTIONS as _notes_min_err:
         logger.debug(f"Skipping notes router in minimal test app: {_notes_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.web_clipper import router as web_clipper_router
+
+        app.include_router(web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
+    except _IMPORT_EXCEPTIONS as _web_clipper_min_err:
+        logger.debug(f"Skipping web clipper router in minimal test app: {_web_clipper_min_err}")
     # Skills endpoints (SKILL.md management)
     try:
         from tldw_Server_API.app.api.v1.endpoints.skills import router as skills_router
@@ -6066,6 +6575,14 @@ elif _MINIMAL_TEST_APP:
         app.include_router(quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"])
     except _IMPORT_EXCEPTIONS as _quiz_min_err:
         logger.debug(f"Skipping quizzes router in minimal test app: {_quiz_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.study_suggestions import (
+            router as study_suggestions_router,
+        )
+
+        app.include_router(study_suggestions_router, prefix=f"{API_V1_PREFIX}", tags=["study-suggestions"])
+    except _IMPORT_EXCEPTIONS as _study_suggestions_min_err:
+        logger.debug(f"Skipping study_suggestions router in minimal test app: {_study_suggestions_min_err}")
     # Writing Playground endpoints (ChaChaNotes-backed) for integration tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.writing import router as writing_router
@@ -6073,6 +6590,13 @@ elif _MINIMAL_TEST_APP:
         app.include_router(writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"])
     except _IMPORT_EXCEPTIONS as _writing_min_err:
         logger.debug(f"Skipping writing router in minimal test app: {_writing_min_err}")
+    # Manuscript Management endpoints (ChaChaNotes-backed) for integration tests
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.writing_manuscripts import router as manuscripts_router
+
+        app.include_router(manuscripts_router, prefix=f"{API_V1_PREFIX}/writing/manuscripts", tags=["manuscripts"])
+    except _IMPORT_EXCEPTIONS as _manuscripts_min_err:
+        logger.debug(f"Skipping manuscripts router in minimal test app: {_manuscripts_min_err}")
     # Metrics endpoints (/api/v1/metrics/text)
     try:
         from tldw_Server_API.app.api.v1.endpoints.metrics import router as metrics_router
@@ -6137,6 +6661,31 @@ elif _MINIMAL_TEST_APP:
         app.include_router(acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"])
     except _IMPORT_EXCEPTIONS as _acp_min_err:
         logger.debug(f"Skipping ACP router in minimal test app: {_acp_min_err}")
+    # ACP sub-module routers (schedules, triggers, permissions)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_schedules import router as acp_schedules_router
+
+        app.include_router(acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"])
+    except _IMPORT_EXCEPTIONS as _acp_sched_min_err:
+        logger.debug(f"Skipping ACP schedules router in minimal test app: {_acp_sched_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_triggers import router as acp_triggers_router
+
+        app.include_router(acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"])
+    except _IMPORT_EXCEPTIONS as _acp_trig_min_err:
+        logger.debug(f"Skipping ACP triggers router in minimal test app: {_acp_trig_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_permissions import router as acp_permissions_router
+
+        app.include_router(acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"])
+    except _IMPORT_EXCEPTIONS as _acp_perm_min_err:
+        logger.debug(f"Skipping ACP permissions router in minimal test app: {_acp_perm_min_err}")
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.acp_multiplex import router as acp_multiplex_router
+
+        app.include_router(acp_multiplex_router, prefix=f"{API_V1_PREFIX}", tags=["acp-multiplex"])
+    except _IMPORT_EXCEPTIONS as _acp_mpx_min_err:
+        logger.debug(f"Skipping ACP multiplex router in minimal test app: {_acp_mpx_min_err}")
     # Agent Orchestration endpoints
     try:
         from tldw_Server_API.app.api.v1.endpoints.agent_orchestration import router as orch_router
@@ -6257,15 +6806,15 @@ else:
             # config gating would normally disable them (e.g., workflows/scheduler).
             _test_ctx = bool(_TEST_MODE)
             if _test_ctx and route_key in {"workflows", "scheduler"}:
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
                 return
             if route_enabled(route_key, default_stable=default_stable):
-                app.include_router(router, prefix=prefix, tags=tags)
+                include_router_idempotent(app, router, prefix=prefix, tags=tags)
             else:
                 logger.info(f"Route disabled by policy: {route_key}")
         except _STARTUP_GUARD_EXCEPTIONS as _rt_err:
             logger.warning(f"Route gating error for {route_key}; including by default. Error: {_rt_err}")
-            app.include_router(router, prefix=prefix, tags=tags)
+            include_router_idempotent(app, router, prefix=prefix, tags=tags)
 
     try:
         from tldw_Server_API.app.api.v1.endpoints.health import router as health_router
@@ -6318,6 +6867,13 @@ else:
 
     if admin_router is not None:
         _include_if_enabled("admin", admin_router, prefix=f"{API_V1_PREFIX}", tags=["admin"])
+    # Billing / subscription management endpoints (admin-only)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.billing import router as billing_router
+
+        _include_if_enabled("billing", billing_router, prefix=f"{API_V1_PREFIX}", tags=["billing"])
+    except _IMPORT_EXCEPTIONS as _billing_import_err:
+        logger.warning(f"Billing endpoints unavailable; skipping: {_billing_import_err}")
     _include_if_enabled("mcp-catalogs", mcp_catalogs_manage_router, prefix=f"{API_V1_PREFIX}")
     _include_if_enabled("mcp-hub", mcp_hub_management_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-hub"])
     # Self-service organization management endpoints
@@ -6383,6 +6939,14 @@ else:
         _include_if_enabled("tools", tools_router, prefix=f"{API_V1_PREFIX}", tags=["tools"], default_stable=False)
     if "acp_router" in locals() and acp_router is not None:
         _include_if_enabled("acp", acp_router, prefix=f"{API_V1_PREFIX}", tags=["acp"], default_stable=False)
+    if "acp_schedules_router" in locals() and acp_schedules_router is not None:
+        _include_if_enabled("acp", acp_schedules_router, prefix=f"{API_V1_PREFIX}", tags=["acp-schedules"], default_stable=False)
+    if "acp_triggers_router" in locals() and acp_triggers_router is not None:
+        _include_if_enabled("acp", acp_triggers_router, prefix=f"{API_V1_PREFIX}", tags=["acp-triggers"], default_stable=False)
+    if "acp_permissions_router" in locals() and acp_permissions_router is not None:
+        _include_if_enabled("acp", acp_permissions_router, prefix=f"{API_V1_PREFIX}", tags=["acp-permissions"], default_stable=False)
+    if "acp_multiplex_router" in locals() and acp_multiplex_router is not None:
+        _include_if_enabled("acp", acp_multiplex_router, prefix=f"{API_V1_PREFIX}", tags=["acp-multiplex"], default_stable=False)
     if "character_router" in locals():
         _include_if_enabled("characters", character_router, prefix=f"{API_V1_PREFIX}/characters", tags=["characters"])
     if "character_memory_router" in locals():
@@ -6579,6 +7143,8 @@ else:
             "notes", notes_graph_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"]
         )  # /api/v1/notes/graph
     _include_if_enabled("notes", notes_router, prefix=f"{API_V1_PREFIX}/notes", tags=["notes"])
+    if _HAS_WEB_CLIPPER:
+        _include_if_enabled("web-clipper", web_clipper_router, prefix=f"{API_V1_PREFIX}/web-clipper", tags=["web-clipper"])
     _include_if_enabled("translation", translate_router, prefix=f"{API_V1_PREFIX}", tags=["translation"])
     _include_if_enabled("slides", slides_router, prefix=f"{API_V1_PREFIX}", tags=["slides"])
     _include_if_enabled("prompts", prompt_router, prefix=f"{API_V1_PREFIX}/prompts", tags=["prompts"])
@@ -6751,9 +7317,21 @@ else:
     _include_if_enabled(
         "quizzes", quizzes_router, prefix=f"{API_V1_PREFIX}", tags=["quizzes"], default_stable=True
     )
+    _include_if_enabled(
+        "study-suggestions",
+        study_suggestions_router,
+        prefix=f"{API_V1_PREFIX}",
+        tags=["study-suggestions"],
+        default_stable=True,
+    )
     if "writing_router" in locals() and writing_router is not None:
         _include_if_enabled(
             "writing", writing_router, prefix=f"{API_V1_PREFIX}/writing", tags=["writing"], default_stable=True
+        )
+    if "manuscripts_router" in locals() and manuscripts_router is not None:
+        _include_if_enabled(
+            "manuscripts", manuscripts_router, prefix=f"{API_V1_PREFIX}/writing/manuscripts",
+            tags=["manuscripts"], default_stable=True
         )
     from tldw_Server_API.app.api.v1.endpoints.persona import (
         router as persona_router,
@@ -6814,6 +7392,15 @@ else:
         _include_if_enabled(
             "persona", persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"], default_stable=True
         )
+    # Archetype template endpoints are always available (read-only catalog data)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.archetype_endpoints import router as archetype_router  # noqa: F811
+
+        include_router_idempotent(
+            app, archetype_router, prefix=f"{API_V1_PREFIX}/persona/archetypes", tags=["persona-archetypes"]
+        )
+    except (_STARTUP_GUARD_EXCEPTIONS + _IMPORT_EXCEPTIONS) as _arch_full_err:
+        logger.debug("Archetype router unavailable in full app: {}", _arch_full_err)
     _include_if_enabled("mcp-unified", mcp_unified_router, prefix=f"{API_V1_PREFIX}", tags=["mcp-unified"])
     _include_if_enabled("chatbooks", chatbooks_router, prefix=f"{API_V1_PREFIX}", tags=["chatbooks"])
     _include_if_enabled("sharing", sharing_router, prefix=f"{API_V1_PREFIX}", tags=["sharing"])
@@ -6894,12 +7481,15 @@ async def health_check():
 
 
 # Readiness check (verifies critical dependencies) - registered conditionally below
-async def readiness_check():
+async def readiness_check(request: Request) -> JSONResponse:
     """Readiness probe for orchestrators and load balancers."""
     try:
-        # Early flip: when shutting down, report not ready immediately
-        if not READINESS_STATE.get("ready", True):
-            return {"status": "not_ready", "reason": "shutdown_in_progress"}
+        lifecycle = get_or_create_lifecycle_state(request.app)
+        if lifecycle.draining or lifecycle.phase == "draining":
+            return JSONResponse(
+                {"status": "not_ready", "reason": "shutdown_in_progress"},
+                status_code=503,
+            )
         # Engine stats
         try:
             from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler as _WS
@@ -6998,31 +7588,33 @@ async def readiness_check():
                         pass
         except _REQUEST_GUARD_EXCEPTIONS:
             pass
-        from fastapi.responses import JSONResponse as _JR
-
-        return _JR(body, status_code=(200 if ready else 503))
-    except _REQUEST_GUARD_EXCEPTIONS as e:
-        return {"status": "not_ready", "error": str(e)}
+        return JSONResponse(body, status_code=(200 if ready else 503))
+    except _READINESS_GUARD_EXCEPTIONS as exc:
+        logger.debug(f"Readiness check failed: {type(exc).__name__}: {exc}")
+        return JSONResponse(
+            {"status": "not_ready", "reason": "dependency_check_failed"},
+            status_code=503,
+        )
 
 
 # /health/ready alias for some orchestrators (registered conditionally below)
-async def readiness_alias():
-    return await readiness_check()
+async def readiness_alias(request: Request) -> JSONResponse:
+    return await readiness_check(request)
 
 
 # Register control-plane health endpoints (works in both minimal and full modes)
 try:
     if route_enabled("health"):
-        app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
-        app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
-        app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+        app.add_api_route("/health", health_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+        app.add_api_route("/ready", readiness_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+        app.add_api_route("/health/ready", readiness_alias, methods=["GET", "HEAD"], openapi_extra={"security": []})
     else:
         logger.info("Route disabled by policy: health (/health, /ready, /health/ready)")
 except _STARTUP_GUARD_EXCEPTIONS as _health_rt_err:
     logger.warning(f"Route gating error for health; including by default. Error: {_health_rt_err}")
-    app.add_api_route("/health", health_check, methods=["GET"], openapi_extra={"security": []})
-    app.add_api_route("/ready", readiness_check, methods=["GET"], openapi_extra={"security": []})
-    app.add_api_route("/health/ready", readiness_alias, methods=["GET"], openapi_extra={"security": []})
+    app.add_api_route("/health", health_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+    app.add_api_route("/ready", readiness_check, methods=["GET", "HEAD"], openapi_extra={"security": []})
+    app.add_api_route("/health/ready", readiness_alias, methods=["GET", "HEAD"], openapi_extra={"security": []})
 
 # Import-time CI/startup guard: fail immediately if the route table contains duplicates.
 _fail_on_duplicate_route_method_pairs(app, context="module import")

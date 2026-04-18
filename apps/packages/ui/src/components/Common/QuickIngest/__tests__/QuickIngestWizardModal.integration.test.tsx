@@ -158,6 +158,7 @@ vi.mock("lucide-react", () => {
     "ArrowLeft",
     "ArrowRight",
     "ChevronDown",
+    "ChevronRight",
     "Minimize2",
     "XCircle",
     "Info",
@@ -355,6 +356,19 @@ const ReopenableConfigStepHarness: React.FC<{ onClose: () => void }> = ({
       />
     </IngestWizardProvider>
   )
+}
+
+/**
+ * Expand the "Advanced options" collapsible in the configure step.
+ * Must be called after navigating to step 2 (configure).
+ * No-ops if already expanded (toggle shows "Hide advanced options").
+ */
+const expandAdvancedOptions = async (user: ReturnType<typeof userEvent.setup>) => {
+  const collapsed = screen.queryByText("Advanced options")
+  if (collapsed) {
+    await user.click(collapsed)
+  }
+  // If already expanded ("Hide advanced options" is showing), nothing to do.
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +654,111 @@ describe("QuickIngestWizardModal — full wizard flow integration", () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it("Step 5 — renders skipped duplicates separately and includes them in the summary", async () => {
+    const user = userEvent.setup()
+    render(<WizardTestHarness onClose={onClose} />)
+
+    const textarea = screen.getByPlaceholderText(/https:\/\/example\.com/i)
+    await user.type(textarea, "https://example.com/article")
+    await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText("https://example.com/article")).toBeTruthy()
+    })
+
+    await user.click(screen.getByText(/Configure 1 items/i))
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /standard preset/i })
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByText("Next"))
+
+    await waitFor(() => {
+      expect(screen.getByText("Ready to Process")).toBeTruthy()
+    })
+
+    await user.click(screen.getByText("Start Processing"))
+
+    await waitFor(() => {
+      expect(screen.getByRole("list")).toBeTruthy()
+    })
+
+    expect(ctxRef).not.toBeNull()
+
+    ctxRef!.setResults([
+      {
+        id: "test-success-1",
+        status: "ok",
+        outcome: "ingested",
+        url: "https://example.com/article",
+        type: "web",
+        title: "Fresh Article",
+      },
+      {
+        id: "test-skipped-1",
+        status: "ok",
+        outcome: "skipped",
+        url: "https://example.com/duplicate",
+        type: "web",
+        title: "Existing Article",
+        message: "This item already exists in your library. Use the ‘Deep’ preset to overwrite.",
+      },
+      {
+        id: "test-error-1",
+        status: "error",
+        outcome: "failed",
+        url: "https://example.com/error",
+        type: "web",
+        title: "Broken Article",
+        error: "Upload failed",
+      },
+    ])
+
+    ctxRef!.updateProcessingState({
+      status: "complete",
+      perItemProgress: [
+        {
+          id: "test-success-1",
+          status: "complete",
+          progressPercent: 100,
+          currentStage: "done",
+          estimatedRemaining: 0,
+        },
+        {
+          id: "test-skipped-1",
+          status: "complete",
+          progressPercent: 100,
+          currentStage: "done",
+          estimatedRemaining: 0,
+        },
+        {
+          id: "test-error-1",
+          status: "failed",
+          progressPercent: 100,
+          currentStage: "failed",
+          estimatedRemaining: 0,
+          error: "Upload failed",
+        },
+      ],
+      elapsed: 2.5,
+    })
+
+    ctxRef!.goNext()
+
+    await waitFor(() => {
+      expect(screen.getByTestId("wizard-results-step")).toBeTruthy()
+    })
+
+    expect(screen.getByText("Skipped (1)")).toBeTruthy()
+    expect(screen.getByText("Existing Article")).toBeTruthy()
+    expect(
+      screen.getByText(/1 succeeded.*1 skipped.*1 failed/i)
+    ).toBeTruthy()
+  })
+
   // -------------------------------------------------------------------------
   // Full flow with multiple items
   // -------------------------------------------------------------------------
@@ -766,9 +885,16 @@ describe("QuickIngestWizardModal — real configure step", () => {
       name: /ingestion options – analysis/i,
     })
     expect(analysisToggle).toBeInTheDocument()
+    expect(screen.getByText("Next")).toBeInTheDocument()
+
+    // Advanced controls are hidden by default
+    expect(screen.queryByTitle("Captions toggle")).not.toBeInTheDocument()
+    expect(screen.queryByText("Review before saving")).not.toBeInTheDocument()
+
+    // Expand advanced options to reveal them
+    await expandAdvancedOptions(user)
     expect(screen.getByText("Review before saving")).toBeInTheDocument()
     expect(screen.getByTitle("Captions toggle")).toBeInTheDocument()
-    expect(screen.getByText("Next")).toBeInTheDocument()
 
     await user.click(analysisToggle)
 
@@ -785,6 +911,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     )
     await user.click(screen.getByRole("button", { name: /Add URLs to queue/i }))
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageInput = await screen.findByTitle("Audio language")
     const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
@@ -822,6 +950,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     const audioLanguageInput = await screen.findByTitle("Audio language")
     const diarizationToggle = screen.getByLabelText("Audio diarization toggle")
     const transcriptionModelSelect = screen.getByLabelText("Transcription model")
@@ -848,6 +978,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageSelect = await screen.findByLabelText("Audio language")
     await user.selectOptions(audioLanguageSelect, "en-US")
@@ -877,6 +1009,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const audioLanguageSelect = await screen.findByLabelText("Audio language")
     await user.selectOptions(audioLanguageSelect, "en-US")
@@ -918,6 +1052,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       typeDefaults: {
@@ -955,6 +1091,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
@@ -1005,6 +1143,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       common: {
@@ -1043,6 +1183,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
@@ -1086,6 +1228,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
     })
 
     await user.click(screen.getByText(/Configure 1 items/i))
+
+    await expandAdvancedOptions(user)
 
     const transcriptionModelSelect = await screen.findByLabelText(
       "Transcription model"
@@ -1133,6 +1277,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       advancedValues: {
@@ -1176,6 +1322,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     expect(ctxRef).not.toBeNull()
     ctxRef!.setCustomOptions({
       advancedValues: {
@@ -1218,6 +1366,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByText(/Configure 1 items/i))
 
+    await expandAdvancedOptions(user)
+
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "whisper-large-v3" })).toBeTruthy()
     })
@@ -1225,6 +1375,8 @@ describe("QuickIngestWizardModal — real configure step", () => {
 
     await user.click(screen.getByRole("button", { name: /hide configure step/i }))
     await user.click(screen.getByRole("button", { name: /show configure step/i }))
+
+    await expandAdvancedOptions(user)
 
     await waitFor(() => {
       expect(screen.getByRole("option", { name: "parakeet-standard" })).toBeTruthy()

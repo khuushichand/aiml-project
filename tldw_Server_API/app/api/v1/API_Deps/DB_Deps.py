@@ -26,6 +26,9 @@ except ImportError:
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.backends.factory import (
+    reset_managed_sqlite_backends,
+)
 from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.media_db.api import MediaDbFactory, MediaDbSession
@@ -164,7 +167,6 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
         return factory
 
     # --- Factory Not Cached: Create New One ---
-    logger.info(f"No cached MediaDbFactory found for user_id: {user_id}. Initializing.")
     with _user_db_lock:
         factory = _media_db_factories.get(user_id)
         if factory:
@@ -183,7 +185,7 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
         try:
             if use_shared_backend:
                 db_path = Path(":memory:")
-                logger.info(f"Initializing MediaDbFactory for user {user_id} using shared Postgres backend")
+                init_target = "shared_postgresql"
                 factory = MediaDbFactory(
                     db_path=str(db_path),
                     client_id=str(current_user.id),
@@ -191,14 +193,19 @@ def _get_or_create_media_db_factory(current_user: User) -> MediaDbFactory:
                 )
             else:
                 db_path = _get_db_path_for_user(user_id)
-                logger.info(f"Initializing MediaDbFactory for user {user_id} at path: {db_path}")
+                init_target = str(db_path.resolve())
                 factory = MediaDbFactory.for_sqlite_path(
                     db_path=str(db_path),
                     client_id=str(current_user.id),
                 )
 
+            logger.info(
+                "Initializing MediaDbFactory user_id={} backend={} target={}",
+                user_id,
+                "postgresql" if use_shared_backend else "sqlite",
+                init_target,
+            )
             _media_db_factories[user_id] = factory
-            logger.info(f"MediaDbFactory created and cached successfully for user {user_id}")
             try:
                 if is_test_mode():
                     logger.warning(
@@ -338,6 +345,15 @@ def get_media_db_path_for_rag(media_db: Any) -> str | None:
 
 def reset_media_db_cache() -> None:
     """Clear cached Media DB factories and any legacy cached instances."""
+    def _warn(step: str, exc: Exception) -> None:
+        logger.warning(
+            "Failed {} during media DB cache reset: {}",
+            step,
+            exc,
+            exc_info=True,
+        )
+
+    managed_backends = []
     with _user_db_lock:
         try:
             # Attempt to close outstanding connections for cache entries
@@ -348,31 +364,50 @@ def reset_media_db_cache() -> None:
             )
             for db in list(values_iter):  # type: ignore[arg-type]
                 try:
+                    backend = db.backend
+                except AttributeError:
+                    backend = None
+                except RuntimeError as exc:
+                    _warn("legacy DB backend", exc)
+                    backend = None
+                if backend is not None:
+                    managed_backends.append(backend)
+                try:
                     if hasattr(db, "release_context_connection"):
                         db.release_context_connection()
                     if hasattr(db, "close_connection"):
                         db.close_connection()
-                except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
-                    pass
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
+                except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                    _warn("legacy DB connection cleanup", exc)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _warn("legacy DB cache iteration", exc)
         try:
             _user_db_instances.clear()  # type: ignore[attr-defined]
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _warn("legacy DB cache clear", exc)
         try:
             for factory in list(_media_db_factories.values()):  # type: ignore[attr-defined]
                 try:
+                    backend = factory.backend
+                except AttributeError:
+                    backend = None
+                except RuntimeError as exc:
+                    _warn("factory backend", exc)
+                    backend = None
+                if backend is not None:
+                    managed_backends.append(backend)
+                try:
                     if hasattr(factory, "close"):
                         factory.close()
-                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
-                    pass
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                    _warn("factory close", exc)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _warn("factory cache iteration", exc)
         try:
             _media_db_factories.clear()  # type: ignore[attr-defined]
-        except (AttributeError, RuntimeError, TypeError, ValueError):
-            pass
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _warn("factory cache clear", exc)
+        reset_managed_sqlite_backends(mode="hard", backends=managed_backends)
 
 
 async def try_get_media_db_for_user(

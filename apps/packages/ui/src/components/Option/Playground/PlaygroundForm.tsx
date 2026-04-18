@@ -33,6 +33,7 @@ import { isFirefoxTarget } from "@/config/platform"
 import { handleChatInputKeyDown } from "@/utils/key-down"
 import { getProviderDisplayName } from "@/utils/provider-registry"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useChatMoodBadgePreference } from "@/hooks/useChatMoodBadgePreference"
 import { useTabMentions } from "~/hooks/useTabMentions"
 import { useFocusShortcuts } from "~/hooks/keyboard"
 // isMac moved to PlaygroundSendControl
@@ -401,10 +402,7 @@ export const PlaygroundForm = ({
     "allowExternalImages",
     DEFAULT_CHAT_SETTINGS.allowExternalImages
   )
-  const [showMoodBadge, setShowMoodBadge] = useStorage(
-    "chatShowMoodBadge",
-    true
-  )
+  const [showMoodBadge, setShowMoodBadge] = useChatMoodBadgePreference()
   const researchContext = React.useMemo(
     () =>
       attachedResearchContext
@@ -735,6 +733,15 @@ export const PlaygroundForm = ({
     ]
   )
   const voiceChatAvailable = voiceConversationAvailability.available
+  const voiceChatUnavailableReason = React.useMemo(() => {
+    const fallback = t(
+      "playground:voiceChat.unavailableBody",
+      "Connect to a tldw server with audio chat streaming enabled."
+    )
+    return voiceConversationAvailability.message
+      ? t(voiceConversationAvailability.message, fallback)
+      : fallback
+  }, [t, voiceConversationAvailability.message])
   const voiceChat = useVoiceChatStream({
     active: voiceChatEnabled && voiceChatAvailable,
     onTranscript: (text) => {
@@ -3505,6 +3512,7 @@ export const PlaygroundForm = ({
       onToggleKnowledgePanel={toggleKnowledgePanel}
       voiceChatEnabled={voiceChatEnabled}
       voiceChatAvailable={voiceChatAvailable}
+      voiceChatUnavailableReason={voiceChatUnavailableReason}
       isSending={isSending}
       onVoiceChatToggle={handleVoiceChatToggle}
       webSearch={webSearch}
@@ -3800,6 +3808,7 @@ export const PlaygroundForm = ({
       onOpenRawRequest={openRawRequestModal}
       voiceChatAvailable={voiceChatAvailable}
       voiceChatEnabled={voiceChatEnabled}
+      voiceChatUnavailableReason={voiceChatUnavailableReason}
       voiceChatState={voiceChat.state}
       voiceChatStatusLabel={voiceChatStatusLabel}
       onVoiceChatToggle={handleVoiceChatToggle}

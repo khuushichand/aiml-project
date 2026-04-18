@@ -63,9 +63,23 @@ def _get_token_service():
     return ShareTokenService(_get_repo())
 
 
+_cached_audit_service: "ShareAuditService | None" = None  # noqa: F821
+
+
 def _get_audit_service():
     from tldw_Server_API.app.core.Sharing.share_audit_service import ShareAuditService
-    return ShareAuditService(_get_repo())
+    global _cached_audit_service
+    if _cached_audit_service is None:
+        _cached_audit_service = ShareAuditService()
+    return _cached_audit_service
+
+
+async def shutdown_sharing_audit_service() -> None:
+    """Stop the cached ShareAuditService (and its writer) during app shutdown."""
+    global _cached_audit_service
+    if _cached_audit_service is not None:
+        await _cached_audit_service.stop()
+        _cached_audit_service = None
 
 
 def _client_ip(request: Request) -> str:

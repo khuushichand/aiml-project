@@ -6,7 +6,13 @@ import {
   classifySmokeIssues,
   SMOKE_LOAD_TIMEOUT
 } from "./smoke.setup"
-import { waitForAppShell } from "../utils/helpers"
+import {
+  dismissConnectionModals,
+  getVisibleAntdSelectOption,
+  getAntdSelectTrigger,
+  stubNotificationsApi,
+  waitForAppShell
+} from "../utils/helpers"
 import type { Page, Route } from "@playwright/test"
 
 const LOAD_TIMEOUT = SMOKE_LOAD_TIMEOUT
@@ -39,13 +45,37 @@ const fulfillJson = async (route: Route, status: number, data: unknown) => {
   })
 }
 
+const stubDocsInfo = async (page: Page) => {
+  await page.route("**/api/v1/config/docs-info", async (route) => {
+    await fulfillJson(route, 200, {
+      info: { version: "e2e" },
+      capabilities: {}
+    })
+  })
+}
+
+const stubAudioSmokeBootstrapApis = async (page: Page) => {
+  await stubNotificationsApi(page)
+  await page.route("**/api/v1/audio/voices**", async (route) => {
+    await fulfillJson(route, 200, {
+      voices: [{ id: "af_heart", name: "AF Heart", provider: "kokoro" }]
+    })
+  })
+}
+
 async function openSpeechInputSourcePicker(page: Page) {
-  const inputSourcePicker = page
-    .locator('[aria-label="Speech playground input source"]')
-    .first()
+  const inputSourcePicker = getAntdSelectTrigger(page, {
+    ariaLabel: "Speech playground input source"
+  })
+  const inputSourcePickerVisible = await inputSourcePicker.isVisible().catch(() => false)
+  if (!inputSourcePickerVisible) {
+    const roundTripMode = page.getByRole("radio", { name: /^Round-trip$/i }).first()
+    if (await roundTripMode.isVisible().catch(() => false)) {
+      await roundTripMode.check({ force: true })
+    }
+  }
   await expect(inputSourcePicker).toBeVisible({ timeout: LOAD_TIMEOUT })
-  await inputSourcePicker.focus()
-  await page.keyboard.press("ArrowDown")
+  await inputSourcePicker.click({ force: true })
 }
 
 test.describe("Stage 7 audio regression gate", () => {
@@ -54,6 +84,7 @@ test.describe("Stage 7 audio regression gate", () => {
     diagnostics
   }) => {
     await seedAuth(page)
+    await stubAudioSmokeBootstrapApis(page)
 
     for (const route of AUDIO_ROUTES) {
       diagnostics.console.length = 0
@@ -114,8 +145,47 @@ test.describe("Stage 7 audio regression gate", () => {
     }
   })
 
+  test("audio smoke does not surface background bootstrap errors on /stt", async ({
+    page,
+    diagnostics
+  }) => {
+    await seedAuth(page)
+    await stubAudioSmokeBootstrapApis(page)
+
+    await page.goto("/tts", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+    await waitForAppShell(page, LOAD_TIMEOUT)
+
+    diagnostics.console.length = 0
+    diagnostics.pageErrors.length = 0
+    diagnostics.requestFailures.length = 0
+
+    const response = await page.goto("/stt", {
+      waitUntil: "domcontentloaded",
+      timeout: LOAD_TIMEOUT
+    })
+
+    const status = response?.status() ?? 0
+    expect(status, "Expected /stt to return HTTP 2xx/3xx").toBeGreaterThanOrEqual(200)
+    expect(status, "Expected /stt to return HTTP 2xx/3xx").toBeLessThan(400)
+    await waitForAppShell(page, LOAD_TIMEOUT)
+
+    const issues = getCriticalIssues(diagnostics)
+    const classified = classifySmokeIssues("/stt", issues)
+
+    expect(
+      classified.unexpectedConsoleErrors,
+      `Unexpected console errors on /stt: ${classified.unexpectedConsoleErrors
+        .map((entry) => entry.text)
+        .join(" | ")}`
+    ).toHaveLength(0)
+  })
+
   test("tts ElevenLabs timeout state shows retry and recovers", async ({ page }) => {
     await seedAuth(page)
+    await stubDocsInfo(page)
     await page.addInitScript(() => {
       try {
         localStorage.setItem("ttsProvider", "elevenlabs")
@@ -178,6 +248,7 @@ test.describe("Stage 7 audio regression gate", () => {
     ).toBeVisible({ timeout: LOAD_TIMEOUT })
 
     shouldFailMetadata = false
+    await dismissConnectionModals(page)
     await timeoutAlert.getByRole("button", { name: /^Retry$/i }).click()
 
     await expect.poll(() => voicesGetHits).toBeGreaterThanOrEqual(2)
@@ -187,6 +258,7 @@ test.describe("Stage 7 audio regression gate", () => {
 
   test("speech ElevenLabs timeout state shows retry and recovers", async ({ page }) => {
     await seedAuth(page)
+    await stubDocsInfo(page)
     await page.addInitScript(() => {
       try {
         localStorage.setItem("ttsProvider", "elevenlabs")
@@ -250,6 +322,7 @@ test.describe("Stage 7 audio regression gate", () => {
     ).toBeVisible({ timeout: LOAD_TIMEOUT })
 
     shouldFailMetadata = false
+    await dismissConnectionModals(page)
     await timeoutAlert.getByRole("button", { name: /^Retry$/i }).click()
 
     await expect.poll(() => voicesGetHits).toBeGreaterThanOrEqual(2)
@@ -257,15 +330,17 @@ test.describe("Stage 7 audio regression gate", () => {
     await expect(timeoutAlert).toHaveCount(0)
   })
 
-  test("speech keeps mic-only input source options", async ({ page }) => {
+  test("speech exposes the dedicated mic input source picker", async ({ page }) => {
     await seedAuth(page)
+    await stubDocsInfo(page)
     await page.goto("/speech", { waitUntil: "domcontentloaded", timeout: LOAD_TIMEOUT })
     await waitForAppShell(page, LOAD_TIMEOUT)
+    await dismissConnectionModals(page)
 
     await openSpeechInputSourcePicker(page)
-    await expect(page.getByRole("option", { name: /Default microphone/i })).toBeVisible()
-    await expect(page.getByRole("option", { name: /Tab audio/i })).toHaveCount(0)
-    await expect(page.getByRole("option", { name: /System audio/i })).toHaveCount(0)
+    await expect(getVisibleAntdSelectOption(page, { text: /Default microphone/i })).toBeVisible()
+    await expect(getVisibleAntdSelectOption(page, { text: /Tab audio/i })).toHaveCount(0)
+    await expect(getVisibleAntdSelectOption(page, { text: /System audio/i })).toHaveCount(0)
   })
 
   test("stt transcription-model timeout state shows retry and recovers", async ({

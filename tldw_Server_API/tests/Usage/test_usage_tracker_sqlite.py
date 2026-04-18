@@ -227,10 +227,22 @@ async def test_log_llm_usage_derives_token_name_from_key(monkeypatch):
 
     key_hash = "kh-" + uuid.uuid4().hex
     if pool.pool:
-        await pool.execute("INSERT INTO api_keys (user_id, key_hash, name) VALUES ($1, $2, $3)", 1, key_hash, "DerivedName")
+        await pool.execute(
+            "INSERT INTO api_keys (user_id, key_hash, name, scope) VALUES ($1, $2, $3, $4)",
+            1,
+            key_hash,
+            "DerivedName",
+            "read",
+        )
         key_id = await pool.fetchval("SELECT id FROM api_keys WHERE key_hash = $1", key_hash)
     else:
-        await pool.execute("INSERT INTO api_keys (user_id, key_hash, name) VALUES (?, ?, ?)", 1, key_hash, "DerivedName")
+        await pool.execute(
+            "INSERT INTO api_keys (user_id, key_hash, name, scope) VALUES (?, ?, ?, ?)",
+            1,
+            key_hash,
+            "DerivedName",
+            "read",
+        )
         key_id = await pool.fetchval("SELECT id FROM api_keys WHERE key_hash = ?", key_hash)
     assert key_id is not None
 

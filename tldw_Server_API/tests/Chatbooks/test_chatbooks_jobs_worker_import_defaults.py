@@ -52,7 +52,7 @@ async def test_handle_import_defaults_import_media_to_false(tmp_path):
                 "import_media": import_media,
                 "import_embeddings": import_embeddings,
             }
-            return True, "ok", []
+            return True, "ok", {"imported_items": {"note": 1}, "warnings": []}
 
     service = FakeService()
 
@@ -62,7 +62,7 @@ async def test_handle_import_defaults_import_media_to_false(tmp_path):
         job_id="job-1",
     )
 
-    assert result == {"warnings": []}
+    assert result == {"imported_items": {"note": 1}, "warnings": []}
     assert service.called_args is not None
     assert service.called_args["import_media"] is False
     assert service.import_job.status == ImportStatus.COMPLETED

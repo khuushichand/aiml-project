@@ -986,6 +986,20 @@ class TestCharacterAPIIntegration:
         )
         assert response.status_code == 422, response.text
 
+    def test_create_character_strips_whitespace_from_tags_integration(
+        self, client: TestClient
+    ):
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload(
+                name=f"TagTrim_{uuid.uuid4().hex[:6]}",
+                tags=["  alpha  "],
+            ),
+        )
+
+        assert response.status_code == 201, response.text
+        assert response.json()["tags"] == ["alpha"]
+
     def test_character_world_book_attachment_lifecycle_integration(
         self, client: TestClient
     ):
@@ -1033,6 +1047,10 @@ class TestCharacterAPIIntegration:
             f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books/{world_book_id}"
         )
         assert detach_response.status_code == 200, detach_response.text
+        detach_payload = detach_response.json()
+        assert int(detach_payload["world_book_id"]) == world_book_id
+        assert int(detach_payload["detached_from_character_id"]) == character_id
+        assert "character_id" not in detach_payload
 
         detached_list_response = client.get(
             f"{CHARACTERS_ENDPOINT_PREFIX}/{character_id}/world-books"
@@ -1044,6 +1062,55 @@ class TestCharacterAPIIntegration:
             if "world_book_id" in item
         }
         assert world_book_id not in detached_ids
+
+    def test_world_book_delete_and_entry_delete_report_explicit_resource_ids(
+        self, client: TestClient
+    ):
+        world_book_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/world-books",
+            json={
+                "name": f"WBDelete_{uuid.uuid4().hex[:6]}",
+                "description": "Delete response integration test",
+                "scan_depth": 3,
+                "token_budget": 500,
+                "recursive_scanning": False,
+                "enabled": True,
+            },
+        )
+        assert world_book_response.status_code == 201, world_book_response.text
+        world_book_id = int(world_book_response.json()["id"])
+
+        entry_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/world-books/{world_book_id}/entries",
+            json={
+                "keywords": ["delete-response-keyword"],
+                "content": "Delete response entry content",
+                "priority": 1,
+                "enabled": True,
+                "case_sensitive": False,
+                "regex_match": False,
+                "whole_word_match": True,
+                "metadata": {"source": "integration"},
+            },
+        )
+        assert entry_response.status_code == 201, entry_response.text
+        entry_id = int(entry_response.json()["id"])
+
+        entry_delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/world-books/entries/{entry_id}"
+        )
+        assert entry_delete_response.status_code == 200, entry_delete_response.text
+        entry_delete_payload = entry_delete_response.json()
+        assert int(entry_delete_payload["entry_id"]) == entry_id
+        assert "character_id" not in entry_delete_payload
+
+        world_book_delete_response = client.delete(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/world-books/{world_book_id}"
+        )
+        assert world_book_delete_response.status_code == 200, world_book_delete_response.text
+        world_book_delete_payload = world_book_delete_response.json()
+        assert int(world_book_delete_payload["world_book_id"]) == world_book_id
+        assert "character_id" not in world_book_delete_payload
 
     def test_character_world_book_attachment_missing_references_integration(
         self, client: TestClient
@@ -1286,6 +1353,21 @@ class TestCharacterAPIIntegration:
         restored_db = test_db.get_character_card_by_id(char_id)
         assert restored_db is not None
         assert int(restored_db["deleted"]) == 0
+
+    def test_restore_character_active_row_returns_409(self, client: TestClient):
+        create_response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/",
+            json=create_sample_character_payload("RestoreActiveAPI"),
+        )
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+
+        response = client.post(
+            f"{CHARACTERS_ENDPOINT_PREFIX}/{created['id']}/restore?expected_version={created['version']}"
+        )
+
+        assert response.status_code == 409, response.text
+        assert "already active" in response.json()["detail"].lower()
 
     def test_restore_character_version_conflict_integration(
         self, client: TestClient, test_db: CharactersRAGDB

@@ -1,0 +1,54 @@
+import sqlite3
+
+import pytest
+
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+
+pytestmark = pytest.mark.unit
+
+
+def _downgrade_schema_version_to_v38(db_path: str) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE db_schema_version
+               SET version = 38
+             WHERE schema_name = 'rag_char_chat_schema'
+            """
+        )
+        conn.commit()
+
+
+def test_sqlite_migration_v38_to_v39_reopens_legacy_database(tmp_path) -> None:
+    db_path = tmp_path / "chacha_v38.db"
+
+    db = CharactersRAGDB(db_path=str(db_path), client_id="migration-v39-bootstrap")
+    db.close_connection()
+
+    _downgrade_schema_version_to_v38(str(db_path))
+
+    migrated_db = CharactersRAGDB(db_path=str(db_path), client_id="migration-v39-reopen")
+    migrated_db.close_connection()
+
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute(
+            "SELECT version FROM db_schema_version WHERE schema_name = ?",
+            ("rag_char_chat_schema",),
+        ).fetchone()[0]
+        assert version == CharactersRAGDB._CURRENT_SCHEMA_VERSION  # nosec B101
+
+        workspace_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info('workspaces')").fetchall()
+        }
+        assert "study_materials_policy" in workspace_cols  # nosec B101
+
+        quiz_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info('quizzes')").fetchall()
+        }
+        assert "workspace_id" in quiz_cols  # nosec B101
+
+        deck_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info('decks')").fetchall()
+        }
+        assert "workspace_id" in deck_cols  # nosec B101

@@ -97,6 +97,35 @@ async def test_log_with_ip_and_user_agent(audit_service):
 
 
 @pytest.mark.asyncio
+async def test_share_audit_service_uses_unified_writer_when_provided(tmp_path):
+    from tldw_Server_API.app.core.Sharing.unified_share_audit import UnifiedShareAuditWriter
+
+    writer = UnifiedShareAuditWriter(db_path=str(tmp_path / "audit_shared.db"))
+    # Pass no repo so the service *must* use the writer
+    service = ShareAuditService(writer=writer)
+
+    try:
+        await service.log(
+            SHARE_CREATED,
+            resource_type="workspace",
+            resource_id="ws-1",
+            owner_user_id=1,
+            actor_user_id=2,
+            share_id=42,
+            metadata={"scope_type": "team"},
+        )
+        events = await service.query(owner_user_id=1)
+    finally:
+        await writer.stop()
+
+    assert len(events) == 1
+    assert events[0]["owner_user_id"] == 1
+    assert events[0]["actor_user_id"] == 2
+    assert events[0]["share_id"] == 42
+
+
+
+@pytest.mark.asyncio
 async def test_log_raises_audit_log_error_when_repo_write_fails(audit_service, monkeypatch):
     """Audit logging failures should propagate as AuditLogError."""
     async def _fail(*args, **kwargs):

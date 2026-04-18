@@ -8,9 +8,10 @@ import { HelpCircle } from "lucide-react"
 import { useKnowledgeQA } from "../KnowledgeQAProvider"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { cn } from "@/libs/utils"
+import { getRagSourceOptions } from "@/services/rag/sourceMetadata"
 
 export function BasicSettings() {
-  const { settings, updateSetting } = useKnowledgeQA()
+  const { settings, updateSetting, preset } = useKnowledgeQA()
   const { capabilities, loading: capsLoading } = useServerCapabilities()
   const webFallbackHelpId = React.useId()
   const webFallbackHelpText =
@@ -52,19 +53,18 @@ export function BasicSettings() {
         <p className="text-xs text-text-muted">
           How many documents to retrieve (5-10 for quick, 20+ for thorough)
         </p>
+        {settings.top_k > 30 && preset === "thorough" && (
+          <p className="text-xs text-warn">
+            High source count with Deep preset may cause slow responses.
+          </p>
+        )}
       </div>
 
       {/* Source Types */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Search Sources</label>
         <div className="space-y-2">
-          {[
-            { value: "media_db", label: "Documents & Media" },
-            { value: "notes", label: "Notes" },
-            { value: "characters", label: "Character Cards" },
-            { value: "chats", label: "Chat History" },
-            { value: "kanban", label: "Kanban" },
-          ].map((source) => (
+          {getRagSourceOptions().map((source) => (
             <label key={source.value} className="flex items-center gap-2">
               <input
                 type="checkbox"

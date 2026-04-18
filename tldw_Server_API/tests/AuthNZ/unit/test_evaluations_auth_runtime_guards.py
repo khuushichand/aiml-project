@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
 from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ.settings import reset_settings
 
 
@@ -113,3 +114,25 @@ async def test_get_eval_request_user_testing_bypass_allows_under_explicit_pytest
     )
 
     assert getattr(user, "id", None) == 7
+
+
+def test_enforce_heavy_admin_only_treats_on_as_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "on")
+
+    with pytest.raises(HTTPException) as exc:
+        eval_auth.enforce_heavy_evaluations_admin(
+            SimpleNamespace(roles=[], permissions=[])
+        )
+
+    assert exc.value.status_code == 403
+
+
+def test_get_evaluation_identity_uses_stable_user_scope() -> None:
+    identity = eval_auth.get_evaluation_identity(
+        User(id="tenant-user", username="tenant", email=None, is_active=True)
+    )
+
+    assert identity.user_scope == "tenant-user"
+    assert identity.created_by == "tenant-user"
+    assert identity.rate_limit_subject == "tenant-user"
+    assert identity.webhook_user_id == "user_tenant-user"

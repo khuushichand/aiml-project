@@ -8,11 +8,16 @@ import {
   useCreateFlashcardsBulkMutation,
   useDecksQuery,
   useGenerateFlashcardsMutation,
+  useGlobalFlashcardTagSuggestionsQuery,
   useImportFlashcardsMutation,
   useImportFlashcardsApkgMutation,
   useImportFlashcardsJsonMutation,
   useImportLimitsQuery,
-  usePreviewStructuredQaImportMutation
+  usePreviewStructuredQaImportMutation,
+  useStudyPackCreateMutation,
+  useStudyPackJobQuery,
+  useStudyPackQuery,
+  useStudyPackRegenerateMutation
 } from "../../hooks"
 import {
   deleteFlashcard,
@@ -87,11 +92,16 @@ vi.mock("../../hooks", () => ({
   useCreateFlashcardsBulkMutation: vi.fn(),
   useDecksQuery: vi.fn(),
   useGenerateFlashcardsMutation: vi.fn(),
+  useGlobalFlashcardTagSuggestionsQuery: vi.fn(),
   useImportFlashcardsMutation: vi.fn(),
   useImportFlashcardsApkgMutation: vi.fn(),
   useImportFlashcardsJsonMutation: vi.fn(),
   useImportLimitsQuery: vi.fn(),
-  usePreviewStructuredQaImportMutation: vi.fn()
+  usePreviewStructuredQaImportMutation: vi.fn(),
+  useStudyPackCreateMutation: vi.fn(),
+  useStudyPackJobQuery: vi.fn(),
+  useStudyPackQuery: vi.fn(),
+  useStudyPackRegenerateMutation: vi.fn()
 }))
 
 vi.mock("@/services/flashcards", async () => {
@@ -103,6 +113,15 @@ vi.mock("@/services/flashcards", async () => {
     listFlashcards: vi.fn(),
     exportFlashcards: vi.fn(),
     exportFlashcardsFile: vi.fn()
+  }
+})
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom")
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useInRouterContext: () => false
   }
 })
 
@@ -181,12 +200,33 @@ describe("ImportExportTab import result details", () => {
       mutateAsync: vi.fn(),
       isPending: false
     } as any)
+    vi.mocked(useGlobalFlashcardTagSuggestionsQuery).mockReturnValue({
+      data: { items: [] },
+      isFetching: false,
+      isError: false
+    } as any)
     vi.mocked(useDecksQuery).mockReturnValue({
       data: [],
       isLoading: false
     } as any)
     vi.mocked(useImportLimitsQuery).mockReturnValue({
       data: null
+    } as any)
+    vi.mocked(useStudyPackCreateMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
+    } as any)
+    vi.mocked(useStudyPackJobQuery).mockReturnValue({
+      data: null,
+      isLoading: false
+    } as any)
+    vi.mocked(useStudyPackQuery).mockReturnValue({
+      data: null,
+      isLoading: false
+    } as any)
+    vi.mocked(useStudyPackRegenerateMutation).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false
     } as any)
     vi.mocked(listFlashcards).mockResolvedValue({
       items: [],
@@ -352,6 +392,11 @@ describe("ImportExportTab import result details", () => {
     fireEvent.click(screen.getByTestId("flashcards-import-button"))
 
     expect(screen.getByText("Confirm large import")).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "Large imports may take a moment to process. You'll have 30 seconds to undo after import completes."
+      )
+    ).toBeInTheDocument()
     expect(mutateAsync).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByTestId("flashcards-import-confirm-large"))

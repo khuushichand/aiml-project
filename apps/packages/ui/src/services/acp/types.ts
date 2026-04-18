@@ -320,6 +320,18 @@ export interface ACPUpdate {
   data: Record<string, unknown>
 }
 
+/**
+ * Discriminated union for parsed ACP update messages.
+ * Provides type-safe access to message fields based on the `role` discriminant.
+ */
+export type ParsedUpdateMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string }
+  | { role: "tool"; toolName: string; toolArgs: Record<string, unknown> }
+  | { role: "tool_result"; toolName: string; result: unknown }
+  | { role: "error"; content: string }
+  | { role: "system"; content: string }
+
 export interface ACPPendingPermission {
   request_id: string
   tool_name: string
