@@ -315,6 +315,8 @@ _CHACHA_NONCRITICAL_EXCEPTIONS = (
     ConflictError,
 )
 
+from tldw_Server_API.app.core.DB_Management.chacha.conversation_store import ConversationStore
+
 
 class BackendCursorAdapter:
     """Adapter exposing QueryResult via a cursor-like interface."""
@@ -5146,6 +5148,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             backend=backend,
             config=config,
         )
+        self.conversation_store = ConversationStore(self)
 
         if self.backend_type != BackendType.SQLITE:
             self.is_memory_db = False
@@ -32561,6 +32564,53 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
         except CharactersRAGDBError as e:
             logger.error(f"Error fetching latest sync log change_id: {e}")
             raise
+
+
+def _delegate_conversation_store_method(method_name: str):
+    def _delegated(self: CharactersRAGDB, *args, **kwargs):
+        return getattr(self.conversation_store, method_name)(*args, **kwargs)
+
+    _delegated.__name__ = method_name
+    _delegated.__qualname__ = f"CharactersRAGDB.{method_name}"
+    return _delegated
+
+
+CharactersRAGDB._search_conversations_page_impl = CharactersRAGDB.search_conversations_page
+
+for _conversation_store_method in (
+    "_ensure_conversation_settings_table",
+    "upsert_conversation_settings",
+    "get_conversation_settings",
+    "_normalize_conversation_state",
+    "_normalize_conversation_character_scope",
+    "_conversation_character_scope_clause",
+    "_conversation_deleted_scope_clause",
+    "_normalize_scope",
+    "_normalize_conversation_assistant_identity",
+    "add_conversation",
+    "get_conversation_by_id",
+    "get_conversations_for_character",
+    "count_conversations_for_user",
+    "count_conversations_for_user_by_character",
+    "get_conversations_for_user",
+    "get_conversations_for_user_and_character",
+    "get_conversation_cluster",
+    "update_conversation",
+    "soft_delete_conversation",
+    "restore_conversation",
+    "hard_delete_conversation",
+    "search_conversations_by_title",
+    "_normalize_conversation_search_order",
+    "_build_conversation_search_filters",
+    "_conversation_deleted_text_search_clause",
+    "search_conversations",
+    "search_conversations_page",
+):
+    setattr(
+        CharactersRAGDB,
+        _conversation_store_method,
+        _delegate_conversation_store_method(_conversation_store_method),
+    )
 
 
 # --- Transaction Context Manager Class (Helper for `with db.transaction():`) ---
