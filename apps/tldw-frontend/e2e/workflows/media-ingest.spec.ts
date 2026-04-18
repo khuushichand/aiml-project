@@ -422,8 +422,16 @@ test.describe("Media Ingestion Workflow", () => {
       process.cwd(),
       "e2e/fixtures/media/quick-ingest-sample.mkv"
     )
-    const quickIngestFixtureName = path.basename(quickIngestFixtureFile)
     const quickIngestFixtureUrl = "https://example.com/e2e/quick-ingest-source.html"
+    const createUniqueQuickIngestFixtureCopy = (): string => {
+      const fixture = path.parse(quickIngestFixtureFile)
+      const uniqueFixtureFile = path.join(
+        "/tmp",
+        `${fixture.name}-${generateTestId("quick-ingest-real-upload")}${fixture.ext}`
+      )
+      fs.copyFileSync(quickIngestFixtureFile, uniqueFixtureFile)
+      return uniqueFixtureFile
+    }
 
     const mockQuickIngestLifecycle = async (
       page: Parameters<typeof waitForConnection>[0],
@@ -433,6 +441,7 @@ test.describe("Media Ingestion Workflow", () => {
         jobId?: number
         batchId?: string
         processingResponses?: number
+        completedResult?: Record<string, unknown>
         queueResponse?: {
           status: number
           body: Record<string, unknown>
@@ -447,6 +456,7 @@ test.describe("Media Ingestion Workflow", () => {
       const mediaId = options.mediaId ?? "qi-media-e2e-101"
       const jobId = options.jobId ?? 101
       const batchId = options.batchId ?? "batch-e2e-quick-ingest"
+      const title = "Quick ingest source"
       let remainingProcessingResponses = Math.max(0, options.processingResponses ?? 0)
 
       await page.route("**/api/v1/media/ingest/jobs", async (route, request) => {
@@ -515,7 +525,8 @@ test.describe("Media Ingestion Workflow", () => {
               status: "Success",
               media_id: mediaId,
               source_url: sourceUrl,
-              title: "Quick ingest source"
+              title,
+              ...options.completedResult,
             }
           })
         })
@@ -540,7 +551,7 @@ test.describe("Media Ingestion Workflow", () => {
         })
       }
 
-      return { sourceUrl, mediaId, jobId, batchId }
+      return { sourceUrl, mediaId, jobId, batchId, title }
     }
 
     test("quick ingest opens from the visible media page triggers without helper fallback", async ({
@@ -570,7 +581,7 @@ test.describe("Media Ingestion Workflow", () => {
       await assertNoCriticalErrors(diagnostics)
     })
 
-    test("quick ingest accepts a real .mkv upload through completion and reopen", async ({
+    test("quick ingest preserves terminal real .mkv upload results after reopen", async ({
       authedPage,
       serverInfo,
       diagnostics
@@ -578,16 +589,26 @@ test.describe("Media Ingestion Workflow", () => {
       test.setTimeout(180_000)
       skipIfServerUnavailable(serverInfo)
 
-      const mediaId = await ingestAndWaitForReady(authedPage, {
-        file: quickIngestFixtureFile
-      })
+      const uniqueFixtureFile = createUniqueQuickIngestFixtureCopy()
+      const uniqueFixtureName = path.basename(uniqueFixtureFile)
 
-      await dismissQuickIngest(authedPage)
-      const dialog = await reopenQuickIngest(authedPage)
-      await assertQuickIngestCompletedResults(dialog, {
-        mediaId,
-        fileName: quickIngestFixtureName
-      })
+      try {
+        const mediaId = await ingestAndWaitForReady(authedPage, {
+          file: uniqueFixtureFile
+        })
+
+        await dismissQuickIngest(authedPage)
+        const dialog = await reopenQuickIngest(authedPage)
+        await assertQuickIngestCompletedResults(dialog, {
+          mediaId,
+          fileName: uniqueFixtureName,
+          terminalState: "either"
+        })
+      } finally {
+        if (fs.existsSync(uniqueFixtureFile)) {
+          fs.unlinkSync(uniqueFixtureFile)
+        }
+      }
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -600,7 +621,11 @@ test.describe("Media Ingestion Workflow", () => {
       test.setTimeout(180_000)
       skipIfServerUnavailable(serverInfo)
 
-      const { sourceUrl: ingestUrl, mediaId: expectedMediaId } = await mockQuickIngestLifecycle(
+      const {
+        sourceUrl: ingestUrl,
+        mediaId: expectedMediaId,
+        title,
+      } = await mockQuickIngestLifecycle(
         authedPage,
         {
           mediaId: "qi-media-url-complete"
@@ -611,7 +636,44 @@ test.describe("Media Ingestion Workflow", () => {
 
       await dismissQuickIngest(authedPage)
       const dialog = await reopenQuickIngest(authedPage)
-      await assertQuickIngestCompletedResults(dialog, { mediaId, sourceUrl: ingestUrl })
+      await assertQuickIngestCompletedResults(dialog, {
+        mediaId,
+        sourceUrl: ingestUrl,
+        title,
+      })
+
+      await assertNoCriticalErrors(diagnostics)
+    })
+
+    test("quick ingest restores skipped duplicate URL results after reopen", async ({
+      authedPage,
+      serverInfo,
+      diagnostics
+    }) => {
+      test.setTimeout(180_000)
+      skipIfServerUnavailable(serverInfo)
+
+      const { sourceUrl: ingestUrl, title } = await mockQuickIngestLifecycle(authedPage, {
+        mediaId: "qi-media-url-duplicate",
+        completedResult: {
+          db_message: "Media 'Quick ingest source' already exists. Overwrite not enabled."
+        }
+      })
+
+      let dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl)
+      await assertQuickIngestCompletedResults(dialog, {
+        sourceUrl: ingestUrl,
+        title,
+        terminalState: "skipped"
+      })
+
+      await dismissQuickIngest(authedPage)
+      dialog = await reopenQuickIngest(authedPage)
+      await assertQuickIngestCompletedResults(dialog, {
+        sourceUrl: ingestUrl,
+        title,
+        terminalState: "skipped"
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })
@@ -624,7 +686,7 @@ test.describe("Media Ingestion Workflow", () => {
       test.setTimeout(180_000)
       skipIfServerUnavailable(serverInfo)
 
-      const { sourceUrl: ingestUrl } = await mockQuickIngestLifecycle(authedPage, {
+      const { sourceUrl: ingestUrl, title } = await mockQuickIngestLifecycle(authedPage, {
         queueResponse: {
           status: 429,
           body: {
@@ -653,7 +715,10 @@ test.describe("Media Ingestion Workflow", () => {
 
       const dialog = await queueUrlAndStartProcessing(authedPage, ingestUrl)
       await fallbackAddRequest
-      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+      await assertQuickIngestCompletedResults(dialog, {
+        sourceUrl: ingestUrl,
+        title,
+      })
       await expect(dialog).not.toContainText(/queue is full|concurrent job limit/i)
 
       await assertNoCriticalErrors(diagnostics)
@@ -723,7 +788,7 @@ test.describe("Media Ingestion Workflow", () => {
       test.setTimeout(240_000)
       skipIfServerUnavailable(serverInfo)
 
-      const { sourceUrl: ingestUrl } = await mockQuickIngestLifecycle(authedPage, {
+      const { sourceUrl: ingestUrl, title } = await mockQuickIngestLifecycle(authedPage, {
         mediaId: "qi-media-url-refresh"
       })
 
@@ -739,11 +804,17 @@ test.describe("Media Ingestion Workflow", () => {
       await authedPage.reload({ waitUntil: "domcontentloaded" })
       dialog = await reopenQuickIngest(authedPage)
       await expect(dialog).toContainText(/processing|completed/i)
-      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+      await assertQuickIngestCompletedResults(dialog, {
+        sourceUrl: ingestUrl,
+        title,
+      })
 
       await authedPage.reload({ waitUntil: "domcontentloaded" })
       dialog = await reopenQuickIngest(authedPage)
-      await assertQuickIngestCompletedResults(dialog, { sourceUrl: ingestUrl })
+      await assertQuickIngestCompletedResults(dialog, {
+        sourceUrl: ingestUrl,
+        title,
+      })
 
       await assertNoCriticalErrors(diagnostics)
     })

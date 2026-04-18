@@ -379,6 +379,19 @@ const resolveTrackingBatchIds = (
     )
   )
 
+const buildPersistedReattachSignature = (
+  tracking?: PersistedQuickIngestTracking
+): string => {
+  if (!tracking) return ""
+
+  const mode = String(tracking.mode || "unknown").trim() || "unknown"
+  const sessionId = String(tracking.sessionId || "").trim()
+  const batchIds = resolveTrackingBatchIds(tracking)
+  const jobIds = normalizeTrackedJobIds(tracking)
+
+  return [mode, sessionId, batchIds.join(","), jobIds.join(",")].join("|")
+}
+
 const hydrateQueueItems = (
   queueItems: QuickIngestSessionRecord["queueItems"]
 ): WizardQueueItem[] =>
@@ -778,7 +791,6 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   const hasStartedRunRef = useRef(false)
   const runStartedAtRef = useRef<number | null>(null)
   const cancelledSessionIdsRef = useRef<Set<string>>(new Set())
-  const shouldAttemptPersistedReattachRef = useRef(shouldAttemptPersistedReattach)
   const validQueueItems = useMemo(
     () => queueItems.filter((item) => item.validation.valid),
     [queueItems]
@@ -792,6 +804,14 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   const initialElapsedRef = useRef(state.processingState.elapsed)
   const persistedTrackingRef = useRef(session.tracking)
   const persistedReattachTimerRef = useRef<number | null>(null)
+  const activeReattachSignatureRef = useRef("")
+  const persistedReattachSignature = useMemo(
+    () =>
+      shouldAttemptPersistedReattach
+        ? buildPersistedReattachSignature(session.tracking)
+        : "",
+    [session.tracking, shouldAttemptPersistedReattach]
+  )
 
   useEffect(() => {
     resultsRef.current = results
@@ -816,6 +836,12 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
       runStartedAtRef.current = startedAt
     }
   }, [session.tracking])
+
+  useEffect(() => {
+    if (!shouldAttemptPersistedReattach) {
+      activeReattachSignatureRef.current = ""
+    }
+  }, [shouldAttemptPersistedReattach])
 
   // Track recently ingested documents for the DocumentPickerModal
   const addRecentlyIngestedDocs = useQuickIngestStore(s => s.addRecentlyIngestedDocs)
@@ -986,8 +1012,9 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   useEffect(() => {
     const persistedTracking = persistedTrackingRef.current
     const reattachQueueItems = initialTrackedQueueItemsRef.current
-    if (!shouldAttemptPersistedReattachRef.current || !persistedTracking) return
-    shouldAttemptPersistedReattachRef.current = false
+    if (!persistedReattachSignature || !persistedTracking) return
+    if (activeReattachSignatureRef.current === persistedReattachSignature) return
+    activeReattachSignatureRef.current = persistedReattachSignature
 
     const startedAt = persistedTracking.startedAt
     if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
@@ -1000,13 +1027,15 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
 
     let cancelled = false
     const pollPersistedTracking = async () => {
-      const snapshot = await reattachQuickIngestSession(persistedTracking)
+      const currentTracking = persistedTrackingRef.current || persistedTracking
+      const snapshot = await reattachQuickIngestSession(currentTracking)
       if (cancelled) return
 
+      const latestTracking = persistedTrackingRef.current || currentTracking
       const perItemProgress = buildProgressFromReattachedJobs(
         reattachQueueItems,
         snapshot.jobs,
-        persistedTracking
+        latestTracking
       )
       const elapsed =
         typeof startedAt === "number" && Number.isFinite(startedAt)
@@ -1031,7 +1060,7 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
           ? buildResultsFromReattachedJobs(
               reattachQueueItems,
               snapshot.jobs,
-              persistedTracking
+              latestTracking
             )
           : buildFailureResults(
               reattachQueueItems,
@@ -1076,6 +1105,7 @@ const WizardModalContent: React.FC<WizardModalContentProps> = ({
   }, [
     goNext,
     markInterrupted,
+    persistedReattachSignature,
     setResults,
     updateProcessingState,
   ])

@@ -395,6 +395,66 @@ describe("QuickIngestWizardModal session runtime", () => {
     })
   })
 
+  it("starts persisted direct-job reattach when tracking metadata arrives after the run begins", async () => {
+    const user = userEvent.setup()
+    useQuickIngestSessionStore.getState().createDraftSession()
+
+    mocks.startQuickIngestSession.mockResolvedValue({
+      ok: true,
+      sessionId: "qi-direct-late-tracking",
+    })
+    mocks.submitQuickIngestBatch.mockImplementation((payload: any) => {
+      payload?.onTrackingMetadata?.({
+        mode: "webui-direct",
+        sessionId: "qi-direct-late-tracking",
+        batchId: "batch-77",
+        batchIds: ["batch-77"],
+        jobIds: [77],
+        itemIds: ["queued-url-1"],
+        submittedItemIds: ["queued-url-1"],
+        jobIdToItemId: { "77": "queued-url-1" },
+        startedAt: Date.now(),
+      })
+      return new Promise(() => {})
+    })
+    mocks.reattachQuickIngestSession.mockResolvedValue({
+      lifecycle: "completed",
+      jobs: [
+        {
+          jobId: 77,
+          status: "completed",
+          sourceItemId: "queued-url-1",
+          result: { media_id: "media-77", title: "Recovered Result" },
+        },
+      ],
+      errorMessage: null,
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole("button", { name: "Queue And Process" }))
+
+    await waitFor(() => {
+      expect(mocks.startQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(mocks.submitQuickIngestBatch).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "webui-direct",
+          sessionId: "qi-direct-late-tracking",
+          batchIds: ["batch-77"],
+          jobIds: [77],
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId("wizard-results")).toHaveTextContent("complete:1")
+    })
+  })
+
   it("uses runtime completion events for extension-backed sessions instead of calling the broken SSE path", async () => {
     const user = userEvent.setup()
     useQuickIngestSessionStore.getState().createDraftSession()
