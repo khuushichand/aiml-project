@@ -13,6 +13,7 @@ from tldw_Server_API.app.services import admin_backup_jobs_worker
 from tldw_Server_API.app.services import admin_byok_validation_jobs_worker
 from tldw_Server_API.app.services import connectors_worker
 from tldw_Server_API.app.services import core_jobs_worker
+from tldw_Server_API.app.services import jobs_metrics_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
 from tldw_Server_API.app.services import reminder_jobs_worker
 
@@ -192,6 +193,50 @@ async def test_stop_registered_job_pollers_timeout_fallback_stays_bounded(
 
 
 @pytest.mark.asyncio
+async def test_stop_registered_job_pollers_waits_for_pollers_concurrently() -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = FastAPI()
+
+    async def _delayed_shutdown(stop_event: asyncio.Event, delay: float) -> None:
+        await stop_event.wait()
+        await asyncio.sleep(delay)
+
+    stop_a = asyncio.Event()
+    stop_b = asyncio.Event()
+    task_a = asyncio.create_task(_delayed_shutdown(stop_a, 0.2))
+    task_b = asyncio.create_task(_delayed_shutdown(stop_b, 0.2))
+
+    started = asyncio.get_running_loop().time()
+    await main_module._stop_registered_job_pollers(
+        app,
+        [
+            main_module._ManagedJobPoller(
+                name="poller_a",
+                task=task_a,
+                stop_event=stop_a,
+                timeout_sec=1.0,
+            ),
+            main_module._ManagedJobPoller(
+                name="poller_b",
+                task=task_b,
+                stop_event=stop_b,
+                timeout_sec=1.0,
+            ),
+        ],
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert stop_a.is_set() is True
+    assert stop_b.is_set() is True
+    assert elapsed < 0.35
+    assert getattr(app.state, "_tldw_shutdown_quiesced_job_poller_names") == [
+        "poller_a",
+        "poller_b",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_publish_shutdown_job_poller_inventory_captures_registered_metadata() -> None:
     from tldw_Server_API.app import main as main_module
 
@@ -357,6 +402,35 @@ def test_lifespan_startup_publishes_owned_job_poller_inventory_for_enabled_worke
     assert all(isinstance(entry["task_name"], str) and entry["task_name"] for entry in inventory)
     assert all(entry["has_stop_event"] is True for entry in inventory)
     assert all(entry["timeout_sec"] == 5.0 for entry in inventory)
+
+
+@pytest.mark.integration
+def test_lifespan_shutdown_stops_jobs_metrics_reconcile_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = main_module.app
+    observed: dict[str, object] = {"stop_event": None, "stopped": False}
+
+    async def _fake_reconcile(stop_event: asyncio.Event) -> None:
+        observed["stop_event"] = stop_event
+        await stop_event.wait()
+        observed["stopped"] = True
+
+    monkeypatch.setenv("JOBS_METRICS_RECONCILE_ENABLE", "1")
+    monkeypatch.setattr(jobs_metrics_service, "run_jobs_metrics_reconcile", _fake_reconcile)
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        stop_event = observed["stop_event"]
+        assert isinstance(stop_event, asyncio.Event)
+        assert stop_event.is_set() is False
+
+    stop_event = observed["stop_event"]
+    assert isinstance(stop_event, asyncio.Event)
+    assert stop_event.is_set() is True
+    assert observed["stopped"] is True
 
 
 @pytest.mark.asyncio
