@@ -52,6 +52,17 @@ def _is_truthy(v: str | None) -> bool:
     return is_truthy(v)
 
 
+async def _wait_for_stop_or_timeout(stop_event, timeout: float) -> None:
+    """Sleep until timeout elapses or a stop_event is set, whichever comes first."""
+    import asyncio
+
+    timeout = max(float(timeout), 0.0)
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return
+
+
 class JobsMetricsService:
     def __init__(self) -> None:
         self.interval = float(os.getenv("JOBS_METRICS_RECONCILE_INTERVAL_SEC", "10") or "10")
@@ -193,13 +204,12 @@ async def run_jobs_metrics_reconcile(stop_event) -> None:
         return
     svc = JobsMetricsService()
     interval = svc.interval
-    import asyncio
     while not stop_event.is_set():
         try:
             svc.reconcile_once()
         except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs reconcile loop error: {e}")
-        await asyncio.sleep(interval)
+        await _wait_for_stop_or_timeout(stop_event, interval)
 
 
 async def run_jobs_metrics_gauges(stop_event) -> None:
@@ -211,7 +221,6 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
       - JOBS_METRICS_INTERVAL_SEC: interval between computations (default 5)
       - JOBS_SLO_MAX_GROUPS: max owner groups per window (default 100)
     """
-    import asyncio
     if not _is_truthy(os.getenv("JOBS_SLO_ENABLE")):
         return
     try:
@@ -314,4 +323,4 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
                     conn.close()
         except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs SLO gauges loop error: {e}")
-        await asyncio.sleep(interval)
+        await _wait_for_stop_or_timeout(stop_event, interval)

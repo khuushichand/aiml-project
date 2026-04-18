@@ -446,12 +446,7 @@ async def _stop_registered_job_pollers(
     handles: list[_ManagedJobPoller],
 ) -> None:
     """Stop registered job pollers, preferring explicit stop events."""
-    for handle in handles:
-        if handle.stop_event is not None:
-            handle.stop_event.set()
-        else:
-            with suppress(_STARTUP_GUARD_EXCEPTIONS):
-                handle.task.cancel()
+    async def _await_job_poller_shutdown(handle: _ManagedJobPoller) -> None:
         try:
             await asyncio.wait_for(asyncio.shield(handle.task), timeout=handle.timeout_sec)
         except asyncio.CancelledError:
@@ -478,6 +473,18 @@ async def _stop_registered_job_pollers(
             logger.debug(f"App Shutdown: Job poller stop guard triggered for {handle.name}: {exc}")
         except Exception as exc:
             logger.warning(f"App Shutdown: Job poller {handle.name} exited during shutdown: {exc}")
+
+    for handle in handles:
+        if handle.stop_event is not None:
+            handle.stop_event.set()
+        else:
+            with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                handle.task.cancel()
+
+    await asyncio.gather(
+        *(_await_job_poller_shutdown(handle) for handle in handles),
+        return_exceptions=False,
+    )
     try:
         app.state._tldw_shutdown_quiesced_job_poller_names = [handle.name for handle in handles]
     except _STARTUP_GUARD_EXCEPTIONS:
@@ -4891,6 +4898,19 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_metrics_task.cancel()
+
+        # Jobs metrics reconcile worker shutdown
+        if "jobs_metrics_reconcile_task" in locals() and jobs_metrics_reconcile_task:
+            try:
+                if "jobs_metrics_reconcile_stop" in locals() and jobs_metrics_reconcile_stop:
+                    jobs_metrics_reconcile_stop.set()
+                    await _asyncio.wait_for(jobs_metrics_reconcile_task, timeout=5.0)
+                    logger.info("Jobs metrics reconcile worker stopped via stop_event")
+                else:
+                    jobs_metrics_reconcile_task.cancel()
+            except _STARTUP_GUARD_EXCEPTIONS:
+                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+                    jobs_metrics_reconcile_task.cancel()
 
         # Event loop lag watchdog shutdown
         if "loop_lag_task" in locals() and loop_lag_task:
