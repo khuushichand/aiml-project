@@ -13,26 +13,8 @@ export const DEFERRED_OVERLAP_DOMAINS = [
 ] as const
 
 export const TRANSITIONAL_DOMAIN_OVERLAPS = {
-  admin: [
-    "createAdminRole",
-    "deleteAdminRole",
-    "listAdminRoles",
-    "listAdminUsers",
-    "updateAdminUser"
-  ],
-  "workspace-api": [
-    "createSkill",
-    "deleteSkill",
-    "executeSkill",
-    "exportSkill",
-    "getSkill",
-    "getSkillsContext",
-    "importSkill",
-    "importSkillFile",
-    "listSkills",
-    "seedSkills",
-    "updateSkill"
-  ],
+  admin: [],
+  "workspace-api": [],
   presentations: [
     "exportPresentation",
     "generateSlidesFromMedia",
