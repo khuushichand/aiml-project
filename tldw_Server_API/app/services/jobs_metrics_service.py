@@ -52,7 +52,7 @@ def _is_truthy(v: str | None) -> bool:
     return is_truthy(v)
 
 
-async def _wait_for_stop_or_timeout(stop_event, timeout: float) -> None:
+async def _wait_for_stop_or_timeout(stop_event: asyncio.Event, timeout: float) -> None:
     """Sleep until timeout elapses or a stop_event is set, whichever comes first."""
     import asyncio
 
