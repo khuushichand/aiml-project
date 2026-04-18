@@ -22,6 +22,7 @@ describe("TldwApiClient module exports", () => {
   it("loads helper exports used by domain mixins", async () => {
     const module = await import("@/services/tldw/TldwApiClient")
 
+    expect(module.TldwApiClientBase).toBeTypeOf("function")
     expect(module.normalizeReadingDigestSchedule).toBeTypeOf("function")
     expect(module.toFiniteNumber).toBeTypeOf("function")
     expect(module.toOptionalString).toBeTypeOf("function")

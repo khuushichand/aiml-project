@@ -1430,7 +1430,7 @@ export interface MediaIngestionBudgetDiagnostics {
   error?: string | null
 }
 
-export class TldwApiClient {
+export class TldwApiClientBase {
   private storage: Storage
   private config: TldwConfig | null = null
   private baseUrl: string = ''
@@ -7629,6 +7629,8 @@ import { modelsAudioMethods } from "./domains/models-audio"
 import { presentationsMethods } from "./domains/presentations"
 import { workspaceApiMethods } from "./domains/workspace-api"
 import { webClipperMethods } from "./domains/web-clipper"
+
+export class TldwApiClient extends TldwApiClientBase {}
 
 // Declaration merging: extend the class type with all domain methods
 export interface TldwApiClient
