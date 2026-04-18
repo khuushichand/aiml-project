@@ -165,6 +165,32 @@ const waitForQuickIngestCompletionUi = async (
     .toBe(true)
 }
 
+const waitForQuickIngestConfigureUi = async (
+  dialog: Locator,
+  timeoutMs: number
+): Promise<void> => {
+  const ingestionOptionsHeading = dialog.getByText(/ingestion options/i).first()
+  const nextButton = dialog.getByRole("button", { name: /^next$/i }).first()
+  const backButton = dialog.getByRole("button", { name: /^back$/i }).first()
+
+  await expect
+    .poll(
+      async () => {
+        const headingVisible = await ingestionOptionsHeading.isVisible().catch(() => false)
+        if (headingVisible) return true
+
+        const nextVisible = await nextButton.isVisible().catch(() => false)
+        const backVisible = await backButton.isVisible().catch(() => false)
+        return nextVisible && backVisible
+      },
+      {
+        timeout: timeoutMs,
+        message: "Timed out waiting for the quick ingest configure step",
+      }
+    )
+    .toBe(true)
+}
+
 type QuickIngestCompletionExpectation = {
   mediaId?: string
   sourceUrl?: string
@@ -243,6 +269,40 @@ const startQuickIngestProcessing = async (
   timeoutMs: number
 ): Promise<void> => {
   const startProcessingBtn = dialog.getByRole("button", { name: /start processing/i }).first()
+  await expect(startProcessingBtn).toBeVisible({ timeout: timeoutMs })
+  await startProcessingBtn.click()
+}
+
+const startQueuedQuickIngestFromCurrentStep = async (
+  dialog: Locator,
+  timeoutMs: number
+): Promise<void> => {
+  const useDefaultsBtn = dialog.getByRole("button", { name: /use defaults/i }).first()
+  if (await useDefaultsBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await useDefaultsBtn.click()
+    return
+  }
+
+  const configureBtn = dialog
+    .getByRole("button", { name: /configure \d+ items/i })
+    .first()
+  if (await configureBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await configureBtn.click()
+    await waitForQuickIngestConfigureUi(dialog, timeoutMs)
+    await advanceQuickIngestToReviewStep(dialog, timeoutMs)
+    await startQuickIngestProcessing(dialog, timeoutMs)
+    return
+  }
+
+  const runBtn = dialog.getByTestId("quick-ingest-run").first()
+  if (await runBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    await runBtn.click()
+    return
+  }
+
+  const startProcessingBtn = dialog
+    .getByRole("button", { name: /start processing|run quick ingest/i })
+    .first()
   await expect(startProcessingBtn).toBeVisible({ timeout: timeoutMs })
   await startProcessingBtn.click()
 }
@@ -356,6 +416,26 @@ export async function queueUrlAndStartProcessing(
 }
 
 /**
+ * Start processing from an already queued quick-ingest dialog without re-adding inputs.
+ */
+export async function startQueuedQuickIngestProcessing(
+  dialog: Locator,
+  options: QueueUrlAndStartProcessingOptions = {}
+): Promise<Locator> {
+  const timeoutMs = options.timeoutMs ?? 120_000
+
+  await startQueuedQuickIngestFromCurrentStep(dialog, timeoutMs)
+
+  if (options.waitForState === "processing") {
+    await waitForQuickIngestProcessingUi(dialog, timeoutMs)
+    return dialog
+  }
+
+  await waitForQuickIngestCompletionUi(dialog, timeoutMs)
+  return dialog
+}
+
+/**
  * Assert the quick ingest results view has reached a completed state.
  */
 export async function assertQuickIngestCompletedResults(
@@ -450,9 +530,7 @@ export async function advanceQuickIngestToConfigureStep(
     .getByRole("button", { name: /configure \d+ items/i })
     .first()
   await configureBtn.click()
-  await expect(dialog.getByLabel(/transcription model/i).first()).toBeVisible({
-    timeout: timeoutMs,
-  })
+  await waitForQuickIngestConfigureUi(dialog, timeoutMs)
 }
 
 /**
@@ -606,9 +684,7 @@ export async function ingestAndWaitForReady(
         .first()
       if (await configureBtn.isVisible({ timeout: 5_000 }).catch(() => false)) {
         await configureBtn.click()
-        await expect(quickIngestDialog.getByLabel(/transcription model/i).first()).toBeVisible({
-          timeout: timeoutMs,
-        })
+        await waitForQuickIngestConfigureUi(quickIngestDialog, timeoutMs)
       }
 
       const nextBtn = quickIngestDialog.getByRole("button", { name: /^next$/i }).first()

@@ -23,6 +23,12 @@ import {
 } from "@/services/tldw/quick-ingest-batch"
 import { reattachQuickIngestSession } from "@/services/tldw/quick-ingest-session-reattach"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import {
+  completedIngestJobIndicatesFailure,
+  completedIngestJobIndicatesSkipped,
+  extractCompletedIngestJobError,
+  extractCompletedIngestJobMediaId,
+} from "@/services/tldw/ingest-job-results"
 import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 import {
   type PersistedWizardQueueItem,
@@ -166,18 +172,32 @@ const normalizeWizardResult = (
   const id = String(item.id).trim()
   if (!id) return null
   const status = normalizeResultStatus(item.status)
-  const error = typeof item.error === "string" ? item.error : undefined
+  const payloadFailure =
+    status === "ok" && completedIngestJobIndicatesFailure(item.data)
+  const derivedStatus = payloadFailure ? "error" : status
+  const error =
+    typeof item.error === "string"
+      ? item.error
+      : payloadFailure
+        ? extractCompletedIngestJobError(item.data)
+        : undefined
   const dataRecord = item.data != null && typeof item.data === "object"
     ? item.data as Record<string, unknown>
     : undefined
-  const isDuplicate = status === "ok" && !item.outcome && isDbMessageDuplicate(dataRecord)
+  const isDuplicate =
+    derivedStatus === "ok" &&
+    !item.outcome &&
+    (
+      isDbMessageDuplicate(dataRecord) ||
+      completedIngestJobIndicatesSkipped(item.data)
+    )
   return {
     id,
-    status,
+    status: derivedStatus,
     outcome:
       isDuplicate
         ? "skipped"
-        : status === "ok"
+        : derivedStatus === "ok"
           ? item.outcome || "processed"
           : isCancelledError(error)
             ? "cancelled"
@@ -189,7 +209,9 @@ const normalizeWizardResult = (
     error,
     title: item.title,
     durationMs: item.durationMs,
-    mediaId: item.mediaId,
+    mediaId:
+      item.mediaId ??
+      extractCompletedIngestJobMediaId(item.data),
     message: isDuplicate
       ? DUPLICATE_SKIP_MESSAGE
       : typeof item.message === "string" ? item.message : undefined,
@@ -549,7 +571,10 @@ const buildSessionPatchFromWizardState = (
   }
 }
 
-const mapReattachedJobStatusToProgress = (status: string): ItemProgressStatus => {
+const mapReattachedJobStatusToProgress = (
+  status: string,
+  result?: unknown
+): ItemProgressStatus => {
   switch (status) {
     case "pending":
     case "queued":
@@ -564,6 +589,9 @@ const mapReattachedJobStatusToProgress = (status: string): ItemProgressStatus =>
     case "storing":
       return "storing"
     case "completed":
+      if (completedIngestJobIndicatesFailure(result)) {
+        return "failed"
+      }
       return "complete"
     case "cancelled":
       return "cancelled"
@@ -592,8 +620,11 @@ const buildResultsFromReattachedJobs = (
       index
     )
     const jobStatus = String(job.status || "").trim().toLowerCase()
-    const resultStatus = jobStatus === "completed" ? "ok" : "error"
-    const isDuplicate = resultStatus === "ok" && isDbMessageDuplicate(job.result)
+    const logicalFailure =
+      jobStatus === "completed" && completedIngestJobIndicatesFailure(job.result)
+    const resultStatus =
+      jobStatus === "completed" && !logicalFailure ? "ok" : "error"
+    const isDuplicate = resultStatus === "ok" && completedIngestJobIndicatesSkipped(job.result)
     return {
       id: item?.id || `reattached-${job.jobId}`,
       status: resultStatus,
@@ -611,8 +642,10 @@ const buildResultsFromReattachedJobs = (
       error:
         resultStatus === "ok"
           ? undefined
-          : job.error || `Quick ingest ${jobStatus || "failed"}.`,
-      mediaId: job.result?.media_id ?? job.result?.mediaId ?? null,
+          : job.error ||
+            extractCompletedIngestJobError(job.result) ||
+            `Quick ingest ${jobStatus || "failed"}.`,
+      mediaId: extractCompletedIngestJobMediaId(job.result),
       title: job.result?.title ?? null,
       data: job.result,
       message: isDuplicate ? DUPLICATE_SKIP_MESSAGE : undefined,
@@ -632,7 +665,7 @@ const buildProgressFromReattachedJobs = (
       job.jobId,
       index
     )
-    const status = mapReattachedJobStatusToProgress(job.status)
+    const status = mapReattachedJobStatusToProgress(job.status, job.result)
     const progressPercent =
       status === "complete" || status === "failed" || status === "cancelled"
         ? 100
@@ -645,7 +678,9 @@ const buildProgressFromReattachedJobs = (
       progressPercent,
       currentStage:
         status === "failed"
-          ? job.error || "Failed"
+          ? job.error ||
+            extractCompletedIngestJobError(job.result) ||
+            "Failed"
           : status === "complete"
             ? "Complete"
             : status === "cancelled"

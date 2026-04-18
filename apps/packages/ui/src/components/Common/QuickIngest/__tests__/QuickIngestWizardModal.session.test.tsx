@@ -483,6 +483,53 @@ describe("QuickIngestWizardModal session runtime", () => {
     )
   })
 
+  it("normalizes runtime ok results with error payloads into failed items", async () => {
+    const user = userEvent.setup()
+    useQuickIngestSessionStore.getState().createDraftSession()
+    mocks.startQuickIngestSession.mockResolvedValue({
+      ok: true,
+      sessionId: "qi-runtime-error-payload",
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole("button", { name: "Queue And Process" }))
+
+    await waitFor(() => {
+      expect(mocks.startQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+
+    emitRuntimeMessage({
+      type: "tldw:quick-ingest/completed",
+      payload: {
+        sessionId: "qi-runtime-error-payload",
+        results: [
+          {
+            id: "queued-url-1",
+            status: "ok",
+            url: "http://127.0.0.1:3000/e2e/quick-ingest-source.html",
+            type: "html",
+            data: {
+              status: "Error",
+              error: "File preparation/download failed: Port not allowed: 3000",
+            },
+          },
+        ],
+      },
+    })
+
+    await waitFor(() => {
+      expect(useQuickIngestSessionStore.getState().session?.results).toEqual([
+        expect.objectContaining({
+          id: "queued-url-1",
+          status: "error",
+          outcome: "failed",
+          error: "File preparation/download failed: Port not allowed: 3000",
+        }),
+      ])
+    })
+  })
+
   it("rehydrates a hidden processing session when the modal is reopened", () => {
     const onClose = vi.fn()
 

@@ -365,6 +365,12 @@ async def run_media_ingest_jobs_worker(
     queue: str | None = None,
     worker_id: str | None = None,
 ) -> None:
+    if JobManager._ACQUIRE_GATE_ENABLED:
+        logger.warning(
+            "Media Ingest Jobs worker starting with acquire gate enabled; clearing stale gate state"
+        )
+    JobManager.set_acquire_gate(False)
+
     jm = _jobs_manager()
     queue_name = _resolve_worker_queue(queue)
     resolved_worker_id = (

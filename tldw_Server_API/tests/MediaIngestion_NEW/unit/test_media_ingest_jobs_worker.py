@@ -205,6 +205,31 @@ async def test_media_ingest_heavy_worker_uses_configured_queue(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_media_ingest_worker_clears_stale_acquire_gate_on_start(monkeypatch):
+    import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
+    from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+    class _DummySDK:
+        def __init__(self, jm, cfg):
+            self.jm = jm
+            self.cfg = cfg
+
+        def stop(self):
+            return None
+
+        async def run(self, **_kwargs):
+            assert JobManager._ACQUIRE_GATE_ENABLED is False
+
+    monkeypatch.setattr(worker, "WorkerSDK", _DummySDK, raising=True)
+
+    try:
+        JobManager.set_acquire_gate(True)
+        await worker.run_media_ingest_jobs_worker()
+    finally:
+        JobManager.set_acquire_gate(False)
+
+
+@pytest.mark.asyncio
 async def test_media_ingest_schedule_embeddings_marks_media_processed(monkeypatch):
     import tldw_Server_API.app.services.media_ingest_jobs_worker as worker
 

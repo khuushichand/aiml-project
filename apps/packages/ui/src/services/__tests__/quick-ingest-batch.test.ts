@@ -143,6 +143,49 @@ describe("submitQuickIngestBatch", () => {
     })
   })
 
+  it("surfaces completed ingest jobs with backend error payloads as failed results", async () => {
+    mocks.bgUpload.mockResolvedValue({
+      batch_id: "batch-completed-error",
+      jobs: [{ id: 909 }]
+    })
+    mocks.bgRequest.mockResolvedValue({
+      ok: true,
+      data: {
+        status: "completed",
+        result: {
+          status: "Error",
+          error: "File preparation/download failed: Port not allowed: 3000"
+        }
+      }
+    })
+
+    const result = await submitQuickIngestBatch({
+      entries: [
+        {
+          id: "entry-completed-error",
+          url: "http://127.0.0.1:3000/e2e/quick-ingest-source.html",
+          type: "document"
+        }
+      ],
+      files: [],
+      storeRemote: true,
+      processOnly: false,
+      common: {
+        perform_analysis: true,
+        perform_chunking: false,
+        overwrite_existing: false
+      },
+      advancedValues: {}
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.results?.[0]).toMatchObject({
+      id: "entry-completed-error",
+      status: "error",
+      error: "File preparation/download failed: Port not allowed: 3000"
+    })
+  })
+
   it("defaults perform_chunking to true when common options are omitted", async () => {
     mocks.bgUpload.mockResolvedValue({
       batch_id: "batch-default-chunking",
