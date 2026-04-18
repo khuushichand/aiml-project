@@ -866,6 +866,9 @@ def get_user_rate_limiter_for_user(user_id: str | int) -> UserRateLimiter:
             legacy_numeric_key = int(uid_key)
         except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             legacy_numeric_key = None
+        # Temporary migration path: older in-process callers cached limiters under
+        # numeric user ids before canonical string scopes landed. Remove this branch
+        # after all callers and long-lived workers have restarted on string scopes.
         if legacy_numeric_key is not None:
             inst = _user_rate_limiter_instances.get(legacy_numeric_key)
             if inst is not None:
