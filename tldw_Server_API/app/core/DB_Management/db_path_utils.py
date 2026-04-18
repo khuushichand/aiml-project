@@ -174,16 +174,19 @@ def resolve_trusted_database_path(
 
     if os.path.isabs(expanded_path):
         normalized_absolute = os.path.normpath(expanded_path)
+        try:
+            candidate_resolved = Path(normalized_absolute).resolve(strict=False)
+        except Exception as exc:
+            raise InvalidStoragePathError("invalid_path") from exc
+
         for root in unique_roots:
             root_resolved = root.resolve(strict=False)
+            with_context = _resolve_candidate_for_containment(candidate_resolved)
             try:
-                relative_candidate = os.path.relpath(normalized_absolute, str(root_resolved))
+                with_context.relative_to(root_resolved)
             except ValueError:
                 continue
-
-            safe_candidate = safe_join(str(root_resolved), relative_candidate)
-            if safe_candidate is not None:
-                return Path(safe_candidate)
+            return candidate_resolved
 
         logger.warning("Rejected {} path outside trusted roots: {}", label, normalized_absolute)
         raise InvalidStoragePathError("invalid_path")
