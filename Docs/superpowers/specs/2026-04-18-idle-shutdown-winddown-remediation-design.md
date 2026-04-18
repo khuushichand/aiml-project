@@ -39,6 +39,7 @@ This design covers:
 This design includes:
 
 - removing the synthetic Evaluations pool shutdown wait
+- inventorying started in-process job pollers and closing shutdown-ownership gaps
 - stopping jobs workers earlier in the shutdown sequence
 - adding lightweight shutdown duration logging around major teardown blocks
 
@@ -58,7 +59,8 @@ This design does not include:
 Fix the proven idle-shutdown hotspots first:
 
 - make the Evaluations pool maintenance thread interruptible on shutdown
-- move jobs-worker stop signaling earlier in `main.py`
+- inventory all started `acquire_next_job()` pollers and close missing stop ownership
+- move jobs-worker stop signaling earlier in `main.py` for the idle path while preserving lease-drain behavior
 - add timing logs around major teardown blocks
 
 Why this is preferred:
@@ -96,7 +98,8 @@ Use the recommended targeted remediation with targeted instrumentation.
 The design is intentionally narrow:
 
 - eliminate the fixed Evaluations pool shutdown wait
-- quiesce jobs workers earlier so they stop polling once draining begins
+- make shutdown ownership explicit for started in-process job pollers
+- quiesce jobs workers earlier on the idle path so they stop polling once draining begins
 - make the remaining shutdown path legible through per-block duration logs
 
 ## Architecture And Change Boundaries
@@ -114,20 +117,40 @@ The desired shape is:
 
 The critical behavioral change is that shutdown no longer pays a fixed five-second tax just because the maintenance thread happens to be in its sleep window.
 
+For this slice, the Evaluations shutdown invocation should remain synchronous in the lifespan path after the synthetic join wait is removed. The remaining work is a bounded close of SQLite connections and maintenance-thread teardown, which should be measured directly via shutdown timing logs. Moving this shutdown behind `asyncio.to_thread(...)` is not part of this slice unless post-fix timing still shows material event-loop blocking.
+
 ### 2. Worker Quiescing Order
 
-Change the shutdown order in `tldw_Server_API/app/main.py` so worker stop events are set immediately after the transition-to-draining handoff rather than much later in the teardown tail.
+Change the shutdown order in `tldw_Server_API/app/main.py` so the idle-shutdown path reaches worker stop signaling much earlier than it does today, while preserving the current bounded lease-drain behavior for non-idle shutdowns.
+
+Before changing order, build an inventory of all started in-process `acquire_next_job()` pollers and ensure each one has explicit shutdown ownership from `main.py` or an equivalent registered stop hook. This includes:
+
+- workers started directly with an explicit stop event
+- workers started through helper functions that currently return only a task or hide the stop signal internally
+
+The remediation is not just a reorder of the existing stop block. It must also close ownership gaps so that every started poller is either:
+
+- explicitly stop-signaled,
+- explicitly cancelled as documented fallback behavior, or
+- intentionally excluded with a written rationale
+
+Examples already visible in the current code include:
+
+- `audiobook_jobs_task`, which is started with a stop event but is not currently handled in the existing teardown block
+- helper-started workers such as reminder and connectors workers, where shutdown ownership is not exposed in the same way as the directly managed pollers
 
 The desired shape is:
 
 - mark lifecycle as draining
 - enable the Jobs acquire gate
-- signal jobs workers to stop
+- inspect whether active processing jobs exist
+- if `JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC > 0` and active processing jobs exist, preserve the existing bounded lease wait
+- once the lease wait completes, or immediately when there are no active processing jobs, signal or stop all inventoried job pollers
 - only then continue through the rest of teardown
 
 This should prevent idle workers from continuing their one-second polling loops during shutdown and reduce log noise such as repeated `Jobs acquire gate enabled; declining new acquisition` messages.
 
-This is a sequencing change, not a change to the logical shutdown contract. The workers should still stop using their existing stop-event paths where available.
+This is a sequencing and ownership-hardening change, not a change to the logical shutdown contract. The idle path should stop pollers immediately after the drain handoff, while the non-idle path should preserve the existing lease-drain semantics when configured.
 
 ### 3. Shutdown Observability
 
@@ -139,17 +162,31 @@ This does not need a new metrics system or a full tracing model. The requirement
 - surface any materially slow block in a single pass through the logs
 - record total app-teardown wall time
 
+At minimum, the logged timing segments should cover:
+
+- transition handoff / drain gate
+- optional lease wait
+- job poller quiesce
+- Evaluations pool shutdown
+- unified audit plus executor shutdown
+- telemetry shutdown
+- total app teardown
+
 This should make future shutdown regressions attributable without needing to manually reconstruct timing from raw log timestamps.
 
 ## Expected Behavior
 
 After this change, the idle shutdown sequence should behave like:
 
-`mark draining` -> `set acquire gate` -> `signal jobs workers to stop immediately` -> `run remaining teardown` -> `emit per-block durations` -> `complete uvicorn shutdown`
+`mark draining` -> `set acquire gate` -> `observe zero active processing jobs` -> `stop all owned job pollers` -> `run remaining teardown` -> `emit per-block durations` -> `complete uvicorn shutdown`
 
 The important difference is that idle workers should stop because they were explicitly told to stop, not because they keep waking up, discovering the gate is closed, and polling again until a later shutdown phase reaches them.
 
 For the Evaluations pool, the maintenance-thread shutdown path should become signal-driven and near-immediate in the normal case.
+
+When active processing jobs exist and `JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC` is configured, the expected sequence should remain:
+
+`mark draining` -> `set acquire gate` -> `perform bounded lease wait` -> `stop all owned job pollers` -> `run remaining teardown` -> `emit per-block durations` -> `complete uvicorn shutdown`
 
 ## Failure Handling
 
@@ -158,6 +195,7 @@ Shutdown must remain best-effort and should not become more brittle because of t
 Required behavior:
 
 - if early worker stop signaling fails for a specific worker, log the failure and continue shutdown
+- if a started poller lacks clean shutdown ownership today, this slice must either add that ownership explicitly or document and use an explicit cancel fallback
 - if the Evaluations maintenance thread does not exit promptly after being signaled, retain a bounded join fallback
 - if duration logging itself fails, it must not affect shutdown correctness
 
@@ -175,8 +213,10 @@ Add focused tests for:
   - verify shutdown does not spend about five seconds waiting on a sleeping maintenance thread in the normal case
   - verify the maintenance worker exits after receiving the shutdown signal
 - lifespan shutdown sequencing:
-  - verify worker stop signaling happens before the long resource-cleanup tail
+  - verify the zero-active-processing path reaches poller quiesce before the long resource-cleanup tail
+  - verify the active-processing path preserves bounded lease-wait behavior when `JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC` is configured
   - verify idle workers do not continue repeated acquire-gate polling after shutdown begins
+  - verify all started in-process `acquire_next_job()` pollers have explicit shutdown ownership or a documented intentional exclusion
 
 Tests should stay narrow and behavior-oriented rather than trying to assert every log line in the full lifespan teardown.
 
@@ -189,20 +229,24 @@ Run manual verification for:
 
 The validation should confirm:
 
+- idle shutdown completes within the numeric target defined below
 - idle shutdown no longer spends about five seconds in Evaluations pool shutdown
-- jobs workers stop promptly after drain begins
+- jobs workers stop promptly after drain begins on the zero-active-processing path
+- non-idle shutdown still preserves bounded lease-wait behavior when configured
 - repeated acquire-gate polling log spam disappears or is substantially reduced
-- the logs clearly identify the slowest remaining shutdown block, if any
+- the required timing segments appear in the logs and clearly identify the slowest remaining shutdown block, if any
 
 ## Acceptance Criteria
 
 This design is complete when the implementation achieves all of the following:
 
-- idle local plain `uvicorn` shutdown completes materially faster than the current baseline
-- idle Docker/container stop completes materially faster than the current baseline
-- the fixed five-second Evaluations pool shutdown stall is removed in the normal case
-- jobs workers are quiesced early enough that they do not continue polling through most of shutdown
-- shutdown logs identify the slowest remaining teardown block and total shutdown wall time
+- idle local plain `uvicorn` shutdown completes in 8 seconds or less from the first shutdown transition log to `Application shutdown complete.` under default config with zero active processing jobs
+- idle Docker/container stop completes in 8 seconds or less under the same zero-active-processing conditions
+- the Evaluations pool shutdown timing segment completes in 1 second or less in the normal idle case
+- the zero-active-processing path reaches poller quiesce immediately after the drain handoff without first spending time in a lease-wait loop
+- the active-processing path preserves the existing bounded lease-wait semantics when `JOBS_SHUTDOWN_WAIT_FOR_LEASES_SEC` is configured
+- every started in-process `acquire_next_job()` poller has explicit shutdown ownership or a documented intentional exclusion with rationale
+- shutdown logs include durations for transition handoff, optional lease wait, job poller quiesce, Evaluations pool shutdown, unified audit plus executor shutdown, telemetry shutdown, and total app teardown
 
 ## Risks
 
