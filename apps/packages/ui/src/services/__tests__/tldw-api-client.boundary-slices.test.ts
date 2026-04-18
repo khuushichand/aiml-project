@@ -82,4 +82,62 @@ describe("TldwApiClient Wave 5 boundary slices", () => {
       "listSkills"
     )
   })
+
+  it("keeps presentation methods on the mixed presentations domain paths after class cleanup", async () => {
+    const client = new TldwApiClient()
+    client.ensureConfigForRequest = vi
+      .fn(async () => ({ serverUrl: "http://127.0.0.1:8000" })) as typeof client.ensureConfigForRequest
+    client.request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "pres-1",
+        title: "Deck",
+        theme: "black",
+        slides: [],
+        version: 1,
+        created_at: "2026-04-17T00:00:00Z"
+      })
+      .mockResolvedValueOnce({
+        id: "pres-1",
+        title: "Deck",
+        theme: "black",
+        slides: [],
+        version: 1,
+        created_at: "2026-04-17T00:00:00Z",
+        last_modified: "2026-04-17T00:00:00Z"
+      })
+      .mockResolvedValueOnce({
+        data: new ArrayBuffer(0)
+      }) as typeof client.request
+
+    await client.generateSlidesFromMedia(7, { titleHint: "Deck" })
+    await client.getPresentation("pres-1")
+    await client.exportPresentation("pres-1", "pdf")
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: "/api/v1/slides/generate/from-media",
+        method: "POST"
+      })
+    )
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/slides/presentations/pres-1",
+        method: "GET"
+      })
+    )
+    expect(client.request).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        path: "/api/v1/slides/presentations/pres-1/export?format=pdf",
+        method: "GET"
+      })
+    )
+    const baseMethodNames = Object.getOwnPropertyNames(TldwApiClientBase.prototype)
+    expect(baseMethodNames).not.toContain("generateSlidesFromMedia")
+    expect(baseMethodNames).not.toContain("getPresentation")
+    expect(baseMethodNames).not.toContain("exportPresentation")
+  })
 })

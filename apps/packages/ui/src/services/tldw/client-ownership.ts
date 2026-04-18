@@ -15,11 +15,7 @@ export const DEFERRED_OVERLAP_DOMAINS = [
 export const TRANSITIONAL_DOMAIN_OVERLAPS = {
   admin: [],
   "workspace-api": [],
-  presentations: [
-    "exportPresentation",
-    "generateSlidesFromMedia",
-    "getPresentation"
-  ],
+  presentations: [],
   "models-audio": [
     "createTtsJob",
     "generateImage",
