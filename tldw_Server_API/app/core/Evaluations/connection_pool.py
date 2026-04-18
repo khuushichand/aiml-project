@@ -171,6 +171,7 @@ class ConnectionPool:
         # Background maintenance
         self._maintenance_task = None
         self._shutdown = False
+        self._maintenance_shutdown_event = threading.Event()
 
         # Initialize pool
         self._initialize_pool()
@@ -390,10 +391,12 @@ class ConnectionPool:
             while not self._shutdown:
                 try:
                     self._perform_maintenance()
-                    time.sleep(60)  # Run every minute
+                    if self._maintenance_shutdown_event.wait(timeout=60.0):
+                        return
                 except Exception as e:
                     logger.error(f"Pool maintenance error: {e}")
-                    time.sleep(30)
+                    if self._maintenance_shutdown_event.wait(timeout=30.0):
+                        return
 
         self._maintenance_task = threading.Thread(target=maintenance_worker, daemon=True)
         self._maintenance_task.start()
@@ -535,6 +538,7 @@ class ConnectionPool:
         logger.info("Shutting down connection pool")
 
         self._shutdown = True
+        self._maintenance_shutdown_event.set()
 
         with self._condition:
             # Close all pooled connections
@@ -551,7 +555,7 @@ class ConnectionPool:
 
         # Wait for maintenance task to finish
         if self._maintenance_task and self._maintenance_task.is_alive():
-            self._maintenance_task.join(timeout=5)
+            self._maintenance_task.join(timeout=1.0)
 
         logger.info("Connection pool shutdown complete")
 
