@@ -110,3 +110,53 @@ async def test_run_evaluation_async_skips_cancelled_webhook_when_status_is_alrea
 
     assert status_updates == []
     service.webhook_manager.send_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_cleans_up_terminal_task_without_rewriting_status_or_logging_cancel(
+    monkeypatch,
+    tmp_path,
+):
+    service = UnifiedEvaluationService(
+        db_path=str(tmp_path / "evals.db"),
+        enable_webhooks=False,
+    )
+
+    class _Task:
+        def __init__(self) -> None:
+            self.cancel_called = False
+
+        def cancel(self) -> None:
+            self.cancel_called = True
+
+    task = _Task()
+    service.runner.running_tasks["run_terminal"] = task
+
+    terminal_run = {"id": "run_terminal", "status": "completed"}
+    monkeypatch.setattr(service.db, "get_run", lambda run_id, created_by=None: terminal_run)
+    monkeypatch.setattr(service.runner.db, "get_run", lambda run_id: terminal_run)
+
+    status_updates: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def _record_status(*args, **kwargs):
+        status_updates.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(service.db, "update_run_status", _record_status)
+    monkeypatch.setattr(service.runner.db, "update_run_status", _record_status)
+
+    audit_log = AsyncMock()
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.unified_evaluation_service.log_run_cancelled_async",
+        audit_log,
+    )
+
+    assert await service.cancel_run(
+        "run_terminal",
+        cancelled_by="tester",
+        created_by="tester",
+    ) is True
+    assert task.cancel_called is True
+    assert "run_terminal" not in service.runner.running_tasks
+    assert status_updates == []
+    audit_log.assert_not_awaited()

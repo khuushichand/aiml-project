@@ -641,13 +641,20 @@ class UnifiedEvaluationService:
             run = self.db.get_run(run_id, created_by=created_by) if created_by else self.db.get_run(run_id)
             if not run:
                 return False
+
             current_status = normalize_run_status(run.get("status") if isinstance(run, dict) else None)
-            if not can_transition_run_status(current_status, "cancelled"):
-                return False
+            task_was_registered = run_id in getattr(self.runner, "running_tasks", {})
+
             # Try to cancel via runner
             success = self.runner.cancel_run(run_id)
+            task_cleaned_up = task_was_registered and run_id not in getattr(self.runner, "running_tasks", {})
+
+            if task_cleaned_up and not success:
+                return True
 
             if not success:
+                if not can_transition_run_status(current_status, "cancelled"):
+                    return False
                 # Update status directly if not in runner
                 self.db.update_run_status(run_id, "cancelled")
 

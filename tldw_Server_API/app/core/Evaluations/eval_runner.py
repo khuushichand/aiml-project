@@ -2369,7 +2369,7 @@ class EvaluationRunner:
 
     def cancel_run(self, run_id: str) -> bool:
         """Cancel a running evaluation"""
-        task = self.running_tasks.pop(run_id, None)
+        task = self.running_tasks.get(run_id)
         if task is None:
             return False
 
@@ -2379,9 +2379,11 @@ class EvaluationRunner:
         task.cancel()
 
         if not can_transition_run_status(current_status, "cancelled"):
+            self.running_tasks.pop(run_id, None)
             return False
 
         self.db.update_run_status(run_id, "cancelled")
+        self.running_tasks.pop(run_id, None)
         return True
 
     def get_run_status(self, run_id: str) -> Optional[str]:
