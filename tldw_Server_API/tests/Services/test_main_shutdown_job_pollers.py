@@ -91,6 +91,8 @@ async def test_active_processing_preserves_bounded_lease_wait_before_quiesce(
     counts = iter([2, 1, 0])
     observed_sleeps: list[float] = []
     stop_calls: list[str] = []
+    dummy_stop_event = asyncio.Event()
+    dummy_task = asyncio.create_task(_wait_for_stop(dummy_stop_event))
 
     async def _fake_sleep(delay: float) -> None:
         observed_sleeps.append(delay)
@@ -103,7 +105,13 @@ async def test_active_processing_preserves_bounded_lease_wait_before_quiesce(
 
     await main_module._quiesce_owned_job_pollers_for_shutdown(
         app,
-        [],
+        [
+            main_module._ManagedJobPoller(
+                name="owned_poller",
+                task=dummy_task,
+                stop_event=dummy_stop_event,
+            )
+        ],
         wait_for_leases_sec=5,
         count_active_processing=lambda: next(counts),
     )
@@ -119,6 +127,40 @@ async def test_active_processing_preserves_bounded_lease_wait_before_quiesce(
 
 
 @pytest.mark.asyncio
+async def test_no_owned_job_pollers_skips_global_lease_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = FastAPI()
+    observed_sleeps: list[float] = []
+    stop_calls: list[str] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        observed_sleeps.append(delay)
+
+    async def _fake_stop_pollers(_app: FastAPI, _handles: list[object]) -> None:
+        stop_calls.append("stop")
+
+    monkeypatch.setattr(main_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(main_module, "_stop_registered_job_pollers", _fake_stop_pollers)
+
+    await main_module._quiesce_owned_job_pollers_for_shutdown(
+        app,
+        [],
+        wait_for_leases_sec=30,
+        count_active_processing=lambda: (_ for _ in ()).throw(AssertionError("count should not be called")),
+    )
+
+    assert observed_sleeps == []
+    assert stop_calls == ["stop"]
+    segments = getattr(app.state, "_tldw_shutdown_timing_segments")
+    assert segments[0]["segment"] == "optional_lease_wait"
+    assert segments[0]["skipped"] is True
+    assert segments[0]["initial_active"] == 0
+
+
+@pytest.mark.asyncio
 async def test_active_processing_deadline_uses_remaining_budget_before_quiesce(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,6 +170,8 @@ async def test_active_processing_deadline_uses_remaining_budget_before_quiesce(
     observed_sleeps: list[float] = []
     stop_calls: list[str] = []
     monotonic_values = iter([100.0, 100.0, 100.1, 100.25])
+    dummy_stop_event = asyncio.Event()
+    dummy_task = asyncio.create_task(_wait_for_stop(dummy_stop_event))
 
     async def _fake_sleep(delay: float) -> None:
         observed_sleeps.append(delay)
@@ -141,7 +185,13 @@ async def test_active_processing_deadline_uses_remaining_budget_before_quiesce(
 
     await main_module._quiesce_owned_job_pollers_for_shutdown(
         app,
-        [],
+        [
+            main_module._ManagedJobPoller(
+                name="owned_poller",
+                task=dummy_task,
+                stop_event=dummy_stop_event,
+            )
+        ],
         wait_for_leases_sec=0.2,
         count_active_processing=lambda: 2,
     )
@@ -192,6 +242,110 @@ async def test_stop_registered_job_pollers_timeout_fallback_stays_bounded(
     assert wait_calls[1] == (task, 1.0)
     assert getattr(app.state, "_tldw_shutdown_quiesced_job_poller_names") == ["stuck_poller"]
     assert warnings
+
+
+@pytest.mark.asyncio
+async def test_stop_registered_job_pollers_continues_when_cancelled_task_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = FastAPI()
+    warnings: list[tuple[object, ...]] = []
+    cooperative_stop_event = asyncio.Event()
+
+    async def _raise_after_cancel() -> None:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError as exc:
+            raise RuntimeError("cancel boom") from exc
+
+    async def _cooperative(stop_event: asyncio.Event) -> None:
+        await stop_event.wait()
+
+    async def _fake_wait_for(awaitable: object, timeout: float):
+        if timeout == 0.01:
+            raise asyncio.TimeoutError
+        return await awaitable
+
+    monkeypatch.setattr(main_module.asyncio, "wait_for", _fake_wait_for)
+    monkeypatch.setattr(main_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
+
+    raising_task = asyncio.create_task(_raise_after_cancel(), name="raising-poller")
+    cooperative_task = asyncio.create_task(_cooperative(cooperative_stop_event), name="cooperative-poller")
+    await asyncio.sleep(0)
+
+    await main_module._stop_registered_job_pollers(
+        app,
+        [
+            main_module._ManagedJobPoller(
+                name="raising_poller",
+                task=raising_task,
+                timeout_sec=0.01,
+            ),
+            main_module._ManagedJobPoller(
+                name="cooperative_poller",
+                task=cooperative_task,
+                stop_event=cooperative_stop_event,
+                timeout_sec=0.25,
+            ),
+        ],
+    )
+
+    assert cooperative_stop_event.is_set() is True
+    assert raising_task.done() is True
+    assert cooperative_task.done() is True
+    assert getattr(app.state, "_tldw_shutdown_quiesced_job_poller_names") == [
+        "raising_poller",
+        "cooperative_poller",
+    ]
+    assert any("raised after cancellation" in str(args[0]) for args in warnings)
+
+
+@pytest.mark.asyncio
+async def test_stop_registered_job_pollers_only_marks_completed_pollers_as_quiesced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = FastAPI()
+    real_wait_for = asyncio.wait_for
+    release_event = asyncio.Event()
+
+    async def _ignores_cancel_until_released() -> None:
+        while not release_event.is_set():
+            try:
+                await release_event.wait()
+            except asyncio.CancelledError:
+                continue
+
+    async def _fake_wait_for(awaitable: object, timeout: float):
+        if timeout in {0.01, 1.0}:
+            raise asyncio.TimeoutError
+        return await awaitable
+
+    monkeypatch.setattr(main_module.asyncio, "wait_for", _fake_wait_for)
+
+    task = asyncio.create_task(_ignores_cancel_until_released(), name="stubborn-poller")
+    await asyncio.sleep(0)
+
+    await main_module._stop_registered_job_pollers(
+        app,
+        [
+            main_module._ManagedJobPoller(
+                name="stubborn_poller",
+                task=task,
+                timeout_sec=0.01,
+            )
+        ],
+    )
+
+    assert task.done() is False
+    assert getattr(app.state, "_tldw_shutdown_quiesced_job_poller_names") == []
+
+    release_event.set()
+    task.cancel()
+    await real_wait_for(task, timeout=1)
 
 
 @pytest.mark.asyncio

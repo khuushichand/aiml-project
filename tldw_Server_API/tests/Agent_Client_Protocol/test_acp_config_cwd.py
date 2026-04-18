@@ -206,3 +206,51 @@ class TestLoadAcpRunnerConfigEnv:
 
         assert cfg.env["HOME"] == "./override_home"
         assert cfg.env["PYTHONUNBUFFERED"] == "1"
+
+    def test_empty_env_override_clears_config_runner_env(self):
+        """An explicit empty ACP_RUNNER_ENV should override the config runner_env."""
+        fake_section = {
+            "runner_command": "node",
+            "runner_env": "HOME=./acp_runner_home,PYTHONUNBUFFERED=1",
+        }
+
+        with patch(
+            "tldw_Server_API.app.core.Agent_Client_Protocol.config.get_config_section",
+            return_value=fake_section,
+        ), patch.dict(os.environ, {"ACP_RUNNER_ENV": ""}, clear=False):
+            for key in (
+                "ACP_RUNNER_CWD",
+                "ACP_RUNNER_COMMAND",
+                "ACP_RUNNER_ARGS",
+                "ACP_RUNNER_BINARY_PATH",
+                "ACP_RUNNER_STARTUP_TIMEOUT_MS",
+            ):
+                os.environ.pop(key, None)
+
+            cfg = load_acp_runner_config()
+
+        assert cfg.env == {}
+
+    def test_empty_cwd_override_clears_config_runner_cwd(self):
+        """An explicit empty ACP_RUNNER_CWD should override the config runner_cwd."""
+        fake_section = {
+            "runner_command": "node",
+            "runner_cwd": "../agent-workspace",
+        }
+
+        with patch(
+            "tldw_Server_API.app.core.Agent_Client_Protocol.config.get_config_section",
+            return_value=fake_section,
+        ), patch.dict(os.environ, {"ACP_RUNNER_CWD": ""}, clear=False):
+            for key in (
+                "ACP_RUNNER_COMMAND",
+                "ACP_RUNNER_ARGS",
+                "ACP_RUNNER_ENV",
+                "ACP_RUNNER_BINARY_PATH",
+                "ACP_RUNNER_STARTUP_TIMEOUT_MS",
+            ):
+                os.environ.pop(key, None)
+
+            cfg = load_acp_runner_config()
+
+        assert cfg.cwd is None
