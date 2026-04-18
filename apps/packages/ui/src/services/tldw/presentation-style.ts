@@ -73,11 +73,11 @@ export const buildPresentationVisualStyleSnapshot = (
     description: style.description ?? null,
     category: style.category ?? null,
     guide_number: style.guide_number ?? null,
-    tags: [...(style.tags || [])],
-    best_for: [...(style.best_for || [])],
-    generation_rules: cloneVisualStyleObject(style.generation_rules),
-    artifact_preferences: [...(style.artifact_preferences || [])],
-    appearance_defaults: cloneVisualStyleObject(style.appearance_defaults),
-    fallback_policy: cloneVisualStyleObject(style.fallback_policy),
+    tags: style.tags,
+    best_for: style.best_for,
+    generation_rules: style.generation_rules,
+    artifact_preferences: style.artifact_preferences,
+    appearance_defaults: style.appearance_defaults,
+    fallback_policy: style.fallback_policy,
     version: style.version ?? null
   })!

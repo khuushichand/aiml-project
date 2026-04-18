@@ -30,6 +30,51 @@ describe("shared tldw normalizers", () => {
     })
   })
 
+  it("drops undeclared reading digest fields and clones nested filters", () => {
+    const payload = {
+      id: 12,
+      cron: "0 8 * * *",
+      extra_field: "should-not-leak",
+      filters: {
+        tags: ["briefing"],
+        suggestions: {
+          enabled: true,
+          exclude_tags: ["skip-me"]
+        }
+      }
+    }
+
+    const normalized = normalizeReadingDigestSchedule(payload)
+    payload.filters.tags.push("mutated")
+    payload.filters.suggestions.exclude_tags.push("later")
+
+    expect(normalized).toEqual({
+      id: "12",
+      name: null,
+      cron: "0 8 * * *",
+      timezone: null,
+      enabled: false,
+      require_online: false,
+      format: "md",
+      template_id: null,
+      template_name: null,
+      retention_days: null,
+      filters: {
+        tags: ["briefing"],
+        suggestions: {
+          enabled: true,
+          exclude_tags: ["skip-me"]
+        }
+      },
+      last_run_at: null,
+      next_run_at: null,
+      last_status: null,
+      created_at: null,
+      updated_at: null
+    })
+    expect("extra_field" in normalized).toBe(false)
+  })
+
   it("normalizes ingestion source list payload totals and nested ids", () => {
     expect(
       normalizeIngestionSourceListResponse({
@@ -144,6 +189,28 @@ describe("shared tldw normalizers", () => {
       notes: " keep this trimmed ",
       created_at: "2026-04-17T00:00:00Z",
       last_modified: "2026-04-17T01:00:00Z"
+    })
+  })
+
+  it("rejects array payloads when normalizing persona records", () => {
+    const profile = normalizePersonaProfile(
+      ["not", "a", "profile"] as unknown as Record<string, unknown>
+    )
+    const exemplar = normalizePersonaExemplar(
+      ["not", "an", "exemplar"] as unknown as Record<string, unknown>
+    )
+
+    expect(profile).toMatchObject({
+      id: "",
+      buddy_summary: null
+    })
+    expect(Object.prototype.hasOwnProperty.call(profile, "0")).toBe(false)
+
+    expect(exemplar).toMatchObject({
+      id: "",
+      persona_id: "",
+      scenario_tags: [],
+      capability_tags: []
     })
   })
 })

@@ -50,32 +50,14 @@ describe("TldwApiClient ownership guard", () => {
       )
     )
 
-    const actualOverlaps = {
-      admin: Object.getOwnPropertyNames(domainMethodSources.admin)
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      "workspace-api": Object.getOwnPropertyNames(domainMethodSources["workspace-api"])
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      presentations: Object.getOwnPropertyNames(domainMethodSources.presentations)
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      "models-audio": Object.getOwnPropertyNames(domainMethodSources["models-audio"])
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      characters: Object.getOwnPropertyNames(domainMethodSources.characters)
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      collections: Object.getOwnPropertyNames(domainMethodSources.collections)
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      media: Object.getOwnPropertyNames(domainMethodSources.media)
-        .filter((name) => baseMethodNames.has(name))
-        .sort(),
-      "chat-rag": Object.getOwnPropertyNames(domainMethodSources["chat-rag"])
-        .filter((name) => baseMethodNames.has(name))
-        .sort()
-    }
+    const actualOverlaps = Object.fromEntries(
+      Object.entries(domainMethodSources).map(([domain, methods]) => [
+        domain,
+        Object.getOwnPropertyNames(methods)
+          .filter((name) => baseMethodNames.has(name))
+          .sort()
+      ])
+    ) as typeof TRANSITIONAL_DOMAIN_OVERLAPS
 
     expect(actualOverlaps).toEqual(TRANSITIONAL_DOMAIN_OVERLAPS)
   })

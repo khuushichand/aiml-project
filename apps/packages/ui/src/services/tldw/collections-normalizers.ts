@@ -1,4 +1,8 @@
-import type { ReadingDigestSchedule } from "@/types/collections"
+import type {
+  ReadingDigestSchedule,
+  ReadingDigestScheduleFilters,
+  ReadingDigestSuggestionStatus
+} from "@/types/collections"
 import type {
   IngestionSourceItem,
   IngestionSourceItemsListResponse,
@@ -8,40 +12,169 @@ import type {
   IngestionSourceSyncTriggerResponse
 } from "@/types/ingestion-sources"
 
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+const READING_DIGEST_STATUSES = new Set<ReadingDigestSuggestionStatus>([
+  "saved",
+  "reading",
+  "read",
+  "archived"
+])
+
+const READING_DIGEST_SORTS = new Set<
+  NonNullable<ReadingDigestScheduleFilters["sort"]>
+>([
+  "updated_desc",
+  "updated_asc",
+  "created_desc",
+  "created_asc",
+  "title_asc",
+  "title_desc",
+  "relevance"
+])
+
+const toNullableFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return null
+}
+
+const toOptionalFiniteNumber = (value: unknown): number | undefined => {
+  const normalized = toNullableFiniteNumber(value)
+  return normalized === null ? undefined : normalized
+}
+
+const normalizeStringArray = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+  return value
+    .map((entry) => String(entry ?? "").trim())
+    .filter((entry) => entry.length > 0)
+}
+
+const normalizeReadingDigestStatusArray = (
+  value: unknown
+): ReadingDigestSuggestionStatus[] | undefined => {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  return value
+    .map((entry) => String(entry ?? "").trim())
+    .filter(
+      (entry): entry is ReadingDigestSuggestionStatus =>
+        READING_DIGEST_STATUSES.has(entry as ReadingDigestSuggestionStatus)
+    )
+}
+
+const normalizeReadingDigestFilters = (
+  value: unknown
+): ReadingDigestSchedule["filters"] => {
+  if (!isObjectRecord(value)) {
+    return null
+  }
+
+  const filters: ReadingDigestScheduleFilters = {}
+  const status = normalizeReadingDigestStatusArray(value.status)
+  const tags = normalizeStringArray(value.tags)
+  const suggestions = isObjectRecord(value.suggestions)
+    ? {
+        enabled: Boolean(value.suggestions.enabled),
+        ...(toOptionalFiniteNumber(value.suggestions.limit) !== undefined
+          ? { limit: toOptionalFiniteNumber(value.suggestions.limit) }
+          : {}),
+        ...(normalizeReadingDigestStatusArray(value.suggestions.status) !==
+        undefined
+          ? { status: normalizeReadingDigestStatusArray(value.suggestions.status) }
+          : {}),
+        ...(normalizeStringArray(value.suggestions.exclude_tags) !== undefined
+          ? { exclude_tags: normalizeStringArray(value.suggestions.exclude_tags) }
+          : {}),
+        ...(toOptionalFiniteNumber(value.suggestions.max_age_days) !== undefined
+          ? { max_age_days: toOptionalFiniteNumber(value.suggestions.max_age_days) }
+          : {}),
+        ...(typeof value.suggestions.include_read === "boolean"
+          ? { include_read: value.suggestions.include_read }
+          : {}),
+        ...(typeof value.suggestions.include_archived === "boolean"
+          ? { include_archived: value.suggestions.include_archived }
+          : {})
+      }
+    : undefined
+
+  if (status !== undefined) {
+    filters.status = status
+  }
+  if (tags !== undefined) {
+    filters.tags = tags
+  }
+  if (typeof value.favorite === "boolean") {
+    filters.favorite = value.favorite
+  }
+  if (value.domain != null) {
+    filters.domain = String(value.domain)
+  }
+  if (value.q != null) {
+    filters.q = String(value.q)
+  }
+  if (value.date_from != null) {
+    filters.date_from = String(value.date_from)
+  }
+  if (value.date_to != null) {
+    filters.date_to = String(value.date_to)
+  }
+  if (
+    typeof value.sort === "string" &&
+    READING_DIGEST_SORTS.has(
+      value.sort as NonNullable<ReadingDigestScheduleFilters["sort"]>
+    )
+  ) {
+    filters.sort = value.sort as ReadingDigestScheduleFilters["sort"]
+  }
+  if (toOptionalFiniteNumber(value.limit) !== undefined) {
+    filters.limit = toOptionalFiniteNumber(value.limit)
+  }
+  if (suggestions !== undefined) {
+    filters.suggestions = suggestions
+  }
+
+  return filters
+}
+
 export const normalizeReadingDigestSchedule = (
-  schedule: any
-): ReadingDigestSchedule => ({
-  ...schedule,
-  id: String(schedule?.id ?? ""),
-  name: schedule?.name ?? null,
-  cron: String(schedule?.cron ?? ""),
-  timezone: schedule?.timezone ?? null,
-  enabled: Boolean(schedule?.enabled),
-  require_online: Boolean(schedule?.require_online),
-  format: schedule?.format === "html" ? "html" : "md",
-  template_id:
-    typeof schedule?.template_id === "number" &&
-    Number.isFinite(schedule.template_id)
-      ? schedule.template_id
-      : null,
-  template_name: schedule?.template_name ?? null,
-  retention_days:
-    typeof schedule?.retention_days === "number" &&
-    Number.isFinite(schedule.retention_days)
-      ? schedule.retention_days
-      : null,
-  filters:
-    schedule?.filters &&
-    typeof schedule.filters === "object" &&
-    !Array.isArray(schedule.filters)
-      ? schedule.filters
-      : null,
-  last_run_at: schedule?.last_run_at ?? null,
-  next_run_at: schedule?.next_run_at ?? null,
-  last_status: schedule?.last_status ?? null,
-  created_at: schedule?.created_at ?? null,
-  updated_at: schedule?.updated_at ?? null
-})
+  schedule: unknown
+): ReadingDigestSchedule => {
+  const source = isObjectRecord(schedule) ? schedule : {}
+
+  return {
+    id: String(source.id ?? ""),
+    name: source.name == null ? null : String(source.name),
+    cron: String(source.cron ?? ""),
+    timezone: source.timezone == null ? null : String(source.timezone),
+    enabled: Boolean(source.enabled),
+    require_online: Boolean(source.require_online),
+    format: source.format === "html" ? "html" : "md",
+    template_id: toNullableFiniteNumber(source.template_id),
+    template_name:
+      source.template_name == null ? null : String(source.template_name),
+    retention_days: toNullableFiniteNumber(source.retention_days),
+    filters: normalizeReadingDigestFilters(source.filters),
+    last_run_at: source.last_run_at == null ? null : String(source.last_run_at),
+    next_run_at: source.next_run_at == null ? null : String(source.next_run_at),
+    last_status: source.last_status == null ? null : String(source.last_status),
+    created_at: source.created_at == null ? null : String(source.created_at),
+    updated_at: source.updated_at == null ? null : String(source.updated_at)
+  }
+}
 
 export const toFiniteNumber = (value: unknown, fallback = 0): number => {
   if (typeof value === "number" && Number.isFinite(value)) {

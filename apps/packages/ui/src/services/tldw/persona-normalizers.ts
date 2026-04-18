@@ -6,10 +6,13 @@ import type {
   PersonaProfile
 } from "./TldwApiClient"
 
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
 export const normalizePersonaProfile = <T extends Record<string, unknown>>(
   input: T | null | undefined
 ): PersonaProfile => {
-  const candidate = input && typeof input === "object" ? input : ({} as T)
+  const candidate = isObjectRecord(input) ? input : ({} as T)
   const rawBuddySummary = Object.prototype.hasOwnProperty.call(
     candidate,
     "buddy_summary"
@@ -35,7 +38,7 @@ const normalizeStringArray = (value: unknown): string[] => {
 export const normalizePersonaExemplar = (
   input: Record<string, unknown> | null | undefined
 ): PersonaExemplar => {
-  const candidate = input && typeof input === "object" ? input : {}
+  const candidate = isObjectRecord(input) ? input : {}
   const priorityValue = Number(candidate?.priority)
   return {
     id: String(candidate?.id ?? ""),
