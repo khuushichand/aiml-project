@@ -11,11 +11,13 @@ from tldw_Server_API.app.services import audio_jobs_worker
 from tldw_Server_API.app.services import audiobook_jobs_worker
 from tldw_Server_API.app.services import admin_backup_jobs_worker
 from tldw_Server_API.app.services import admin_byok_validation_jobs_worker
+from tldw_Server_API.app.services import admin_maintenance_rotation_jobs_worker
 from tldw_Server_API.app.services import connectors_worker
 from tldw_Server_API.app.services import core_jobs_worker
 from tldw_Server_API.app.services import jobs_metrics_service
 from tldw_Server_API.app.services import media_ingest_jobs_worker
 from tldw_Server_API.app.services import reminder_jobs_worker
+from tldw_Server_API.app.core.Evaluations import recipe_runs_jobs_worker
 
 
 pytestmark = pytest.mark.unit
@@ -299,6 +301,58 @@ def test_shutdown_timing_helpers_record_segments_and_total_summary() -> None:
         "slowest_segment": "telemetry_shutdown",
         "slowest_duration_ms": 5,
     }
+
+
+@pytest.mark.integration
+def test_lifespan_startup_registers_recipe_and_maintenance_pollers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tldw_Server_API.app import main as main_module
+
+    app = main_module.app
+    if hasattr(app.state, "_tldw_shutdown_job_poller_inventory"):
+        delattr(app.state, "_tldw_shutdown_job_poller_inventory")
+
+    start_counts = {"recipe": 0, "maintenance": 0}
+
+    async def _short_lived_task() -> None:
+        await asyncio.sleep(0)
+
+    async def _fake_start_recipe_run_jobs_worker(*, stop_event: asyncio.Event | None = None):
+        start_counts["recipe"] += 1
+        return asyncio.create_task(_short_lived_task(), name="recipe_run_jobs_worker")
+
+    async def _fake_start_admin_maintenance_rotation_jobs_worker(
+        *,
+        stop_event: asyncio.Event | None = None,
+    ):
+        start_counts["maintenance"] += 1
+        return asyncio.create_task(
+            _short_lived_task(),
+            name="admin_maintenance_rotation_jobs_worker",
+        )
+
+    monkeypatch.setenv("ADMIN_MAINTENANCE_ROTATION_JOBS_WORKER_ENABLED", "1")
+    monkeypatch.setenv("EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED", "1")
+    monkeypatch.setattr(
+        admin_maintenance_rotation_jobs_worker,
+        "start_admin_maintenance_rotation_jobs_worker",
+        _fake_start_admin_maintenance_rotation_jobs_worker,
+    )
+    monkeypatch.setattr(
+        recipe_runs_jobs_worker,
+        "start_recipe_run_jobs_worker",
+        _fake_start_recipe_run_jobs_worker,
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        inventory = list(getattr(app.state, "_tldw_shutdown_job_poller_inventory", []))
+
+    inventory_names = {entry["name"] for entry in inventory}
+    assert "admin_maintenance_rotation_jobs_task" in inventory_names
+    assert "recipe_run_jobs_task" in inventory_names
+    assert start_counts == {"recipe": 1, "maintenance": 1}
 
 
 @pytest.mark.integration

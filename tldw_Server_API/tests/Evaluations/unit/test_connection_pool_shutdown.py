@@ -37,6 +37,19 @@ class _TimeoutRecordingMaintenanceTask:
         self.join_timeout = timeout
 
 
+class _StuckMaintenanceTask:
+    """Test double that remains alive after the bounded join."""
+
+    def __init__(self):
+        self.join_timeout = None
+
+    def is_alive(self) -> bool:
+        return True
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeout = timeout
+
+
 @pytest.mark.unit
 class TestConnectionPoolShutdown:
     """Shutdown behavior should wake maintenance and avoid long joins."""
@@ -90,3 +103,25 @@ class TestConnectionPoolShutdown:
             pytest.fail("maintenance worker did not stop during shutdown")
         if shutdown_duration >= 0.5:
             pytest.fail(f"shutdown did not interrupt maintenance wait promptly: {shutdown_duration:.3f}s")
+
+    def test_shutdown_warns_if_maintenance_thread_is_still_alive_after_join(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_db_path,
+    ):
+        pool = ConnectionPool(db_path=str(temp_db_path), enable_monitoring=False)
+        maintenance_task = _StuckMaintenanceTask()
+        warnings: list[tuple[object, ...]] = []
+        pool._maintenance_task = maintenance_task
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        pool.shutdown()
+
+        if maintenance_task.join_timeout != 1.0:
+            pytest.fail(f"expected join timeout 1.0, got {maintenance_task.join_timeout!r}")
+        if not warnings:
+            pytest.fail("expected shutdown to warn when maintenance thread remains alive")
