@@ -167,6 +167,29 @@ class TestConnectionPoolShutdown:
         if any(args and args[0] == "Connection pool shutdown complete" for args in infos):
             pytest.fail("shutdown should not claim clean completion while maintenance thread is still alive")
 
+    def test_shutdown_logs_breadcrumb_before_cleanup_when_maintenance_is_still_alive(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_db_path,
+    ):
+        pool = ConnectionPool(db_path=str(temp_db_path), enable_monitoring=False)
+        maintenance_task = _StuckMaintenanceTask()
+        infos: list[tuple[object, ...]] = []
+        pool._maintenance_task = maintenance_task
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
+            lambda *args, **_kwargs: infos.append(args),
+        )
+
+        pool.shutdown()
+
+        if not any(
+            args and args[0] == "Connection pool maintenance thread still alive after 1.0s; proceeding with shutdown cleanup and will recheck"
+            for args in infos
+        ):
+            pytest.fail("expected shutdown to log an intermediate breadcrumb before cleanup when maintenance is still alive")
+
     def test_shutdown_rechecks_maintenance_thread_after_cleanup_before_clean_completion(
         self,
         monkeypatch: pytest.MonkeyPatch,

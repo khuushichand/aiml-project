@@ -546,6 +546,11 @@ class ConnectionPool:
         if self._maintenance_task and self._maintenance_task.is_alive():
             self._maintenance_task.join(timeout=1.0)
             maintenance_stopped = not self._maintenance_task.is_alive()
+            if not maintenance_stopped:
+                logger.info(
+                    "Connection pool maintenance thread still alive after 1.0s; "
+                    "proceeding with shutdown cleanup and will recheck"
+                )
 
         with self._condition:
             # Close all pooled connections
