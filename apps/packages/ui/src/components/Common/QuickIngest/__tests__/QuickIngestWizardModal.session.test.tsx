@@ -395,6 +395,66 @@ describe("QuickIngestWizardModal session runtime", () => {
     })
   })
 
+  it("starts persisted direct-job reattach when tracking metadata arrives after the run begins", async () => {
+    const user = userEvent.setup()
+    useQuickIngestSessionStore.getState().createDraftSession()
+
+    mocks.startQuickIngestSession.mockResolvedValue({
+      ok: true,
+      sessionId: "qi-direct-late-tracking",
+    })
+    mocks.submitQuickIngestBatch.mockImplementation((payload: any) => {
+      payload?.onTrackingMetadata?.({
+        mode: "webui-direct",
+        sessionId: "qi-direct-late-tracking",
+        batchId: "batch-77",
+        batchIds: ["batch-77"],
+        jobIds: [77],
+        itemIds: ["queued-url-1"],
+        submittedItemIds: ["queued-url-1"],
+        jobIdToItemId: { "77": "queued-url-1" },
+        startedAt: Date.now(),
+      })
+      return new Promise(() => {})
+    })
+    mocks.reattachQuickIngestSession.mockResolvedValue({
+      lifecycle: "completed",
+      jobs: [
+        {
+          jobId: 77,
+          status: "completed",
+          sourceItemId: "queued-url-1",
+          result: { media_id: "media-77", title: "Recovered Result" },
+        },
+      ],
+      errorMessage: null,
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await user.click(screen.getByRole("button", { name: "Queue And Process" }))
+
+    await waitFor(() => {
+      expect(mocks.startQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(mocks.submitQuickIngestBatch).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "webui-direct",
+          sessionId: "qi-direct-late-tracking",
+          batchIds: ["batch-77"],
+          jobIds: [77],
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId("wizard-results")).toHaveTextContent("complete:1")
+    })
+  })
+
   it("uses runtime completion events for extension-backed sessions instead of calling the broken SSE path", async () => {
     const user = userEvent.setup()
     useQuickIngestSessionStore.getState().createDraftSession()
@@ -960,6 +1020,67 @@ describe("QuickIngestWizardModal session runtime", () => {
           reason: "user_cancelled",
         })
       )
+    })
+  })
+
+  it("reruns persisted direct-session reattach when item mapping metadata arrives later", async () => {
+    mocks.reattachQuickIngestSession.mockResolvedValue({
+      lifecycle: "processing",
+      jobs: [{ jobId: 77, status: "processing" }],
+      errorMessage: null,
+    })
+
+    useQuickIngestSessionStore.getState().upsertSession({
+      ...createEmptyQuickIngestSession(),
+      lifecycle: "processing",
+      currentStep: 4,
+      queueItems: [
+        {
+          id: "queued-url-1",
+          kind: "url",
+          url: "https://example.com/article",
+          detectedType: "web",
+          icon: "Globe",
+          fileSize: 0,
+          validation: { valid: true },
+        } as any,
+      ],
+      processingState: {
+        status: "running",
+        perItemProgress: [],
+        elapsed: 3,
+        estimatedRemaining: 20,
+      },
+      tracking: {
+        mode: "webui-direct",
+        sessionId: "qi-direct-refresh-signature",
+        batchId: "batch-77",
+        batchIds: ["batch-77"],
+        jobIds: [77],
+        startedAt: Date.now(),
+      } as any,
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+
+    const existingSession = useQuickIngestSessionStore.getState().session
+    expect(existingSession).toBeTruthy()
+
+    useQuickIngestSessionStore.getState().upsertSession({
+      ...existingSession!,
+      tracking: {
+        ...existingSession!.tracking,
+        itemIds: ["queued-url-1"],
+        jobIdToItemId: { "77": "queued-url-1" },
+      } as any,
+    })
+
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledTimes(2)
     })
   })
 

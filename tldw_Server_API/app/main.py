@@ -349,7 +349,24 @@ def _register_owned_job_poller(
     )
     _publish_shutdown_job_poller_inventory(app, handles)
 
-
+def _replace_owned_job_poller_inventory(
+    app: FastAPI,
+    handles: list[_ManagedJobPoller],
+    *,
+    registrations: list[tuple[str, asyncio.Task[Any] | None, asyncio.Event | None, float]],
+) -> None:
+    """Replace the managed job-poller inventory with the current owned poller set."""
+    handles.clear()
+    _publish_shutdown_job_poller_inventory(app, handles)
+    for name, task, stop_event, timeout_sec in registrations:
+        _register_owned_job_poller(
+            app,
+            handles,
+            name=name,
+            task=task,
+            stop_event=stop_event,
+            timeout_sec=timeout_sec,
+        )
 def _record_shutdown_timing_segment(
     app: FastAPI,
     segment: str,
@@ -4092,6 +4109,64 @@ async def lifespan(app: FastAPI):
             logger.info("Connectors worker disabled (CONNECTORS_WORKER_ENABLED != true)")
     except _STARTUP_GUARD_EXCEPTIONS as e:
         logger.warning(f"Failed to start Connectors worker: {e}")
+
+    _replace_owned_job_poller_inventory(
+        app,
+        owned_job_pollers,
+        registrations=[
+            ("core_jobs_task", core_jobs_task, core_jobs_stop_event, 5.0),
+            ("files_jobs_task", files_jobs_task, files_jobs_stop_event, 5.0),
+            ("data_tables_jobs_task", data_tables_jobs_task, data_tables_jobs_stop_event, 5.0),
+            ("prompt_studio_jobs_task", prompt_studio_jobs_task, prompt_studio_jobs_stop_event, 5.0),
+            ("study_pack_jobs_task", study_pack_jobs_task, study_pack_jobs_stop_event, 5.0),
+            (
+                "study_suggestions_jobs_task",
+                study_suggestions_jobs_task,
+                study_suggestions_jobs_stop_event,
+                5.0,
+            ),
+            ("privilege_snapshot_task", privilege_snapshot_task, privilege_snapshot_stop_event, 5.0),
+            ("audio_jobs_task", audio_jobs_task, audio_jobs_stop_event, 5.0),
+            ("audiobook_jobs_task", audiobook_jobs_task, audiobook_jobs_stop_event, 5.0),
+            (
+                "presentation_render_jobs_task",
+                presentation_render_jobs_task,
+                presentation_render_jobs_stop_event,
+                5.0,
+            ),
+            ("media_ingest_jobs_task", media_ingest_jobs_task, media_ingest_jobs_stop_event, 5.0),
+            (
+                "media_ingest_heavy_jobs_task",
+                media_ingest_heavy_jobs_task,
+                media_ingest_heavy_jobs_stop_event,
+                5.0,
+            ),
+            ("reading_digest_jobs_task", reading_digest_jobs_task, reading_digest_jobs_stop_event, 5.0),
+            (
+                "companion_reflection_jobs_task",
+                companion_reflection_jobs_task,
+                companion_reflection_jobs_stop_event,
+                5.0,
+            ),
+            ("reminder_jobs_task", reminder_jobs_task, reminder_jobs_stop_event, 5.0),
+            ("admin_backup_jobs_task", admin_backup_jobs_task, admin_backup_jobs_stop_event, 5.0),
+            (
+                "admin_byok_validation_jobs_task",
+                admin_byok_validation_jobs_task,
+                admin_byok_validation_jobs_stop_event,
+                5.0,
+            ),
+            (
+                "admin_maintenance_rotation_jobs_task",
+                admin_maintenance_rotation_jobs_task,
+                admin_maintenance_rotation_jobs_stop_event,
+                5.0,
+            ),
+            ("recipe_run_jobs_task", recipe_run_jobs_task, recipe_run_jobs_stop_event, 5.0),
+            ("evals_abtest_jobs_task", evals_abtest_jobs_task, evals_abtest_jobs_stop_event, 5.0),
+            ("connectors_jobs_task", connectors_jobs_task, connectors_jobs_stop_event, 5.0),
+        ],
+    )
 
     # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
     _authnz_sched_started = False

@@ -120,6 +120,9 @@ const directQuickIngestCancelledSessions = new Set<string>();
 let lastQuickIngestRuntimeHealthCheckAt = 0;
 let quickIngestRuntimeMessagingUsable: boolean | null = null;
 
+const DIRECT_QUICK_INGEST_SESSION_PREFIX = "qi-direct-";
+const DIRECT_QUICK_INGEST_TRANSPORT = { preferDirect: true } as const;
+
 const buildDirectSessionSuffix = (): string => {
   try {
     if (
@@ -203,6 +206,7 @@ const cancelDirectSessionBatches = async (
       method: "POST",
       timeoutMs: 10_000,
       returnResponse: true,
+      ...DIRECT_QUICK_INGEST_TRANSPORT,
     }).catch(() => {
       // best effort cancellation
     });
@@ -211,6 +215,23 @@ const cancelDirectSessionBatches = async (
 
 const hasExtensionMessagingRuntime = (): boolean =>
   Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id);
+
+const getRuntimeManifestVersion = (): number | null => {
+  try {
+    const manifestVersion = Number(browser?.runtime?.getManifest?.()?.manifest_version);
+    return Number.isFinite(manifestVersion) && manifestVersion > 0
+      ? Math.trunc(manifestVersion)
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const shouldPreferDirectQuickIngestSession = (): boolean =>
+  (getRuntimeManifestVersion() || 0) >= 3;
+
+const isDirectQuickIngestSessionId = (sessionId: string | undefined): boolean =>
+  String(sessionId || "").trim().startsWith(DIRECT_QUICK_INGEST_SESSION_PREFIX);
 
 const invalidateQuickIngestRuntimeHealth = (): void => {
   quickIngestRuntimeMessagingUsable = false;
@@ -340,6 +361,7 @@ const submitPersistentAdd = async ({
       file,
       fileFieldName: file ? "files" : undefined,
       timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+      ...DIRECT_QUICK_INGEST_TRANSPORT,
     }),
   );
 
@@ -478,6 +500,7 @@ const processWebScrape = async ({
     headers: { "Content-Type": "application/json" },
     body,
     timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+    ...DIRECT_QUICK_INGEST_TRANSPORT,
   });
 };
 
@@ -511,6 +534,7 @@ const runDirectQuickIngestBatch = async (
           method: "GET",
           timeoutMs: DIRECT_REMOTE_POLL_INTERVAL_MS + 3000,
           returnResponse: true,
+          ...DIRECT_QUICK_INGEST_TRANSPORT,
         })) as
           | { ok: boolean; status?: number; data?: any; error?: string }
           | undefined,
@@ -573,6 +597,7 @@ const runDirectQuickIngestBatch = async (
               method: "POST",
               fields: serializeUploadFields(fields),
               timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+              ...DIRECT_QUICK_INGEST_TRANSPORT,
             });
             const batchId = String(submitData?.batch_id || "").trim();
             const jobIds = extractIngestJobIds(submitData);
@@ -634,6 +659,7 @@ const runDirectQuickIngestBatch = async (
             method: "POST",
             fields: serializeUploadFields(fields),
             timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+            ...DIRECT_QUICK_INGEST_TRANSPORT,
           });
         }
 
@@ -696,6 +722,7 @@ const runDirectQuickIngestBatch = async (
               file: uploadFile,
               fileFieldName: "files",
               timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+              ...DIRECT_QUICK_INGEST_TRANSPORT,
             });
             const batchId = String(submitData?.batch_id || "").trim();
             const jobIds = extractIngestJobIds(submitData);
@@ -763,6 +790,7 @@ const runDirectQuickIngestBatch = async (
           fields: serializeUploadFields(fields),
           file: uploadFile,
           timeoutMs: DIRECT_INGEST_TIMEOUT_MS,
+          ...DIRECT_QUICK_INGEST_TRANSPORT,
         });
 
         const directDuplicate = isDbMessageDuplicate(data);
@@ -799,7 +827,10 @@ const runDirectQuickIngestBatch = async (
 export const submitQuickIngestBatch = async (
   input: QuickIngestBatchInput,
 ): Promise<QuickIngestBatchResponse> => {
-  if (await canUseExtensionMessagingRuntime()) {
+  if (
+    !isDirectQuickIngestSessionId(input?.__quickIngestSessionId) &&
+    (await canUseExtensionMessagingRuntime())
+  ) {
     try {
       const result =
         await sendExtensionMessageWithTimeout<QuickIngestBatchResponse>({
@@ -819,7 +850,7 @@ export const submitQuickIngestBatch = async (
 export const startQuickIngestSession = async (
   input: QuickIngestBatchInput,
 ): Promise<QuickIngestStartAck> => {
-  if (await canUseExtensionMessagingRuntime()) {
+  if (!shouldPreferDirectQuickIngestSession() && (await canUseExtensionMessagingRuntime())) {
     try {
       return await sendExtensionMessageWithTimeout<QuickIngestStartAck>({
         type: "tldw:quick-ingest/start",
@@ -835,7 +866,7 @@ export const startQuickIngestSession = async (
   // so session-native callers can still establish a run identity.
   return {
     ok: true,
-    sessionId: `qi-direct-${Date.now()}-${buildDirectSessionSuffix()}`,
+    sessionId: `${DIRECT_QUICK_INGEST_SESSION_PREFIX}${Date.now()}-${buildDirectSessionSuffix()}`,
   };
 };
 
@@ -848,7 +879,10 @@ export const cancelQuickIngestSession = async (
     return { ok: false, error: "Missing session id." };
   }
 
-  if (await canUseExtensionMessagingRuntime()) {
+  if (
+    !isDirectQuickIngestSessionId(sessionId) &&
+    (await canUseExtensionMessagingRuntime())
+  ) {
     try {
       return await sendExtensionMessageWithTimeout<QuickIngestCancelResponse>({
         type: "tldw:quick-ingest/cancel",
@@ -881,6 +915,7 @@ export const cancelQuickIngestSession = async (
         method: "POST",
         timeoutMs: 10_000,
         returnResponse: true,
+        ...DIRECT_QUICK_INGEST_TRANSPORT,
       });
     } catch {
       // best effort cancellation for resumed sessions without in-memory trackers

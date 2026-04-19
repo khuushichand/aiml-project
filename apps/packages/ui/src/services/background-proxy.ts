@@ -355,6 +355,7 @@ export interface BgRequestInit<
   abortSignal?: AbortSignal
   responseType?: "json" | "text" | "arrayBuffer"
   returnResponse?: boolean
+  preferDirect?: boolean
 }
 
 export async function bgRequest<
@@ -371,7 +372,8 @@ export async function bgRequest<
     timeoutMs,
     abortSignal,
     responseType,
-    returnResponse
+    returnResponse,
+    preferDirect = false
   } = init
   const path = normalizeKnownPathQuirks(rawPath)
   const isAbsoluteUrl = typeof path === "string" && /^https?:/i.test(path)
@@ -442,7 +444,9 @@ export async function bgRequest<
     if (typeof Blob !== "undefined" && value instanceof Blob) return true
     return false
   }
-  const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+  const hasRuntimeMessage =
+    !preferDirect &&
+    Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
   const methodIsSafeFallback = isSafeFallbackMethod(method)
 
   // Some binary responses do not survive extension message serialization.
@@ -1233,12 +1237,23 @@ export interface BgUploadInit<P extends AllowedPath = AllowedPath, M extends All
   fileFieldName?: string
   // Optional timeout override for upload requests
   timeoutMs?: number
+  preferDirect?: boolean
 }
 
 export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
-  { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName, timeoutMs }: BgUploadInit<P, M>
+  {
+    path,
+    method = 'POST' as UpperLower<M>,
+    fields = {},
+    file,
+    fileFieldName,
+    timeoutMs,
+    preferDirect = false
+  }: BgUploadInit<P, M>
 ): Promise<T> {
-  const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
+  const hasRuntimeMessage =
+    !preferDirect &&
+    Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
   const methodIsSafeFallback = isSafeFallbackMethod(method)
   if (hasRuntimeMessage) {
     try {

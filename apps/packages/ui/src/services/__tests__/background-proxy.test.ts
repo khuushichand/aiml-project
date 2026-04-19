@@ -233,6 +233,28 @@ describe("background proxy fallback safety", () => {
     expect(mocks.tldwRequest).toHaveBeenCalledTimes(1)
   })
 
+  it("bypasses extension messaging for direct-preferred requests", async () => {
+    mocks.sendMessage.mockResolvedValue({ ok: true, status: 200, data: { via: "runtime" } })
+    mocks.tldwRequest.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { via: "direct" }
+    })
+
+    const { bgRequest } = await importProxy()
+
+    await expect(
+      bgRequest({
+        path: "/api/v1/media/ingest/jobs/101",
+        method: "GET",
+        preferDirect: true
+      })
+    ).resolves.toEqual({ via: "direct" })
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled()
+    expect(mocks.tldwRequest).toHaveBeenCalledTimes(1)
+  })
+
   it("does not fall back to direct request on POST extension timeout", async () => {
     vi.useFakeTimers()
     mocks.sendMessage.mockImplementation(() => new Promise(() => undefined))
@@ -270,6 +292,33 @@ describe("background proxy fallback safety", () => {
       })
     ).rejects.toMatchObject({ status: 400 })
     expect(mocks.tldwRequest).not.toHaveBeenCalled()
+  })
+
+  it("bypasses extension messaging for direct-preferred uploads", async () => {
+    mocks.sendMessage.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { via: "runtime" }
+    })
+    mocks.tldwRequest.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { via: "direct" }
+    })
+
+    const { bgUpload } = await importProxy()
+
+    await expect(
+      bgUpload({
+        path: "/api/v1/media/ingest/jobs",
+        method: "POST",
+        fields: { media_type: "document" },
+        preferDirect: true
+      })
+    ).resolves.toEqual({ via: "direct" })
+
+    expect(mocks.sendMessage).not.toHaveBeenCalled()
+    expect(mocks.tldwRequest).toHaveBeenCalledTimes(1)
   })
 
   it("does not fall back to direct upload on POST extension timeout", async () => {
