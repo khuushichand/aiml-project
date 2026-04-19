@@ -539,14 +539,17 @@ class ConnectionPool:
 
         self._shutdown = True
         self._maintenance_shutdown_event.set()
+        maintenance_stopped = True
 
         # Wait for maintenance to exit before mutating pool state so the
         # normal shutdown path does not race with an in-flight cleanup cycle.
         if self._maintenance_task and self._maintenance_task.is_alive():
             self._maintenance_task.join(timeout=1.0)
-            if self._maintenance_task.is_alive():
-                logger.warning(
-                    "Connection pool maintenance thread still alive after 1.0s shutdown wait"
+            maintenance_stopped = not self._maintenance_task.is_alive()
+            if not maintenance_stopped:
+                logger.info(
+                    "Connection pool maintenance thread still alive after 1.0s; "
+                    "proceeding with shutdown cleanup and will recheck"
                 )
 
         with self._condition:
@@ -562,7 +565,17 @@ class ConnectionPool:
             self._overflow_connections.clear()
             self._condition.notify_all()
 
-        logger.info("Connection pool shutdown complete")
+        if not maintenance_stopped and self._maintenance_task:
+            if self._maintenance_task.is_alive():
+                self._maintenance_task.join(timeout=0.1)
+            maintenance_stopped = not self._maintenance_task.is_alive()
+
+        if maintenance_stopped:
+            logger.info("Connection pool shutdown complete")
+        else:
+            logger.warning(
+                "Connection pool shutdown finished with maintenance thread still alive after bounded waits"
+            )
 
     def __enter__(self):
         return self
