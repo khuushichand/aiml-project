@@ -479,7 +479,12 @@ const NotesEditorPane: React.FC<NotesEditorPaneProps> = ({
             <div className="flex gap-2">
               <Button
                 type="primary"
-                onClick={() => void handleNewNote()}
+                onClick={() => {
+                  if (!editorDisabled) {
+                    void handleNewNote()
+                  }
+                }}
+                disabled={editorDisabled}
                 data-testid="notes-editor-empty-create"
               >
                 {t('option:notesSearch.editorEmptyCreateAction', {

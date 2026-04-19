@@ -126,3 +126,36 @@ async def test_connection_rejects_unsupported_auth_type():
         await check_mcp_connection(req)
 
     assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_connection_uses_central_url_safety_guard(monkeypatch: pytest.MonkeyPatch):
+    captured_urls: list[str] = []
+
+    def _fake_assert_url_safe(url: str) -> None:
+        captured_urls.append(url)
+        raise HTTPException(status_code=400, detail="blocked")
+
+    async def _unexpected_probe(_url: str, _headers: dict[str, str]) -> None:  # pragma: no cover - defensive
+        raise AssertionError("_probe_mcp_connection should not run when the safety guard blocks")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint.assert_url_safe",
+        _fake_assert_url_safe,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint._is_private_ip",
+        lambda _host: False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.mcp_unified_endpoint._probe_mcp_connection",
+        _unexpected_probe,
+    )
+
+    req = MCPConnectionTestRequest(url="http://example.com:22")
+
+    with pytest.raises(HTTPException) as excinfo:
+        await check_mcp_connection(req)
+
+    assert captured_urls == ["http://example.com:22"]
+    assert excinfo.value.status_code == 400

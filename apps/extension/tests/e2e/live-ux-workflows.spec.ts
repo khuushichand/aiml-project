@@ -34,8 +34,9 @@ describeLive('Live server UX workflows (no mocks)', () => {
           break
         }
         lastError = `HTTP ${res.status} from ${target}`
-      } catch (e: any) {
-        lastError = `${target}: ${e?.message || String(e)}`
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e)
+        lastError = `${target}: ${message}`
       }
     }
 

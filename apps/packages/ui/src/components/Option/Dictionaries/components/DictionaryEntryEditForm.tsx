@@ -30,11 +30,11 @@ export const DictionaryEntryEditForm: React.FC<DictionaryEntryEditFormProps> = (
   formatProbabilityFrequencyHint,
 }) => {
   const advancedOptionsPanelId = React.useId()
-  const watchedProbability = Form.useWatch("probability", form)
-  const watchedGroup = Form.useWatch("group", form)
-  const watchedMaxReplacements = Form.useWatch("max_replacements", form)
-  const watchedTimedEffects = Form.useWatch("timed_effects", form)
-  const watchedCaseSensitive = Form.useWatch("case_sensitive", form)
+  const watchedProbability = Form.useWatch("probability", { form, preserve: true })
+  const watchedGroup = Form.useWatch("group", { form, preserve: true })
+  const watchedMaxReplacements = Form.useWatch("max_replacements", { form, preserve: true })
+  const watchedTimedEffects = Form.useWatch("timed_effects", { form, preserve: true })
+  const watchedCaseSensitive = Form.useWatch("case_sensitive", { form, preserve: true })
 
   const toFiniteNumber = React.useCallback((value: unknown): number | null => {
     const normalizedValue =

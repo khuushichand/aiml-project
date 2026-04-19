@@ -12,7 +12,8 @@ const {
   mockNavigate,
   mockConfirmDanger,
   mockGetSetting,
-  mockClearSetting
+  mockClearSetting,
+  mockCapabilities
 } = vi.hoisted(() => {
   return {
     mockBgRequest: vi.fn(),
@@ -22,7 +23,8 @@ const {
     mockNavigate: vi.fn(),
     mockConfirmDanger: vi.fn(),
     mockGetSetting: vi.fn(),
-    mockClearSetting: vi.fn()
+    mockClearSetting: vi.fn(),
+    mockCapabilities: { hasNotes: true }
   }
 })
 
@@ -62,7 +64,7 @@ vi.mock("@/context/demo-mode", () => ({
 
 vi.mock("@/hooks/useServerCapabilities", () => ({
   useServerCapabilities: () => ({
-    capabilities: { hasNotes: true },
+    capabilities: mockCapabilities,
     loading: false
   })
 }))
@@ -153,6 +155,7 @@ const updateCalls = () =>
 describe("NotesManagerPage stage 1 editor reliability", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockCapabilities.hasNotes = true
     mockConfirmDanger.mockResolvedValue(true)
     mockGetSetting.mockResolvedValue(null)
     mockClearSetting.mockResolvedValue(undefined)
@@ -263,6 +266,22 @@ describe("NotesManagerPage stage 1 editor reliability", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("notes-editor-empty-state")).not.toBeInTheDocument()
     })
+  })
+
+  it("keeps the empty-state create CTA disabled when the notes capability is unavailable", async () => {
+    mockCapabilities.hasNotes = false
+
+    renderPage()
+
+    const createButton = screen.getByTestId("notes-editor-empty-create")
+    expect(createButton).toBeDisabled()
+
+    fireEvent.click(createButton)
+
+    await waitFor(() => {
+      expect(createCalls()).toHaveLength(0)
+    })
+    expect(screen.getByTestId("notes-editor-empty-state")).toBeInTheDocument()
   })
 
   it("preserves the pending last-note setting when note hydration fails", async () => {

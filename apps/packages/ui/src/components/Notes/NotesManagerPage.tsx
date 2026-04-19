@@ -1981,6 +1981,7 @@ const NotesManagerPage: React.FC = () => {
 
       // Ctrl/Cmd+Shift+E/S/P — switch editor mode
       if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey) {
+        if (shouldIgnoreGlobalShortcut(event.target)) return
         if (event.key === 'E' || event.key === 'e') {
           event.preventDefault()
           ed.setEditorMode('edit')

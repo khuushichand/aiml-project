@@ -49,6 +49,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.services import admin_tool_catalog_service
@@ -1692,6 +1693,7 @@ async def check_mcp_connection(
         return MCPConnectionTestResponse(
             reachable=False, error="Cannot connect to private or reserved addresses"
         )
+    assert_url_safe(req.url)
 
     headers: dict[str, str] = {}
     if req.auth_type == "bearer" and req.secret:

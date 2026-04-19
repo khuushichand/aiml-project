@@ -41,8 +41,8 @@ ENV TLDW_INTERNAL_API_ORIGIN=${TLDW_INTERNAL_API_ORIGIN}
 
 WORKDIR /app/apps/tldw-frontend
 
-RUN bun /app/apps/tldw-frontend/scripts/validate-networking-config.mjs
-RUN bun run build:prod
+RUN bun /app/apps/tldw-frontend/scripts/validate-networking-config.mjs \
+ && bun run build:prod
 
 
 FROM node:20-bookworm-slim AS runtime
