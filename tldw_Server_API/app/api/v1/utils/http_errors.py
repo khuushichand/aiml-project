@@ -4,6 +4,15 @@ HTTP error mapping helpers for API v1.
 This module centralizes translation of internal exceptions
 (especially database-related ones) into FastAPI HTTPException
 instances with consistent status codes and messages.
+
+Usage (see media/item.py for a full exemplar)::
+
+    from tldw_Server_API.app.api.v1.utils.http_errors import map_db_error_to_http
+
+    try:
+        result = db.some_operation(...)
+    except (ConflictError, InputError, DatabaseError) as exc:
+        raise map_db_error_to_http(exc, default_detail="...context...") from exc
 """
 
 from __future__ import annotations

@@ -703,7 +703,7 @@ ignore = [
     "E402", # module-level import not at top — many files use __future__+docstring or conditional imports
     "E741", # ambiguous variable name (l, I, O) — used intentionally in math/loop contexts
     "B008", # do not perform function calls in argument defaults
-    "BLE001", # blind except — many intentional broad catches for cleanup/streaming
+    # BLE001 removed from global ignore — grandfathered per-file below
     "C901", # too complex
     "N802", # function name should be lowercase
     "N803", # camelCase argument names — from API/Pydantic schemas
@@ -736,6 +736,17 @@ exclude = []
 "tldw_Server_API/app/api/v1/schemas/rag_schemas_simple_compat.py" = ["F403", "F405"]
 "tldw_Server_API/app/core/Character_Chat/Character_Chat_Lib_facade.py" = ["F403", "F405"]
 "tldw_Server_API/app/api/v1/endpoints/audio/__init__.py" = ["F401"]
+# BLE001 grandfathered — existing blind except catches. Baseline: 2970 violations (2026-04-19).
+# Reduce over time; do not add new blind excepts in new files outside these paths.
+"tldw_Server_API/__init__.py" = ["BLE001"]
+"tldw_Server_API/app/__init__.py" = ["BLE001"]
+"tldw_Server_API/app/main.py" = ["BLE001"]
+"tldw_Server_API/app/api/**/*.py" = ["BLE001"]
+"tldw_Server_API/app/core/**/*.py" = ["BLE001"]
+"tldw_Server_API/app/services/**/*.py" = ["BLE001"]
+"tldw_Server_API/cli/**/*.py" = ["BLE001"]
+"tldw_Server_API/Config_Files/**/*.py" = ["BLE001"]
+"tldw_Server_API/tests/**/*.py" = ["BLE001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tldw_Server_API"]
