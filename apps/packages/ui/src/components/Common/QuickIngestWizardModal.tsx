@@ -388,8 +388,19 @@ const buildPersistedReattachSignature = (
   const sessionId = String(tracking.sessionId || "").trim()
   const batchIds = resolveTrackingBatchIds(tracking)
   const jobIds = normalizeTrackedJobIds(tracking)
+  const itemIds = normalizeTrackedItemIds(tracking)
+  const jobIdToItemId = Object.entries(tracking.jobIdToItemId ?? {})
+    .map(([jobId, itemId]) => `${jobId}:${String(itemId || "").trim()}`)
+    .sort()
 
-  return [mode, sessionId, batchIds.join(","), jobIds.join(",")].join("|")
+  return [
+    mode,
+    sessionId,
+    batchIds.join(","),
+    jobIds.join(","),
+    itemIds.join(","),
+    jobIdToItemId.join(","),
+  ].join("|")
 }
 
 const hydrateQueueItems = (

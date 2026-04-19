@@ -204,8 +204,6 @@ def _is_heavy_media_ingest_request(form_data: AddMediaForm) -> bool:
 
 
 def _heavy_media_ingest_worker_available() -> bool:
-    if _is_truthy(os.getenv("TLDW_WORKERS_SIDECAR_MODE")):
-        return True
     return worker_path_enabled(
         "MEDIA_INGEST_HEAVY_JOBS_WORKER_ENABLED",
         "media-ingest-heavy-jobs",

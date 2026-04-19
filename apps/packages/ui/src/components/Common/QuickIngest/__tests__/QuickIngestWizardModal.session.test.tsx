@@ -1023,6 +1023,67 @@ describe("QuickIngestWizardModal session runtime", () => {
     })
   })
 
+  it("reruns persisted direct-session reattach when item mapping metadata arrives later", async () => {
+    mocks.reattachQuickIngestSession.mockResolvedValue({
+      lifecycle: "processing",
+      jobs: [{ jobId: 77, status: "processing" }],
+      errorMessage: null,
+    })
+
+    useQuickIngestSessionStore.getState().upsertSession({
+      ...createEmptyQuickIngestSession(),
+      lifecycle: "processing",
+      currentStep: 4,
+      queueItems: [
+        {
+          id: "queued-url-1",
+          kind: "url",
+          url: "https://example.com/article",
+          detectedType: "web",
+          icon: "Globe",
+          fileSize: 0,
+          validation: { valid: true },
+        } as any,
+      ],
+      processingState: {
+        status: "running",
+        perItemProgress: [],
+        elapsed: 3,
+        estimatedRemaining: 20,
+      },
+      tracking: {
+        mode: "webui-direct",
+        sessionId: "qi-direct-refresh-signature",
+        batchId: "batch-77",
+        batchIds: ["batch-77"],
+        jobIds: [77],
+        startedAt: Date.now(),
+      } as any,
+    })
+
+    render(<QuickIngestWizardModal open onClose={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledTimes(1)
+    })
+
+    const existingSession = useQuickIngestSessionStore.getState().session
+    expect(existingSession).toBeTruthy()
+
+    useQuickIngestSessionStore.getState().upsertSession({
+      ...existingSession!,
+      tracking: {
+        ...existingSession!.tracking,
+        itemIds: ["queued-url-1"],
+        jobIdToItemId: { "77": "queued-url-1" },
+      } as any,
+    })
+
+    await waitFor(() => {
+      expect(mocks.reattachQuickIngestSession).toHaveBeenCalledTimes(2)
+    })
+  })
+
   it("preserves already completed item results when cancellation finalizes pending items", async () => {
     const user = userEvent.setup()
     useQuickIngestSessionStore.getState().upsertSession({

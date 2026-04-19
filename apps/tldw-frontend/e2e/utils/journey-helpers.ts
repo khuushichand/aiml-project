@@ -66,10 +66,14 @@ const dismissAssistantSetupBlockingModal = async (
           timeout: timeoutMs,
           message: "Timed out dismissing the assistant setup modal",
         }
-      )
+    )
       .toBe(true)
     return
   }
+
+  throw new Error(
+    "Assistant setup modal is visible, but no dismiss control matching 'Skip for now' was found."
+  )
 }
 
 const waitForQuickIngestDialog = async (page: Page): Promise<Locator> => {

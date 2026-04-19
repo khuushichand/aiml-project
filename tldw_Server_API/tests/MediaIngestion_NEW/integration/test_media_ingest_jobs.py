@@ -214,9 +214,9 @@ def test_media_ingest_jobs_keeps_heavy_queue_routing_in_sidecar_mode(
     monkeypatch.setenv("MEDIA_INGEST_JOBS_HEAVY_QUEUE", "media-heavy")
     monkeypatch.setenv("MEDIA_INGEST_JOBS_ROUTE_HEAVY", "true")
     monkeypatch.setenv("TLDW_WORKERS_SIDECAR_MODE", "true")
+    monkeypatch.setenv("MEDIA_INGEST_HEAVY_JOBS_WORKER_ENABLED", "true")
     monkeypatch.setenv("JOBS_ALLOWED_QUEUES", "default,media-heavy")
     monkeypatch.delenv("ROUTES_ENABLE", raising=False)
-    monkeypatch.delenv("MEDIA_INGEST_HEAVY_JOBS_WORKER_ENABLED", raising=False)
 
     resp = test_client.post(
         "/api/v1/media/ingest/jobs",

@@ -47,7 +47,7 @@ from collections.abc import Mapping
 from configparser import ConfigParser  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, Protocol, TypeAlias  # noqa: E402
+from typing import Any, Callable, Protocol, TypeAlias  # noqa: E402
 
 from loguru import logger  # noqa: E402
 
@@ -20915,6 +20915,21 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
 
         normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
 
+        def _title_search_sort_key(row: dict[str, Any]) -> tuple[float, float, str]:
+            sort_value = row.get("last_modified") or row.get("created_at")
+            sort_dt: datetime | None = None
+            if isinstance(sort_value, datetime):
+                sort_dt = sort_value
+            elif isinstance(sort_value, str):
+                try:
+                    sort_dt = datetime.fromisoformat(sort_value.replace("Z", "+00:00"))
+                except ValueError:
+                    sort_dt = None
+            if sort_dt is not None and sort_dt.tzinfo is None:
+                sort_dt = sort_dt.replace(tzinfo=timezone.utc)
+            recency_key = -(sort_dt.astimezone(timezone.utc).timestamp()) if sort_dt is not None else 0.0
+            return (-(row.get("bm25_norm") or 0), recency_key, row.get("id") or "")
+
         if self.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, 'postgresql')
             if not tsquery:
@@ -20953,19 +20968,20 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             for row in rows:
                 raw = row.get("bm25_raw", 0) or 0
                 row["bm25_norm"] = (raw / max_score) if max_score else 0
-            rows.sort(
-                key=lambda r: (
-                    -(r.get("bm25_norm") or 0),
-                    str(r.get("last_modified") or ""),
-                    r.get("id") or "",
-                ),
-                reverse=False,
-            )
+            rows.sort(key=_title_search_sort_key)
             return rows[offset: offset + limit]
 
-        safe_search_term = f'"{title_query}"'
+        sqlite_fts_query = FTSQueryTranslator.normalize_query(title_query, "sqlite")
+        if not sqlite_fts_query:
+            logger.debug(
+                "Conversation title query normalized to empty sqlite FTS query for input '{}'",
+                title_query,
+            )
+            return []
+
+        safe_search_term = f'"{sqlite_fts_query}"'
         filters: list[str] = ["conversations_fts MATCH ?", "c.deleted = 0"]
-        params_filters: list[Any] = [title_query]
+        params_filters: list[Any] = [sqlite_fts_query]
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
@@ -20998,14 +21014,7 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raw = -1 * (row.get("bm25_raw", 0) or 0)
             row["bm25_norm"] = (raw / max_bm25) if max_bm25 else 0
 
-        rows.sort(
-            key=lambda r: (
-                -(r.get("bm25_norm") or 0),
-                str(r.get("last_modified") or ""),
-                r.get("id") or "",
-            ),
-            reverse=False,
-        )
+        rows.sort(key=_title_search_sort_key)
         return rows[offset: offset + limit]
 
     def _normalize_conversation_search_order(self, order_by: str | None) -> str:
@@ -32566,8 +32575,8 @@ ALTER TABLE messages ALTER COLUMN content DROP NOT NULL;
             raise
 
 
-def _delegate_conversation_store_method(method_name: str):
-    def _delegated(self: CharactersRAGDB, *args, **kwargs):
+def _delegate_conversation_store_method(method_name: str) -> Callable[..., Any]:
+    def _delegated(self: CharactersRAGDB, *args: Any, **kwargs: Any) -> Any:
         return getattr(self.conversation_store, method_name)(*args, **kwargs)
 
     _delegated.__name__ = method_name

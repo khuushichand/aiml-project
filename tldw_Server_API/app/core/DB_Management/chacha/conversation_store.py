@@ -165,6 +165,8 @@ class ConversationStore:
         normalized = self._normalize_conversation_character_scope(character_scope)
         if normalized == "all":
             return None
+        # This helper returns only hardcoded SQL fragments that are interpolated
+        # into higher-level query builders. Keep it limited to fixed predicates.
         if normalized == "character":
             return f"{column} IS NOT NULL"
         return f"{column} IS NULL"
@@ -517,7 +519,7 @@ class ConversationStore:
                 return 0
             try:
                 return int(row[0])
-            except _CHACHA_NONCRITICAL_EXCEPTIONS:
+            except (TypeError, KeyError, IndexError):
                 return int(row.get("COUNT(1)") or row.get("count") or 0)
         except CharactersRAGDBError as exc:
             logger.error(
@@ -981,6 +983,21 @@ class ConversationStore:
         client_filter = self._db.client_id if client_id is None else client_id
         normalized_character_scope = self._normalize_conversation_character_scope(character_scope)
 
+        def _title_search_sort_key(row: dict[str, Any]) -> tuple[float, float, str]:
+            sort_value = row.get("last_modified") or row.get("created_at")
+            sort_dt: datetime | None = None
+            if isinstance(sort_value, datetime):
+                sort_dt = sort_value
+            elif isinstance(sort_value, str):
+                try:
+                    sort_dt = datetime.fromisoformat(sort_value.replace("Z", "+00:00"))
+                except ValueError:
+                    sort_dt = None
+            if sort_dt is not None and sort_dt.tzinfo is None:
+                sort_dt = sort_dt.replace(tzinfo=timezone.utc)
+            recency_key = -(sort_dt.astimezone(timezone.utc).timestamp()) if sort_dt is not None else 0.0
+            return (-(row.get("bm25_norm") or 0), recency_key, row.get("id") or "")
+
         if self._db.backend_type == BackendType.POSTGRESQL:
             tsquery = FTSQueryTranslator.normalize_query(title_query, "postgresql")
             if not tsquery:
@@ -1019,14 +1036,19 @@ class ConversationStore:
             for row in rows:
                 raw = row.get("bm25_raw", 0) or 0
                 row["bm25_norm"] = (raw / max_score) if max_score else 0
-            rows.sort(
-                key=lambda row: (-(row.get("bm25_norm") or 0), str(row.get("last_modified") or ""), row.get("id") or ""),
-                reverse=False,
-            )
+            rows.sort(key=_title_search_sort_key)
             return rows[offset: offset + limit]
 
+        sqlite_fts_query = FTSQueryTranslator.normalize_query(title_query, "sqlite")
+        if not sqlite_fts_query:
+            logger.debug(
+                "Conversation title query normalized to empty sqlite FTS query for input '{}'",
+                title_query,
+            )
+            return []
+
         filters: list[str] = ["conversations_fts MATCH ?", "c.deleted = 0"]
-        params_filters: list[Any] = [title_query]
+        params_filters: list[Any] = [sqlite_fts_query]
         if character_id is not None:
             filters.append("c.character_id = ?")
             params_filters.append(character_id)
@@ -1058,10 +1080,7 @@ class ConversationStore:
             raw = -1 * (row.get("bm25_raw", 0) or 0)
             row["bm25_norm"] = (raw / max_bm25) if max_bm25 else 0
 
-        rows.sort(
-            key=lambda row: (-(row.get("bm25_norm") or 0), str(row.get("last_modified") or ""), row.get("id") or ""),
-            reverse=False,
-        )
+        rows.sort(key=_title_search_sort_key)
         return rows[offset: offset + limit]
 
     def _normalize_conversation_search_order(self, order_by: str | None) -> str:

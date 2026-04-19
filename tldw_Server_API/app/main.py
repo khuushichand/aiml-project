@@ -446,11 +446,13 @@ async def _stop_registered_job_pollers(
     handles: list[_ManagedJobPoller],
 ) -> None:
     """Stop registered job pollers, preferring explicit stop events."""
-    async def _await_job_poller_shutdown(handle: _ManagedJobPoller) -> None:
+    async def _await_job_poller_shutdown(handle: _ManagedJobPoller) -> str | None:
+        stopped = False
         try:
             await asyncio.wait_for(asyncio.shield(handle.task), timeout=handle.timeout_sec)
+            stopped = bool(handle.task.done() or handle.task.cancelled())
         except asyncio.CancelledError:
-            pass
+            stopped = bool(handle.task.done() or handle.task.cancelled())
         except asyncio.TimeoutError:
             logger.warning(
                 "App Shutdown: Timed out waiting for job poller {} after {}s; cancelling",
@@ -460,8 +462,9 @@ async def _stop_registered_job_pollers(
             handle.task.cancel()
             try:
                 await asyncio.wait_for(handle.task, timeout=1.0)
+                stopped = bool(handle.task.done() or handle.task.cancelled())
             except asyncio.CancelledError:
-                pass
+                stopped = True
             except asyncio.TimeoutError:
                 logger.warning(
                     "App Shutdown: Job poller {} did not cancel within 1.0s after timeout",
@@ -473,6 +476,7 @@ async def _stop_registered_job_pollers(
             logger.debug(f"App Shutdown: Job poller stop guard triggered for {handle.name}: {exc}")
         except Exception as exc:
             logger.warning(f"App Shutdown: Job poller {handle.name} exited during shutdown: {exc}")
+        return handle.name if stopped or handle.task.done() or handle.task.cancelled() else None
 
     for handle in handles:
         if handle.stop_event is not None:
@@ -481,12 +485,16 @@ async def _stop_registered_job_pollers(
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 handle.task.cancel()
 
-    await asyncio.gather(
+    quiesced_names = [
+        name
+        for name in await asyncio.gather(
         *(_await_job_poller_shutdown(handle) for handle in handles),
         return_exceptions=False,
-    )
+        )
+        if name
+    ]
     try:
-        app.state._tldw_shutdown_quiesced_job_poller_names = [handle.name for handle in handles]
+        app.state._tldw_shutdown_quiesced_job_poller_names = quiesced_names
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
 
@@ -506,7 +514,7 @@ async def _quiesce_owned_job_pollers_for_shutdown(
     """
     lease_wait_started = time.monotonic()
     initial_active = 0
-    if wait_for_leases_sec > 0:
+    if wait_for_leases_sec > 0 and handles:
         try:
             initial_active = max(int(count_active_processing()), 0)
         except _STARTUP_GUARD_EXCEPTIONS:
