@@ -166,7 +166,7 @@ Models are surfaced from your tldw_server configuration (OpenAI‑compatible pro
 - Prettier + import sorting: `bunx prettier --write .`
 - Type‑check before PRs: `bun run compile`
 - Local artifact defaults are branch-aware. Use `bun run build:chrome:prod` or `bun run zip:prod` when you need release-like artifacts from a non-`main` branch.
-  - OpenAPI path enforcement: the web UI’s API calls are compile‑time checked against the bundled `openapi.json`. If you add or change an endpoint path/method, update `openapi.json` accordingly or your typecheck will fail.
+  - OpenAPI path enforcement: the web UI’s API calls are type-checked against the manually maintained `ClientPath` union. Run `bun run verify:openapi` from `apps/packages/ui` to verify that union and the bundled fallback schemas against the current OpenAPI spec. The verifier uses `apps/extension/openapi.json` when present and otherwise derives the spec from the checked-out backend.
   - CI: GitHub Actions runs the typecheck on each push/PR (`.github/workflows/typecheck.yml`).
   - Use the typed helpers `bgRequest`, `bgStream`, and `bgUpload` for all server calls. Direct `browser.runtime.sendMessage({ type: 'tldw:request' ... })` calls should pass a path typed as `AllowedPath` to participate in checks.
 

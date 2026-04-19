@@ -197,8 +197,11 @@ def load_acp_runner_config() -> ACPRunnerConfig:
     command = os.getenv("ACP_RUNNER_COMMAND") or section.get("runner_command", "")
     args_raw = os.getenv("ACP_RUNNER_ARGS") or section.get("runner_args", "")
     env_override = os.getenv("ACP_RUNNER_ENV")
-    env_raw = env_override or section.get("runner_env", "")
-    cwd = os.getenv("ACP_RUNNER_CWD") or section.get("runner_cwd")
+    has_env_override = env_override is not None
+    env_raw = env_override if has_env_override else section.get("runner_env", "")
+    cwd_override = os.getenv("ACP_RUNNER_CWD")
+    has_cwd_override = cwd_override is not None
+    cwd = cwd_override if has_cwd_override else section.get("runner_cwd")
 
     # If binary_path is set, use it as the command directly (shortcut)
     if binary_path and not command:
@@ -217,7 +220,7 @@ def load_acp_runner_config() -> ACPRunnerConfig:
     resolved_cwd = _resolve_cwd(str(cwd) if cwd else None)
     runner_env = _resolve_runner_env_paths(
         _parse_env(env_raw),
-        resolve_relative_home=env_override is None,
+        resolve_relative_home=not has_env_override,
     )
 
     return ACPRunnerConfig(

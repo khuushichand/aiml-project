@@ -349,7 +349,6 @@ def _register_owned_job_poller(
     )
     _publish_shutdown_job_poller_inventory(app, handles)
 
-
 def _replace_owned_job_poller_inventory(
     app: FastAPI,
     handles: list[_ManagedJobPoller],
@@ -368,8 +367,6 @@ def _replace_owned_job_poller_inventory(
             stop_event=stop_event,
             timeout_sec=timeout_sec,
         )
-
-
 def _record_shutdown_timing_segment(
     app: FastAPI,
     segment: str,
@@ -446,11 +443,11 @@ async def _stop_registered_job_pollers(
     handles: list[_ManagedJobPoller],
 ) -> None:
     """Stop registered job pollers, preferring explicit stop events."""
-    async def _await_job_poller_shutdown(handle: _ManagedJobPoller) -> None:
+    async def _await_job_poller_shutdown(handle: _ManagedJobPoller) -> bool:
         try:
             await asyncio.wait_for(asyncio.shield(handle.task), timeout=handle.timeout_sec)
         except asyncio.CancelledError:
-            pass
+            return bool(handle.task.done())
         except asyncio.TimeoutError:
             logger.warning(
                 "App Shutdown: Timed out waiting for job poller {} after {}s; cancelling",
@@ -467,12 +464,31 @@ async def _stop_registered_job_pollers(
                     "App Shutdown: Job poller {} did not cancel within 1.0s after timeout",
                     handle.name,
                 )
+            except Exception as exc:
+                logger.warning(
+                    "App Shutdown: Job poller {} raised after cancellation: {}",
+                    handle.name,
+                    exc,
+                )
             except _STARTUP_GUARD_EXCEPTIONS as exc:
-                logger.debug(f"App Shutdown: Job poller cancel guard triggered for {handle.name}: {exc}")
+                logger.debug(
+                    "App Shutdown: Job poller cancel guard triggered for {}: {}",
+                    handle.name,
+                    exc,
+                )
         except _STARTUP_GUARD_EXCEPTIONS as exc:
-            logger.debug(f"App Shutdown: Job poller stop guard triggered for {handle.name}: {exc}")
+            logger.debug(
+                "App Shutdown: Job poller stop guard triggered for {}: {}",
+                handle.name,
+                exc,
+            )
         except Exception as exc:
-            logger.warning(f"App Shutdown: Job poller {handle.name} exited during shutdown: {exc}")
+            logger.warning(
+                "App Shutdown: Job poller {} exited during shutdown: {}",
+                handle.name,
+                exc,
+            )
+        return bool(handle.task.done())
 
     for handle in handles:
         if handle.stop_event is not None:
@@ -481,12 +497,16 @@ async def _stop_registered_job_pollers(
             with suppress(_STARTUP_GUARD_EXCEPTIONS):
                 handle.task.cancel()
 
-    await asyncio.gather(
+    quiesce_results = await asyncio.gather(
         *(_await_job_poller_shutdown(handle) for handle in handles),
         return_exceptions=False,
     )
     try:
-        app.state._tldw_shutdown_quiesced_job_poller_names = [handle.name for handle in handles]
+        app.state._tldw_shutdown_quiesced_job_poller_names = [
+            handle.name
+            for handle, quiesced in zip(handles, quiesce_results)
+            if quiesced
+        ]
     except _STARTUP_GUARD_EXCEPTIONS:
         pass
 
@@ -506,7 +526,7 @@ async def _quiesce_owned_job_pollers_for_shutdown(
     """
     lease_wait_started = time.monotonic()
     initial_active = 0
-    if wait_for_leases_sec > 0:
+    if wait_for_leases_sec > 0 and handles:
         try:
             initial_active = max(int(count_active_processing()), 0)
         except _STARTUP_GUARD_EXCEPTIONS:
@@ -2837,6 +2857,8 @@ async def lifespan(app: FastAPI):
     admin_byok_validation_jobs_task = None
     connectors_jobs_task = None
     evals_abtest_jobs_task = None
+    admin_maintenance_rotation_jobs_task = None
+    recipe_run_jobs_task = None
     jobs_metrics_reconcile_task = None
     loop_lag_task = None
     jobs_crypto_rotate_task = None
@@ -2867,8 +2889,10 @@ async def lifespan(app: FastAPI):
     reminder_jobs_stop_event = None
     admin_backup_jobs_stop_event = None
     admin_byok_validation_jobs_stop_event = None
+    admin_maintenance_rotation_jobs_stop_event = None
     connectors_jobs_stop_event = None
     evals_abtest_jobs_stop_event = None
+    recipe_run_jobs_stop_event = None
     jobs_metrics_stop_event = None
     jobs_metrics_reconcile_stop = None
     loop_lag_stop_event = None
@@ -3510,9 +3534,19 @@ async def lifespan(app: FastAPI):
                 start_admin_maintenance_rotation_jobs_worker,
             )
 
-            admin_maintenance_rotation_jobs_task = await start_admin_maintenance_rotation_jobs_worker()
+            admin_maintenance_rotation_jobs_stop_event = _asyncio.Event()
+            admin_maintenance_rotation_jobs_task = await start_admin_maintenance_rotation_jobs_worker(
+                stop_event=admin_maintenance_rotation_jobs_stop_event
+            )
             if admin_maintenance_rotation_jobs_task:
                 logger.info("Admin maintenance rotation Jobs worker started")
+                _register_owned_job_poller(
+                    app,
+                    owned_job_pollers,
+                    name="admin_maintenance_rotation_jobs_task",
+                    task=admin_maintenance_rotation_jobs_task,
+                    stop_event=admin_maintenance_rotation_jobs_stop_event,
+                )
             else:
                 logger.info(
                     "Admin maintenance rotation Jobs worker disabled "
@@ -3530,29 +3564,19 @@ async def lifespan(app: FastAPI):
                 start_recipe_run_jobs_worker,
             )
 
-            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
-            if recipe_run_jobs_task:
-                logger.info("Evaluation recipe-run Jobs worker started")
-            else:
-                logger.info(
-                    "Evaluation recipe-run Jobs worker disabled "
-                    "(EVALUATIONS_RECIPE_RUN_JOBS_WORKER_ENABLED != true)"
-                )
-    except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.warning("Failed to start evaluation recipe-run Jobs worker: {}", e)
-
-    # Evaluations recipe-run Jobs worker
-    try:
-        if _sidecar_mode:
-            logger.info("Evaluation recipe-run Jobs worker disabled in sidecar mode")
-        else:
-            from tldw_Server_API.app.core.Evaluations.recipe_runs_jobs_worker import (
-                start_recipe_run_jobs_worker,
+            recipe_run_jobs_stop_event = _asyncio.Event()
+            recipe_run_jobs_task = await start_recipe_run_jobs_worker(
+                stop_event=recipe_run_jobs_stop_event
             )
-
-            recipe_run_jobs_task = await start_recipe_run_jobs_worker()
             if recipe_run_jobs_task:
                 logger.info("Evaluation recipe-run Jobs worker started")
+                _register_owned_job_poller(
+                    app,
+                    owned_job_pollers,
+                    name="recipe_run_jobs_task",
+                    task=recipe_run_jobs_task,
+                    stop_event=recipe_run_jobs_stop_event,
+                )
             else:
                 logger.info(
                     "Evaluation recipe-run Jobs worker disabled "
@@ -4132,6 +4156,13 @@ async def lifespan(app: FastAPI):
                 admin_byok_validation_jobs_stop_event,
                 5.0,
             ),
+            (
+                "admin_maintenance_rotation_jobs_task",
+                admin_maintenance_rotation_jobs_task,
+                admin_maintenance_rotation_jobs_stop_event,
+                5.0,
+            ),
+            ("recipe_run_jobs_task", recipe_run_jobs_task, recipe_run_jobs_stop_event, 5.0),
             ("evals_abtest_jobs_task", evals_abtest_jobs_task, evals_abtest_jobs_stop_event, 5.0),
             ("connectors_jobs_task", connectors_jobs_task, connectors_jobs_stop_event, 5.0),
         ],
@@ -4728,6 +4759,25 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     admin_backup_jobs_task.cancel()
+        if (
+            "admin_maintenance_rotation_jobs_task" in locals()
+            and _should_run_late_stop(
+                "admin_maintenance_rotation_jobs_task",
+                admin_maintenance_rotation_jobs_task,
+            )
+        ):
+            if (
+                "admin_maintenance_rotation_jobs_stop_event" in locals()
+                and admin_maintenance_rotation_jobs_stop_event
+            ):
+                try:
+                    admin_maintenance_rotation_jobs_stop_event.set()
+                    await _asyncio.wait_for(admin_maintenance_rotation_jobs_task, timeout=5.0)
+                    logger.info("Admin maintenance rotation Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
+                    admin_maintenance_rotation_jobs_task.cancel()
+            else:
+                admin_maintenance_rotation_jobs_task.cancel()
         if "jobs_notifications_bridge_task" in locals() and jobs_notifications_bridge_task:
             try:
                 jobs_notifications_bridge_task.cancel()
@@ -4738,16 +4788,16 @@ async def lifespan(app: FastAPI):
             except _STARTUP_GUARD_EXCEPTIONS:
                 with suppress(_STARTUP_GUARD_EXCEPTIONS):
                     jobs_notifications_bridge_task.cancel()
-        if "recipe_run_jobs_task" in locals() and recipe_run_jobs_task:
-            try:
-                recipe_run_jobs_task.cancel()
-                await _asyncio.wait_for(recipe_run_jobs_task, timeout=5.0)
-                logger.info("Evaluation recipe-run Jobs worker cancelled")
-            except _asyncio.CancelledError:
-                pass
-            except _STARTUP_GUARD_EXCEPTIONS:
-                with suppress(_STARTUP_GUARD_EXCEPTIONS):
+        if "recipe_run_jobs_task" in locals() and _should_run_late_stop("recipe_run_jobs_task", recipe_run_jobs_task):
+            if "recipe_run_jobs_stop_event" in locals() and recipe_run_jobs_stop_event:
+                try:
+                    recipe_run_jobs_stop_event.set()
+                    await _asyncio.wait_for(recipe_run_jobs_task, timeout=5.0)
+                    logger.info("Evaluation recipe-run Jobs worker stopped via stop_event")
+                except _STARTUP_GUARD_EXCEPTIONS:
                     recipe_run_jobs_task.cancel()
+            else:
+                recipe_run_jobs_task.cancel()
         if "evals_abtest_jobs_task" in locals() and _should_run_late_stop("evals_abtest_jobs_task", evals_abtest_jobs_task):
             if "evals_abtest_jobs_stop_event" in locals() and evals_abtest_jobs_stop_event:
                 try:
