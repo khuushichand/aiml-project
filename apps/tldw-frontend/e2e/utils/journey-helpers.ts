@@ -36,6 +36,46 @@ const extractIngestJobIds = (payload: unknown): number[] => {
     .filter((value) => Number.isFinite(value) && value > 0)
 }
 
+const dismissAssistantSetupBlockingModal = async (
+  page: Page,
+  timeoutMs = 5_000
+): Promise<void> => {
+  const setupHeading = page.getByText(/build your assistant/i).first()
+  const overlay = page.getByTestId("assistant-setup-overlay").first()
+  const overlayVisible =
+    (await overlay.isVisible({ timeout: 1_000 }).catch(() => false)) ||
+    (await setupHeading.isVisible({ timeout: 1_000 }).catch(() => false))
+  if (!overlayVisible) return
+
+  const skipControls = [
+    page.getByRole("button", { name: /skip for now/i }).first(),
+    page.getByText(/^skip for now$/i).first(),
+  ]
+
+  for (const control of skipControls) {
+    if (!(await control.isVisible({ timeout: 1_000 }).catch(() => false))) {
+      continue
+    }
+    await control.click()
+    await expect
+      .poll(
+        async () =>
+          !(await overlay.isVisible().catch(() => false)) &&
+          !(await setupHeading.isVisible().catch(() => false)),
+        {
+          timeout: timeoutMs,
+          message: "Timed out dismissing the assistant setup modal",
+        }
+    )
+      .toBe(true)
+    return
+  }
+
+  throw new Error(
+    "Assistant setup modal is visible, but no dismiss control matching 'Skip for now' was found."
+  )
+}
+
 const waitForQuickIngestDialog = async (page: Page): Promise<Locator> => {
   const dialog = page.getByRole("dialog", { name: /quick ingest/i }).first()
   await expect(dialog).toBeVisible({ timeout: 30_000 })
@@ -151,6 +191,7 @@ const waitForQuickIngestCompletionUi = async (
   const resultsStep = dialog.getByTestId("wizard-results-step")
   const completionSummary = dialog.getByTestId("quick-ingest-complete")
   const completedRegion = dialog.getByRole("region", { name: /completed items/i }).first()
+  const errorRegion = dialog.getByRole("region", { name: /error items/i }).first()
 
   await expect
     .poll(
@@ -158,7 +199,8 @@ const waitForQuickIngestCompletionUi = async (
         const resultsVisible = await resultsStep.isVisible().catch(() => false)
         const summaryVisible = await completionSummary.isVisible().catch(() => false)
         const regionVisible = await completedRegion.isVisible().catch(() => false)
-        return resultsVisible || summaryVisible || regionVisible
+        const errorVisible = await errorRegion.isVisible().catch(() => false)
+        return resultsVisible || summaryVisible || regionVisible || errorVisible
       },
       { timeout: timeoutMs, message: "Timed out waiting for quick ingest completion UI" }
     )
@@ -195,6 +237,8 @@ type QuickIngestCompletionExpectation = {
   mediaId?: string
   sourceUrl?: string
   fileName?: string
+  title?: string
+  terminalState?: "completed" | "skipped" | "failed" | "either"
 }
 
 type QuickIngestProcessingTarget = "processing" | "completed"
@@ -315,11 +359,13 @@ export async function openQuickIngestDialog(
   timeoutMs = 30_000
 ): Promise<Locator> {
   const dialog = page.getByRole("dialog", { name: /quick ingest/i }).first()
+  await dismissAssistantSetupBlockingModal(page)
   if (await dialog.isVisible({ timeout: Math.min(timeoutMs, 5_000) }).catch(() => false)) {
     return dialog
   }
 
   await waitForConnection(page, Math.min(timeoutMs, 20_000))
+  await dismissAssistantSetupBlockingModal(page)
   if (await dialog.isVisible({ timeout: Math.min(timeoutMs, 5_000) }).catch(() => false)) {
     return dialog
   }
@@ -328,6 +374,7 @@ export async function openQuickIngestDialog(
   if (!(await quickIngestBtn.isVisible({ timeout: 1_000 }).catch(() => false))) {
     await page.goto("/media", { waitUntil: "domcontentloaded" })
     await waitForConnection(page)
+    await dismissAssistantSetupBlockingModal(page)
     if (await dialog.isVisible({ timeout: 3_000 }).catch(() => false)) {
       return dialog
     }
@@ -447,14 +494,57 @@ export async function assertQuickIngestCompletedResults(
   await expect(dialog.getByTestId("wizard-results-step")).toBeVisible({
     timeout: timeoutMs,
   })
-  await expect(dialog.getByRole("region", { name: /completed items/i }).first()).toBeVisible({
-    timeout: timeoutMs,
-  })
-  await expect(dialog.getByText(/Total:\s*\d+\s+succeeded,\s*\d+\s+failed/i)).toBeVisible({
+  const completedRegion = dialog.getByRole("region", { name: /completed items/i }).first()
+  const skippedRegion = dialog.getByRole("region", { name: /skipped items/i }).first()
+  const errorRegion = dialog.getByRole("region", { name: /error items/i }).first()
+  const terminalState = expectation.terminalState ?? "completed"
+  let sawSkippedRegion = false
+
+  if (terminalState === "completed") {
+    await expect(completedRegion).toBeVisible({
+      timeout: timeoutMs,
+    })
+  } else if (terminalState === "skipped") {
+    await expect(skippedRegion).toBeVisible({
+      timeout: timeoutMs,
+    })
+    sawSkippedRegion = true
+  } else if (terminalState === "failed") {
+    await expect(errorRegion).toBeVisible({
+      timeout: timeoutMs,
+    })
+  } else {
+    await expect
+      .poll(
+        async () =>
+          (await completedRegion.isVisible().catch(() => false)) ||
+          (await skippedRegion.isVisible().catch(() => false)) ||
+          (await errorRegion.isVisible().catch(() => false)),
+        {
+          timeout: timeoutMs,
+          message: "Timed out waiting for quick ingest terminal results to show completed, skipped, or failed items",
+        }
+      )
+      .toBe(true)
+    sawSkippedRegion = await skippedRegion.isVisible().catch(() => false)
+  }
+
+  await expect(
+    dialog.getByText(/Total:\s*\d+\s+succeeded(?:,\s*\d+\s+skipped)?,\s*\d+\s+failed/i)
+  ).toBeVisible({
     timeout: timeoutMs,
   })
 
+  if (sawSkippedRegion) {
+    await expect(
+      dialog.getByText(/already exists|overwrite/i).first()
+    ).toBeVisible({
+      timeout: timeoutMs,
+    })
+  }
+
   const candidateTexts = [
+    expectation.title,
     expectation.fileName,
     expectation.mediaId,
     expectation.sourceUrl,

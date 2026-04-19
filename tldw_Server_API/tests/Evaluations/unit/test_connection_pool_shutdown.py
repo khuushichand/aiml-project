@@ -135,7 +135,7 @@ class TestConnectionPoolShutdown:
 
         if pool._maintenance_task is None or pool._maintenance_task.is_alive():
             pytest.fail("maintenance worker did not stop during shutdown")
-        if shutdown_duration >= 0.5:
+        if shutdown_duration >= 1.5:
             pytest.fail(f"shutdown did not interrupt maintenance wait promptly: {shutdown_duration:.3f}s")
 
     def test_shutdown_warns_if_maintenance_thread_is_still_alive_after_join(

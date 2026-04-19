@@ -21,6 +21,7 @@ Tests can call reconcile_once(limit) directly for determinism.
 """
 
 import contextlib
+import asyncio
 import os
 import time
 from sqlite3 import Error as SQLiteError
@@ -54,8 +55,6 @@ def _is_truthy(v: str | None) -> bool:
 
 async def _wait_for_stop_or_timeout(stop_event: asyncio.Event, timeout: float) -> None:
     """Sleep until timeout elapses or a stop_event is set, whichever comes first."""
-    import asyncio
-
     timeout = max(float(timeout), 0.0)
     try:
         await asyncio.wait_for(stop_event.wait(), timeout=timeout)
