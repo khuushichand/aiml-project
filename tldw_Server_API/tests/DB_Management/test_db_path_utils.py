@@ -196,6 +196,25 @@ def test_resolve_trusted_database_path_rejects_symlink_escape(monkeypatch, tmp_p
         db_path_utils.resolve_trusted_database_path(trusted_dir / "escape" / "users.db")
 
 
+def test_resolve_trusted_database_path_rejects_symlinked_database_file(monkeypatch, tmp_path):
+    project_root = tmp_path / "project"
+    trusted_dir = project_root / "Databases"
+    outside_dir = tmp_path / "outside"
+    project_root.mkdir()
+    trusted_dir.mkdir()
+    outside_dir.mkdir()
+
+    outside_db = outside_dir / "users.db"
+    outside_db.write_text("outside", encoding="utf-8")
+    (trusted_dir / "users.db").symlink_to(outside_db)
+
+    monkeypatch.setattr(db_path_utils, "get_project_root", lambda: str(project_root))
+    monkeypatch.setattr(db_path_utils, "_is_test_context", lambda: False)
+
+    with pytest.raises(InvalidStoragePathError):
+        db_path_utils.resolve_trusted_database_path(trusted_dir / "users.db")
+
+
 def test_resolve_trusted_database_path_accepts_symlink_alias_to_temp_root(monkeypatch, tmp_path):
     project_root = tmp_path / "project"
     real_temp_root = tmp_path / "private_tmp"

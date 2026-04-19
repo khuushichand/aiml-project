@@ -346,11 +346,10 @@ def get_media_db_path_for_rag(media_db: Any) -> str | None:
 def reset_media_db_cache() -> None:
     """Clear cached Media DB factories and any legacy cached instances."""
     def _warn(step: str, exc: Exception) -> None:
-        logger.warning(
+        logger.opt(exception=exc).warning(
             "Failed {} during media DB cache reset: {}",
             step,
             exc,
-            exc_info=True,
         )
 
     managed_backends = []
@@ -367,7 +366,7 @@ def reset_media_db_cache() -> None:
                     backend = db.backend
                 except AttributeError:
                     backend = None
-                except RuntimeError as exc:
+                except (RuntimeError, TypeError, ValueError) as exc:
                     _warn("legacy DB backend", exc)
                     backend = None
                 if backend is not None:
@@ -391,7 +390,7 @@ def reset_media_db_cache() -> None:
                     backend = factory.backend
                 except AttributeError:
                     backend = None
-                except RuntimeError as exc:
+                except (RuntimeError, TypeError, ValueError) as exc:
                     _warn("factory backend", exc)
                     backend = None
                 if backend is not None:

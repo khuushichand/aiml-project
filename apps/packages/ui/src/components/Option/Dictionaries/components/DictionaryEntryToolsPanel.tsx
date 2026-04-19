@@ -78,6 +78,8 @@ export const DictionaryEntryToolsPanel: React.FC<DictionaryEntryToolsPanelProps>
   previewEntriesUsed,
 }) => {
   const { t } = useTranslation(["common", "option"])
+  const toggleOnLabel = t("common:on", "On")
+  const toggleOffLabel = t("common:off", "Off")
 
   const openToolsPanel = React.useCallback(
     (panelKey: "validate" | "preview") => {
@@ -102,8 +104,8 @@ export const DictionaryEntryToolsPanel: React.FC<DictionaryEntryToolsPanelProps>
               <Switch
                 checked={validationStrict}
                 onChange={onValidationStrictChange}
-                checkedChildren="On"
-                unCheckedChildren="Off"
+                checkedChildren={toggleOnLabel}
+                unCheckedChildren={toggleOffLabel}
                 aria-label={t(
                   "option:dictionariesTools.strictLabel",
                   "Strict validation"
@@ -111,10 +113,18 @@ export const DictionaryEntryToolsPanel: React.FC<DictionaryEntryToolsPanelProps>
               />
               <LabelWithHelp
                 label={t("option:dictionariesTools.strictLabel", "Strict validation")}
-                help="When on, checks additional rules like regex safety and pattern conflicts. When off, only checks basic format."
+                help={t(
+                  "option:dictionariesTools.strictHelp",
+                  "When on, checks additional rules like regex safety and pattern conflicts. When off, only checks basic format."
+                )}
               />
             </div>
-            <Tooltip title="Ctrl+Shift+V">
+            <Tooltip
+              title={t(
+                "option:dictionariesTools.validateShortcut",
+                "Ctrl+Shift+V"
+              )}
+            >
               <Button
                 size="small"
                 onClick={() => {

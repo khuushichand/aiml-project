@@ -22,6 +22,9 @@ class _RecordingLogger:
         self.warning_calls: list[str] = []
         self.debug_calls: list[str] = []
 
+    def opt(self, **_kwargs):
+        return self
+
     def info(self, message, *args, **kwargs) -> None:
         try:
             self.info_calls.append(message.format(*args))

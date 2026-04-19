@@ -60,9 +60,17 @@ export function getRagSourceTranslationKey(source: RagSource): string {
   return RAG_SOURCE_METADATA[source].translationKey
 }
 
-export function getRagSourceOptions(): Array<{ value: RagSource; label: string }> {
-  return ALL_RAG_SOURCES.map((source) => ({
-    value: source,
-    label: getRagSourceLabel(source),
-  }))
+export function getRagSourceOptions(
+  translate?: (key: string, fallback: string) => string
+): Array<{ value: RagSource; label: string; translationKey: string }> {
+  return ALL_RAG_SOURCES.map((source) => {
+    const metadata = RAG_SOURCE_METADATA[source]
+    return {
+      value: source,
+      label: translate
+        ? translate(metadata.translationKey, metadata.label)
+        : metadata.label,
+      translationKey: metadata.translationKey,
+    }
+  })
 }

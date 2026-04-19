@@ -108,6 +108,8 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
 )
+
+MAX_STREAM_PERSIST_USAGE_BYTES = 4_096
 from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
     resolve_character_generation_settings,
@@ -540,6 +542,7 @@ def _build_stream_persist_fingerprint(
     assistant_content: str,
     user_message_id: str | None,
     speaker_character_id: int | None,
+    ranking: int | None,
 ) -> str:
     """Build a deterministic fingerprint for streamed persist retries."""
     payload = {
@@ -547,6 +550,7 @@ def _build_stream_persist_fingerprint(
         "assistant_content": assistant_content.strip(),
         "user_message_id": user_message_id,
         "speaker_character_id": speaker_character_id,
+        "ranking": ranking,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -667,6 +671,43 @@ def _build_stream_persist_metadata_extra(
     return metadata_extra
 
 
+def _validate_stream_persist_usage(usage: Any) -> dict[str, int] | None:
+    """Validate and normalize persisted usage metadata."""
+    if usage is None:
+        return None
+    if not isinstance(usage, Mapping):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid usage. Expected object",
+        )
+
+    normalized: dict[str, int] = {}
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+    ):
+        value = usage.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid usage.{key}. Expected non-negative integer",
+            )
+        normalized[key] = value
+
+    encoded = json.dumps(normalized, sort_keys=True).encode("utf-8")
+    if len(encoded) > MAX_STREAM_PERSIST_USAGE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"usage exceeds {MAX_STREAM_PERSIST_USAGE_BYTES} bytes",
+        )
+    return normalized or None
+
+
 def _try_store_stream_persist_metadata(
     db: CharactersRAGDB,
     *,
@@ -692,6 +733,54 @@ def _try_store_stream_persist_metadata(
             assistant_message_id,
             exc,
         )
+
+
+def _update_chat_rating_after_stream_persist(
+    db: CharactersRAGDB,
+    *,
+    chat_id: str,
+    chat_rating: int | float | None,
+) -> None:
+    if chat_rating is None:
+        return
+    try:
+        conv_for_update = db.get_conversation_by_id(chat_id)
+        if conv_for_update:
+            db.update_conversation(
+                chat_id,
+                {"rating": chat_rating},
+                conv_for_update.get('version', 1),
+            )
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to update chat rating for chat_id={} rating={} error={}",
+            chat_id,
+            chat_rating,
+            exc,
+            exc_info=True,
+        )
+
+
+def _apply_stream_persist_side_effects(
+    db: CharactersRAGDB,
+    *,
+    chat_id: str,
+    assistant_message_id: str,
+    tool_calls: Any,
+    metadata_extra: dict[str, Any],
+    chat_rating: int | float | None,
+) -> None:
+    _try_store_stream_persist_metadata(
+        db,
+        assistant_message_id=assistant_message_id,
+        tool_calls=tool_calls,
+        metadata_extra=metadata_extra,
+    )
+    _update_chat_rating_after_stream_persist(
+        db,
+        chat_id=chat_id,
+        chat_rating=chat_rating,
+    )
 
 
 # Legacy local SSE helpers removed — unified streams handle normalization
@@ -6265,6 +6354,7 @@ async def persist_streamed_assistant_message(
                 body.assistant_content,
                 body.user_message_id,
                 resolved_speaker_id,
+                body.ranking if getattr(body, "ranking", None) is not None else None,
             )
 
         # Validate optional parent message belongs to this conversation
@@ -6295,6 +6385,24 @@ async def persist_streamed_assistant_message(
             existing_persist = _find_existing_stream_persist_message(db, chat_id, persist_fingerprint)
         if existing_persist is not None:
             existing_id, existing_extra = existing_persist
+            _apply_stream_persist_side_effects(
+                db,
+                chat_id=chat_id,
+                assistant_message_id=existing_id,
+                tool_calls=getattr(body, "tool_calls", None),
+                metadata_extra=_build_stream_persist_metadata_extra(
+                    speaker_character_id=resolved_speaker_id,
+                    speaker_character_name=resolved_speaker_name,
+                    turn_taking_mode=resolved_turn_mode,
+                    validation_degraded=existing_extra.get("persist_validation_degraded") is True,
+                    persist_fingerprint=persist_fingerprint,
+                    mood_label=body.mood_label,
+                    mood_confidence=body.mood_confidence,
+                    mood_topic=body.mood_topic,
+                    usage=_validate_stream_persist_usage(getattr(body, "usage", None)),
+                ),
+                chat_rating=getattr(body, "chat_rating", None),
+            )
             if existing_extra.get("persist_validation_degraded"):
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -6327,7 +6435,7 @@ async def persist_streamed_assistant_message(
             mood_label=body.mood_label,
             mood_confidence=body.mood_confidence,
             mood_topic=body.mood_topic,
-            usage=getattr(body, "usage", None),
+            usage=_validate_stream_persist_usage(getattr(body, "usage", None)),
         )
 
         # Persist assistant response via Character_Chat guardrails
@@ -6356,11 +6464,13 @@ async def persist_streamed_assistant_message(
             if existing_persist is None:
                 raise
             existing_id, existing_extra = existing_persist
-            _try_store_stream_persist_metadata(
+            _apply_stream_persist_side_effects(
                 db,
+                chat_id=chat_id,
                 assistant_message_id=existing_id,
                 tool_calls=getattr(body, "tool_calls", None),
                 metadata_extra=metadata_extra,
+                chat_rating=getattr(body, "chat_rating", None),
             )
             if existing_extra.get("persist_validation_degraded"):
                 raise HTTPException(
@@ -6377,31 +6487,14 @@ async def persist_streamed_assistant_message(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to persist assistant message"
             )
-        _try_store_stream_persist_metadata(
+        _apply_stream_persist_side_effects(
             db,
+            chat_id=chat_id,
             assistant_message_id=assistant_msg_id,
             tool_calls=getattr(body, "tool_calls", None),
             metadata_extra=metadata_extra,
+            chat_rating=getattr(body, "chat_rating", None),
         )
-
-        # Optionally update chat rating
-        if getattr(body, 'chat_rating', None) is not None:
-            try:
-                conv_for_update = db.get_conversation_by_id(chat_id)
-                if conv_for_update:
-                    db.update_conversation(
-                        chat_id,
-                        {"rating": body.chat_rating},
-                        conv_for_update.get('version', 1),
-                    )
-            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
-                logger.warning(
-                    "Failed to update chat rating for chat_id={} rating={} error={}",
-                    chat_id,
-                    getattr(body, "chat_rating", None),
-                    e,
-                    exc_info=True,
-                )
 
         if validation_degraded is not None:
             raise HTTPException(

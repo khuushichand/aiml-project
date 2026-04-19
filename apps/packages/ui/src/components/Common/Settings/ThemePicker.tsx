@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback } from "react"
-import { Segmented, Button, message } from "antd"
+import { Segmented, Button, Modal, message } from "antd"
 import {
   Monitor,
   Moon,
@@ -171,9 +171,22 @@ export function ThemePicker() {
 
   const handleDelete = useCallback(
     (id: string) => {
-      deleteCustomTheme(id)
+      const theme = customThemes.find((entry) => entry.id === id)
+      Modal.confirm({
+        title: t("generalSettings.settings.themePreset.delete.title", "Delete theme?"),
+        content: t(
+          "generalSettings.settings.themePreset.delete.description",
+          `"${theme?.name ?? "This theme"}" will be permanently removed.`
+        ),
+        okText: t("common:delete", "Delete"),
+        okType: "danger",
+        cancelText: t("common:cancel", "Cancel"),
+        onOk: () => {
+          deleteCustomTheme(id)
+        }
+      })
     },
-    [deleteCustomTheme],
+    [customThemes, deleteCustomTheme, t],
   )
 
   const handleEditCustom = useCallback((theme: ThemeDefinition) => {

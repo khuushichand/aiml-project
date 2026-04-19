@@ -21,27 +21,27 @@ export const WorkspaceShortcutsModal: React.FC<WorkspaceShortcutsModalProps> = (
     const rows = [
       {
         action: t("playground:workspace.shortcutSearch", "Search workspace"),
-        combo: `${modifierLabel}+K`,
+        combo: "Alt+K",
       },
       {
         action: t("playground:workspace.shortcutFocusSources", "Focus sources pane"),
-        combo: `${modifierLabel}+1`,
+        combo: "Alt+1",
       },
       {
         action: t("playground:workspace.shortcutFocusChat", "Focus chat pane"),
-        combo: `${modifierLabel}+2`,
+        combo: "Alt+2",
       },
       {
         action: t("playground:workspace.shortcutFocusStudio", "Focus studio pane"),
-        combo: `${modifierLabel}+3`,
+        combo: "Alt+3",
       },
       {
         action: t("playground:workspace.shortcutNewNote", "New note"),
-        combo: `${modifierLabel}+N`,
+        combo: "Alt+N",
       },
       {
         action: t("playground:workspace.shortcutNewWorkspace", "New workspace"),
-        combo: `${modifierLabel}+Shift+N`,
+        combo: "Alt+Shift+N",
       },
       {
         action: t("playground:workspace.shortcutUndo", "Undo"),

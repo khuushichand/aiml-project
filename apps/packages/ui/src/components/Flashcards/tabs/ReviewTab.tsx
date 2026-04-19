@@ -712,7 +712,6 @@ export const ReviewTab: React.FC<ReviewTabProps> = ({
 
       if (response.target_service === "flashcards" && targetId) {
         setSelectedStudySessionId(null)
-        setActiveReviewSessionId(null)
         onReviewDeckChange(targetId)
         return
       }

@@ -2649,7 +2649,12 @@ async def create_chat_completion(
                                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as inj_err:
                                     logger.debug(f"Failed to append system injection message: {inj_err}")
         except HTTPException as _cmd_err:
-            if _cmd_err.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            detail = getattr(_cmd_err, "detail", None)
+            if (
+                _cmd_err.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+                and isinstance(detail, dict)
+                and detail.get("error_code") == "mandatory_audit_unavailable"
+            ):
                 raise
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _cmd_err:

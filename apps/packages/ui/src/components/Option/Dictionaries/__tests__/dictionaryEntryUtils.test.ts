@@ -112,6 +112,17 @@ describe("humanizeRegexError", () => {
     expect(humanizeRegexError("alone"))
       .toBe("alone")
   })
+
+  it("uses the provided localizer for known regex copy", () => {
+    expect(
+      humanizeRegexError(
+        "Invalid regular expression: /[abc/: Unterminated character class",
+        (key, fallback) => `${key}:${fallback}`
+      )
+    ).toBe(
+      "option:dictionaries.validation.regex.unterminatedCharacterClass:Opening bracket [ has no closing ]."
+    )
+  })
 })
 
 describe("humanizeValidationCode", () => {
@@ -129,5 +140,18 @@ describe("humanizeValidationCode", () => {
   it("falls back to raw code for unknown codes", () => {
     expect(humanizeValidationCode("unknown_code").label).toBe("unknown_code")
     expect(humanizeValidationCode("unknown_code").fix).toBeUndefined()
+  })
+
+  it("uses the provided localizer for known validation codes", () => {
+    const result = humanizeValidationCode(
+      "pattern_duplicate",
+      (key, fallback) => `${key}:${fallback}`
+    )
+    expect(result.label).toBe(
+      "option:dictionaries.validation.code.patternDuplicate.label:Duplicate pattern"
+    )
+    expect(result.fix).toBe(
+      "option:dictionaries.validation.code.patternDuplicate.fix:Another entry already uses this pattern. Remove one to avoid conflicts."
+    )
   })
 })

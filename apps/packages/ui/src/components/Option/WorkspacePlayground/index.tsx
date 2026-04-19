@@ -1722,45 +1722,45 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
     const handleKeyboardShortcut = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
-      const hasModifier = event.metaKey || event.ctrlKey
+      const hasPrimaryModifier = event.metaKey || event.ctrlKey
 
-      if (hasModifier && key === "k") {
+      if (event.altKey && !hasPrimaryModifier && !event.shiftKey && key === "k") {
         event.preventDefault()
         setGlobalSearchOpen(true)
         return
       }
 
-      if (hasModifier && key === "z" && !event.shiftKey) {
+      if (hasPrimaryModifier && key === "z" && !event.shiftKey) {
         event.preventDefault()
         undoLatestWorkspaceAction()
         return
       }
 
-      if (hasModifier && !event.shiftKey && key === "1") {
+      if (event.altKey && !hasPrimaryModifier && !event.shiftKey && key === "1") {
         event.preventDefault()
         focusWorkspacePane("sources")
         return
       }
 
-      if (hasModifier && !event.shiftKey && key === "2") {
+      if (event.altKey && !hasPrimaryModifier && !event.shiftKey && key === "2") {
         event.preventDefault()
         focusWorkspacePane("chat")
         return
       }
 
-      if (hasModifier && !event.shiftKey && key === "3") {
+      if (event.altKey && !hasPrimaryModifier && !event.shiftKey && key === "3") {
         event.preventDefault()
         focusWorkspacePane("studio")
         return
       }
 
-      if (hasModifier && event.shiftKey && key === "n") {
+      if (event.altKey && !hasPrimaryModifier && event.shiftKey && key === "n") {
         event.preventDefault()
         createNewWorkspace()
         return
       }
 
-      if (hasModifier && !event.shiftKey && key === "n") {
+      if (event.altKey && !hasPrimaryModifier && !event.shiftKey && key === "n") {
         event.preventDefault()
         const hasNoteContent =
           currentNote.title.trim().length > 0 ||
@@ -1802,7 +1802,7 @@ const WorkspacePlaygroundBody: React.FC = () => {
 
       if (
         event.key === "?" &&
-        !hasModifier &&
+        !hasPrimaryModifier &&
         !event.altKey
       ) {
         const target = event.target as HTMLElement | null

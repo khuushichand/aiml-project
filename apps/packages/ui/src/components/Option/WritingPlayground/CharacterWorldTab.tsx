@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Button, Empty, Input, List, Segmented, Select, Spin, Tag, Typography } from "antd"
+import { Button, Empty, Input, List, Segmented, Select, Spin, Tag, Typography, message } from "antd"
 import { Plus, Users, Globe, GitBranch } from "lucide-react"
 import { useWritingPlaygroundStore } from "@/store/writing-playground"
 import {
@@ -87,35 +87,38 @@ export function CharacterWorldTab({ isOnline }: CharacterWorldTabProps) {
   // ── Mutations ──
   const addCharMutation = useMutation({
     mutationFn: (name: string) => createManuscriptCharacter(activeProjectId!, { name }),
-    onSuccess: () => {
+    onSuccess: (_response, name) => {
       queryClient.invalidateQueries({ queryKey: ["manuscript-characters", activeProjectId] })
-      setNewCharName("")
+      setNewCharName((current) => current.trim() === name ? "" : current)
     },
     onError: (err: Error) => {
       console.debug("[CharacterWorldTab] Failed to create character", err)
+      void message.error("Failed to create character")
     },
   })
 
   const addWorldMutation = useMutation({
     mutationFn: ({ name, kind }: { name: string; kind: string }) =>
       createManuscriptWorldInfo(activeProjectId!, { name, kind }),
-    onSuccess: () => {
+    onSuccess: (_response, variables) => {
       queryClient.invalidateQueries({ queryKey: ["manuscript-world-info", activeProjectId] })
-      setNewWorldName("")
+      setNewWorldName((current) => current.trim() === variables.name ? "" : current)
     },
     onError: (err: Error) => {
       console.debug("[CharacterWorldTab] Failed to create world info", err)
+      void message.error("Failed to create world info")
     },
   })
 
   const addPlotMutation = useMutation({
     mutationFn: (title: string) => createManuscriptPlotLine(activeProjectId!, { title }),
-    onSuccess: () => {
+    onSuccess: (_response, title) => {
       queryClient.invalidateQueries({ queryKey: ["manuscript-plot-lines", activeProjectId] })
-      setNewPlotTitle("")
+      setNewPlotTitle((current) => current.trim() === title ? "" : current)
     },
     onError: (err: Error) => {
       console.debug("[CharacterWorldTab] Failed to create plot line", err)
+      void message.error("Failed to create plot line")
     },
   })
 

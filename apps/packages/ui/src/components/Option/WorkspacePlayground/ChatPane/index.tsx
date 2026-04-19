@@ -1103,7 +1103,7 @@ const SimpleChatInput: React.FC<{
                 : placeholder || t("playground:chat.inputPlaceholder", "Type / for commands or a message...")
             }
             autoSize={{ minRows: 1, maxRows: 6 }}
-            disabled={isLoading || isPreparingContext}
+            disabled={isLoading || isPreparingContext || isChatUnavailable}
             className="pr-10 text-sm"
           />
         </div>

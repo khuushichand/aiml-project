@@ -1720,6 +1720,7 @@ export const useChatActions = ({
                 }) as Message[])
               )
             } catch (fallbackError) {
+              assistantPersistedToServer = false
               console.error(
                 "Failed fallback assistant persistence with addChatMessage:",
                 fallbackError
@@ -1787,7 +1788,7 @@ export const useChatActions = ({
         assistantParentMessageId: resolvedAssistantParentMessageId ?? null,
         conversationId: activeChatId,
         saveToDb: true,
-        serverMessagesAlreadyPersisted: Boolean(activeChatId) && !temporaryChat
+        serverMessagesAlreadyPersisted: assistantPersistedToServer
       })
 
       setIsProcessing(false)

@@ -103,3 +103,23 @@ def test_find_existing_stream_persist_message_falls_back_to_single_message_looku
         {"stream_persist_fingerprint": "fingerprint-2"},
     )
     assert db.single_calls == ["assistant-1", "assistant-2"]
+
+
+@pytest.mark.unit
+def test_build_stream_persist_fingerprint_distinguishes_ranked_variants() -> None:
+    first = sessions._build_stream_persist_fingerprint(
+        "chat-1",
+        "same text",
+        "user-1",
+        123,
+        1,
+    )
+    second = sessions._build_stream_persist_fingerprint(
+        "chat-1",
+        "same text",
+        "user-1",
+        123,
+        2,
+    )
+
+    assert first != second

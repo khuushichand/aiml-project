@@ -71,6 +71,8 @@ export const RouteRedirect: React.FC<RouteRedirectProps> = ({
           sourcePath: router.asPath || router.pathname || '',
           destinationPath: destination,
           preserveParams,
+        }).catch(() => {
+          // Keep the redirect moving even if telemetry persistence fails asynchronously.
         });
       } catch {
         // Keep the redirect moving even if telemetry setup throws synchronously.

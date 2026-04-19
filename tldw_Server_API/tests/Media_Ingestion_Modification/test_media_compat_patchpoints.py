@@ -64,6 +64,24 @@ def test_web_scraping_endpoint_resolver_honors_media_shim(monkeypatch):
     assert resolved is shim_process_web_scraping_task  # nosec B101
 
 
+def test_web_scraping_endpoint_resolver_ignores_sync_media_shim(monkeypatch):
+    import tldw_Server_API.app.api.v1.endpoints.media as media_mod
+    from tldw_Server_API.app.api.v1.endpoints.media import process_web_scraping as endpoint_mod
+
+    def shim_process_web_scraping_task(**kwargs):
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        media_mod,
+        "process_web_scraping_task",
+        shim_process_web_scraping_task,
+        raising=True,
+    )
+
+    resolved = endpoint_mod._resolve_process_web_scraping_task()
+    assert resolved is endpoint_mod.process_web_scraping_task  # nosec B101
+
+
 def test_web_scraping_endpoint_resolver_is_typed_and_documented():
     from tldw_Server_API.app.api.v1.endpoints.media import process_web_scraping as endpoint_mod
 

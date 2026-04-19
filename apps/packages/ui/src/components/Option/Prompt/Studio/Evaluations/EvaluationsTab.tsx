@@ -5,7 +5,8 @@ import {
   Tag,
   notification,
   Dropdown,
-  Progress
+  Progress,
+  Tooltip
 } from "antd"
 import type { MenuProps } from "antd"
 import {
@@ -355,10 +356,12 @@ export const EvaluationsTab: React.FC = () => {
               return (
                 <div className="flex gap-3">
                   {metrics.map((m) => (
-                    <div key={m.label} className="text-sm" title={m.tooltip || undefined}>
-                      <span className="text-text-muted">{m.label}:</span>{" "}
-                      <span className="font-medium">{m.value}</span>
-                    </div>
+                    <Tooltip key={m.label} title={m.tooltip}>
+                      <div className="text-sm">
+                        <span className="text-text-muted">{m.label}:</span>{" "}
+                        <span className="font-medium">{m.value}</span>
+                      </div>
+                    </Tooltip>
                   ))}
                 </div>
               )

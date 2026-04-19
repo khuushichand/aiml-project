@@ -174,8 +174,12 @@ def resolve_trusted_database_path(
 
     if os.path.isabs(expanded_path):
         normalized_absolute = os.path.normpath(expanded_path)
+        absolute_candidate = Path(normalized_absolute)
+        if absolute_candidate.is_symlink():
+            logger.warning("Rejected {} symlink path outside trusted roots: {}", label, normalized_absolute)
+            raise InvalidStoragePathError("invalid_path")
         try:
-            candidate_resolved = Path(normalized_absolute).resolve(strict=False)
+            candidate_resolved = absolute_candidate.resolve(strict=False)
         except Exception as exc:
             raise InvalidStoragePathError("invalid_path") from exc
 

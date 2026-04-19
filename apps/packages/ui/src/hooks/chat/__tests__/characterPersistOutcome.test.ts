@@ -15,11 +15,13 @@ describe("resolveSavedDegradedCharacterPersist", () => {
       }
     })
 
-    expect(resolveSavedDegradedCharacterPersist(error)).toEqual({
+    const outcome = resolveSavedDegradedCharacterPersist(error)
+
+    expect(outcome).toMatchObject({
       saved: true,
-      assistantMessageId: "assistant-server-1",
-      version: undefined
+      assistantMessageId: "assistant-server-1"
     })
+    expect(outcome?.version).toBeUndefined()
   })
 
   it("extracts a saved degraded outcome from a top-level FastAPI detail payload", () => {
@@ -47,5 +49,22 @@ describe("resolveSavedDegradedCharacterPersist", () => {
     })
 
     expect(resolveSavedDegradedCharacterPersist(error)).toBeNull()
+  })
+
+  it("preserves numeric assistant message ids from degraded saves", () => {
+    const error = Object.assign(new Error("degraded"), {
+      status: 503,
+      detail: {
+        code: "persist_validation_degraded",
+        saved: true,
+        assistant_message_id: 42
+      }
+    })
+
+    expect(resolveSavedDegradedCharacterPersist(error)).toEqual({
+      saved: true,
+      assistantMessageId: 42,
+      version: undefined
+    })
   })
 })

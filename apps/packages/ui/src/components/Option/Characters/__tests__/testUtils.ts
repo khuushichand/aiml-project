@@ -7,7 +7,8 @@ export const ensureLocalStorageApi = (): Storage => {
     typeof existing?.setItem === "function" &&
     typeof existing?.removeItem === "function" &&
     typeof existing?.clear === "function" &&
-    typeof existing?.key === "function"
+    typeof existing?.key === "function" &&
+    typeof existing?.length === "number"
   ) {
     return existing as Storage
   }

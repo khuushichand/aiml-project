@@ -4,6 +4,9 @@ import type { TagMatchMode } from "./custom-prompts-utils"
 
 const STORAGE_KEY = "tldw-prompt-filter-presets-v1"
 
+const isPresetRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null
+
 export type FilterPreset = {
   id: string
   name: string
@@ -22,13 +25,15 @@ const loadPresets = (): FilterPreset[] => {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.map((preset) => ({
-      ...preset,
-      usageFilter:
-        preset?.usageFilter === "used" || preset?.usageFilter === "unused"
-          ? preset.usageFilter
-          : "all"
-    }))
+    return parsed
+      .filter(isPresetRecord)
+      .map((preset) => ({
+        ...preset,
+        usageFilter:
+          preset.usageFilter === "used" || preset.usageFilter === "unused"
+            ? preset.usageFilter
+            : "all"
+      })) as FilterPreset[]
   } catch {
     return []
   }

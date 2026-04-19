@@ -1,6 +1,6 @@
 type PersistOutcome = {
   saved: true
-  assistantMessageId?: string
+  assistantMessageId?: string | number
   version?: number
 }
 
@@ -44,7 +44,8 @@ export const resolveSavedDegradedCharacterPersist = (
   return {
     saved: true,
     assistantMessageId:
-      typeof detail.assistant_message_id === "string"
+      typeof detail.assistant_message_id === "string" ||
+      typeof detail.assistant_message_id === "number"
         ? detail.assistant_message_id
         : undefined,
     version: typeof detail.version === "number" ? detail.version : undefined

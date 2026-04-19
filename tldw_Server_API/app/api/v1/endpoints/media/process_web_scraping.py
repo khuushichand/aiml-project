@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -31,8 +32,16 @@ def _resolve_process_web_scraping_task() -> WebScrapingTask:
     from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
     shim_task = getattr(media_mod, "process_web_scraping_task", None)
-    if callable(shim_task):
+    if callable(shim_task) and (
+        inspect.iscoroutinefunction(shim_task)
+        or inspect.iscoroutinefunction(getattr(shim_task, "__call__", None))
+    ):
         return cast(WebScrapingTask, shim_task)
+    if shim_task is not None:
+        logger.warning(
+            "Ignoring non-async media.process_web_scraping_task shim: {}",
+            shim_task,
+        )
     return process_web_scraping_task
 
 

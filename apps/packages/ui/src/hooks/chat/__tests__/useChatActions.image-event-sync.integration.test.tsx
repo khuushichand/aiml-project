@@ -604,7 +604,7 @@ describe("useChatActions character stream throttling integration", () => {
     })
 
     const { options } = createHookOptions([])
-    options.serverChatId = "server-chat-1"
+    options.serverChatId = "chat-character-1"
     options.selectedCharacter = {
       id: 101,
       name: "Stream Character",
@@ -680,4 +680,5 @@ describe("useChatActions character stream throttling integration", () => {
       )
     ).toHaveLength(0)
   })
+
 })

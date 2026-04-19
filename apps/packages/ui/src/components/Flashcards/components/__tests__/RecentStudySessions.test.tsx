@@ -74,4 +74,30 @@ describe("RecentStudySessions", () => {
 
     expect(sessionsMock).toHaveBeenCalledWith(81)
   })
+
+  it("shows a retryable error state when loading fails", () => {
+    const refetchMock = vi.fn()
+    vi.mocked(useRecentFlashcardReviewSessionsQuery).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isError: true,
+      error: new Error("Session service offline"),
+      refetch: refetchMock
+    } as any)
+
+    render(
+      <RecentStudySessions
+        deckId={12}
+        selectedSessionId={null}
+        onOpenSession={sessionsMock}
+        isActive
+      />
+    )
+
+    expect(screen.getByText("Session service offline")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+    expect(refetchMock).toHaveBeenCalled()
+  })
 })

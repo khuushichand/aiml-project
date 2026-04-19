@@ -10,10 +10,8 @@ import {
   listManuscriptCharacters,
   listManuscriptWorldInfo,
   type ManuscriptCharacter,
-  type ManuscriptCharacterListResponse,
   type ManuscriptSceneResponse,
   type ManuscriptWorldInfoItem,
-  type ManuscriptWorldInfoListResponse,
 } from "@/services/writing-playground"
 
 type AIAgentTabProps = { isOnline: boolean }
@@ -29,7 +27,8 @@ const SYSTEM_PROMPTS: Record<AgentMode, string> = {
 const chatService = new TldwChatService()
 
 export function AIAgentTab({ isOnline }: AIAgentTabProps) {
-  const { activeProjectId, activeNodeId } = useWritingPlaygroundStore()
+  const activeProjectId = useWritingPlaygroundStore((state) => state.activeProjectId)
+  const activeNodeId = useWritingPlaygroundStore((state) => state.activeNodeId)
   const [selectedModel] = useStorage<string>("selectedModel")
   const apiProvider = useStoreChatModelSettings((state) => state.apiProvider)
 
@@ -114,10 +113,14 @@ export function AIAgentTab({ isOnline }: AIAgentTabProps) {
       )
 
       setMessages((prev) => [...prev, { role: "assistant", content: response }])
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message.trim().length > 0
+          ? err.message
+          : "Failed to get response"
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: `Error: ${err?.message || "Failed to get response"}` },
+        { role: "assistant", content: `Error: ${message}` },
       ])
     } finally {
       setLoading(false)
