@@ -560,8 +560,9 @@ class ConnectionPool:
             self._overflow_connections.clear()
             self._condition.notify_all()
 
-        if not maintenance_stopped and self._maintenance_task and self._maintenance_task.is_alive():
-            self._maintenance_task.join(timeout=0.1)
+        if not maintenance_stopped and self._maintenance_task:
+            if self._maintenance_task.is_alive():
+                self._maintenance_task.join(timeout=0.1)
             maintenance_stopped = not self._maintenance_task.is_alive()
 
         if maintenance_stopped:

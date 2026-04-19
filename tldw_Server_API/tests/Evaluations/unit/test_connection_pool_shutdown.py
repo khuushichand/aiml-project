@@ -70,6 +70,20 @@ class _StopsAfterFinalJoinMaintenanceTask:
             self._alive = False
 
 
+class _DiesDuringCleanupMaintenanceTask:
+    """Test double that stops before the post-cleanup retry join."""
+
+    def __init__(self):
+        self.join_timeouts: list[float | None] = []
+        self._alive_states = iter([True, True, False, False])
+
+    def is_alive(self) -> bool:
+        return next(self._alive_states)
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(timeout)
+
+
 @pytest.mark.unit
 class TestConnectionPoolShutdown:
     """Shutdown behavior should wake maintenance and avoid long joins."""
@@ -137,11 +151,11 @@ class TestConnectionPoolShutdown:
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
-            lambda *args, **kwargs: infos.append(args),
+            lambda *args, **_kwargs: infos.append(args),
         )
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
-            lambda *args, **kwargs: warnings.append(args),
+            lambda *args, **_kwargs: warnings.append(args),
         )
 
         pool.shutdown()
@@ -166,11 +180,11 @@ class TestConnectionPoolShutdown:
 
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
-            lambda *args, **kwargs: infos.append(args),
+            lambda *args, **_kwargs: infos.append(args),
         )
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
-            lambda *args, **kwargs: warnings.append(args),
+            lambda *args, **_kwargs: warnings.append(args),
         )
 
         pool.shutdown()
@@ -181,3 +195,32 @@ class TestConnectionPoolShutdown:
             pytest.fail(f"expected clean completion without warnings, got {warnings!r}")
         if not any(args and args[0] == "Connection pool shutdown complete" for args in infos):
             pytest.fail("expected shutdown to report clean completion after the maintenance thread exits")
+
+    def test_shutdown_reports_clean_completion_when_maintenance_dies_during_cleanup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_db_path,
+    ):
+        pool = ConnectionPool(db_path=str(temp_db_path), enable_monitoring=False)
+        maintenance_task = _DiesDuringCleanupMaintenanceTask()
+        infos: list[tuple[object, ...]] = []
+        warnings: list[tuple[object, ...]] = []
+        pool._maintenance_task = maintenance_task
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
+            lambda *args, **_kwargs: infos.append(args),
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
+            lambda *args, **_kwargs: warnings.append(args),
+        )
+
+        pool.shutdown()
+
+        if maintenance_task.join_timeouts != [1.0]:
+            pytest.fail(f"expected only the initial bounded join, got {maintenance_task.join_timeouts!r}")
+        if warnings:
+            pytest.fail(f"expected clean completion without warnings, got {warnings!r}")
+        if not any(args and args[0] == "Connection pool shutdown complete" for args in infos):
+            pytest.fail("expected shutdown to report clean completion after the maintenance thread dies during cleanup")
