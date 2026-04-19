@@ -13,12 +13,12 @@
 // - When you remove or rename an endpoint, update ClientPath (and any entries
 //   in API_PATHS) to match the current server API.
 // - To verify that ClientPath and MEDIA_ADD_SCHEMA_FALLBACK stay in sync with
-//   openapi.json, run:
-//     npm run verify:openapi
-//     bun run verify:openapi
+//   the current OpenAPI contract, run `bun run verify:openapi` from
+//   `apps/packages/ui`.
 //   If verification fails, reconcile the differences by updating ClientPath
-//   (or, if the spec is stale, regenerate / update openapi.json) until the
-//   check passes.
+//   or by refreshing `apps/extension/openapi.json`. If that snapshot is absent,
+//   the verifier derives the spec from the checked-out backend using the
+//   project Python environment.
 
 // Union of relative API paths that the web UI calls via bgRequest/bgStream
 // or direct fetch. If a new endpoint is added in the UI, it should be
