@@ -13,41 +13,61 @@ class _ShutdownAwareMaintenanceTask:
 
     def __init__(self, wakeup_event: threading.Event):
         self._wakeup_event = wakeup_event
+        self._alive = True
         self.join_timeout = None
 
     def is_alive(self) -> bool:
-        return True
+        return self._alive
 
     def join(self, timeout: float | None = None) -> None:
         if not self._wakeup_event.is_set():
             pytest.fail("shutdown must wake maintenance before joining")
         self.join_timeout = timeout
+        self._alive = False
 
 
 class _TimeoutRecordingMaintenanceTask:
     """Test double that records the shutdown join timeout."""
 
     def __init__(self):
+        self._alive = True
         self.join_timeout = None
 
     def is_alive(self) -> bool:
-        return True
+        return self._alive
 
     def join(self, timeout: float | None = None) -> None:
         self.join_timeout = timeout
+        self._alive = False
 
 
 class _StuckMaintenanceTask:
     """Test double that remains alive after the bounded join."""
 
     def __init__(self):
-        self.join_timeout = None
+        self.join_timeouts: list[float | None] = []
 
     def is_alive(self) -> bool:
         return True
 
     def join(self, timeout: float | None = None) -> None:
-        self.join_timeout = timeout
+        self.join_timeouts.append(timeout)
+
+
+class _StopsAfterFinalJoinMaintenanceTask:
+    """Test double that only exits after the post-cleanup join."""
+
+    def __init__(self):
+        self.join_timeouts: list[float | None] = []
+        self._alive = True
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(timeout)
+        if len(self.join_timeouts) >= 2:
+            self._alive = False
 
 
 @pytest.mark.unit
@@ -111,9 +131,14 @@ class TestConnectionPoolShutdown:
     ):
         pool = ConnectionPool(db_path=str(temp_db_path), enable_monitoring=False)
         maintenance_task = _StuckMaintenanceTask()
+        infos: list[tuple[object, ...]] = []
         warnings: list[tuple[object, ...]] = []
         pool._maintenance_task = maintenance_task
 
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
+            lambda *args, **kwargs: infos.append(args),
+        )
         monkeypatch.setattr(
             "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
             lambda *args, **kwargs: warnings.append(args),
@@ -121,7 +146,38 @@ class TestConnectionPoolShutdown:
 
         pool.shutdown()
 
-        if maintenance_task.join_timeout != 1.0:
-            pytest.fail(f"expected join timeout 1.0, got {maintenance_task.join_timeout!r}")
+        if maintenance_task.join_timeouts != [1.0, 0.1]:
+            pytest.fail(f"expected join timeouts [1.0, 0.1], got {maintenance_task.join_timeouts!r}")
         if not warnings:
             pytest.fail("expected shutdown to warn when maintenance thread remains alive")
+        if any(args and args[0] == "Connection pool shutdown complete" for args in infos):
+            pytest.fail("shutdown should not claim clean completion while maintenance thread is still alive")
+
+    def test_shutdown_rechecks_maintenance_thread_after_cleanup_before_clean_completion(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_db_path,
+    ):
+        pool = ConnectionPool(db_path=str(temp_db_path), enable_monitoring=False)
+        maintenance_task = _StopsAfterFinalJoinMaintenanceTask()
+        infos: list[tuple[object, ...]] = []
+        warnings: list[tuple[object, ...]] = []
+        pool._maintenance_task = maintenance_task
+
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.info",
+            lambda *args, **kwargs: infos.append(args),
+        )
+        monkeypatch.setattr(
+            "tldw_Server_API.app.core.Evaluations.connection_pool.logger.warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        pool.shutdown()
+
+        if maintenance_task.join_timeouts != [1.0, 0.1]:
+            pytest.fail(f"expected join timeouts [1.0, 0.1], got {maintenance_task.join_timeouts!r}")
+        if warnings:
+            pytest.fail(f"expected clean completion without warnings, got {warnings!r}")
+        if not any(args and args[0] == "Connection pool shutdown complete" for args in infos):
+            pytest.fail("expected shutdown to report clean completion after the maintenance thread exits")
