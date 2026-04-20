@@ -105,8 +105,8 @@ runner_args = ["run", "./cmd/tldw-agent-acp"]
 # Working directory for the runner process (e.g. ../tldw-agent).
 runner_cwd = ../tldw-agent
 # Runner environment (comma-separated key=value or JSON).
-# If you point HOME at a local ACP stub config, use an absolute path to avoid Go GOMODCACHE errors.
-runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_API/Config_Files/acp_runner_home,PYTHONUNBUFFERED=1
+# Relative HOME values are resolved against this Config_Files directory.
+runner_env = HOME=./acp_runner_home,PYTHONUNBUFFERED=1
 # Startup timeout for runner initialize.
 startup_timeout_ms = 10000
 # Phase 2b default-on rollout for the stable provider:model cohort.
@@ -1428,6 +1428,8 @@ custom_scrapers_yaml_path = tldw_Server_API/Config_Files/custom_scrapers.yaml
 web_scraper_default_backend = auto
 web_scraper_ua_mode = fixed
 web_scraper_respect_robots = True
+# Shared outbound safety mode for scraping and websearch data-plane callers: compat|strict
+web_outbound_policy_mode = compat
 web_scraper_preflight_analyzers = False
 web_scraper_preflight_timeout_s = 0
 web_scraper_preflight_scan_depth = default

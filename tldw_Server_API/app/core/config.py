@@ -2333,6 +2333,36 @@ def rag_low_confidence_behavior(default: str = "continue") -> str:
     return s if s in ("continue", "ask", "decline") else default
 
 
+def web_outbound_policy_mode(default: str = "compat") -> str:
+    """Return the web outbound-policy mode with env-over-config precedence.
+
+    Accepted values are ``compat`` and ``strict``. Invalid or missing values
+    fall back to ``default``.
+    """
+    v = os.getenv("WEB_OUTBOUND_POLICY_MODE")
+    if v is None:
+        try:
+            cp = load_comprehensive_config()
+            v = default
+            if cp:
+                has_section = getattr(cp, "has_section", None)
+                for section_name in ("Web-Scraper", "Web-Scraping"):
+                    if callable(has_section) and not has_section(section_name):
+                        continue
+                    candidate = cp.get(
+                        section_name,
+                        "web_outbound_policy_mode",
+                        fallback=None,
+                    )
+                    if candidate is not None and str(candidate).strip():
+                        v = candidate
+                        break
+        except _CONFIG_NONCRITICAL_EXCEPTIONS:
+            v = default
+    s = str(v).strip().lower()
+    return s if s in ("compat", "strict") else default
+
+
 def rag_agentic_cache_backend(default: str = "memory") -> str:
     v = os.getenv("RAG_AGENTIC_CACHE_BACKEND")
     if v is None:
@@ -4352,6 +4382,7 @@ def load_and_log_configs():
         web_scraper_respect_robots = _as_bool(
             _env_or_cfg('WEB_SCRAPER_RESPECT_ROBOTS', 'Web-Scraper', 'web_scraper_respect_robots', 'true'), True
         )
+        web_outbound_policy_mode_value = web_outbound_policy_mode()
         # Optional scorers configuration
         web_crawl_enable_keyword = _as_bool(
             _env_or_cfg('WEB_CRAWL_ENABLE_KEYWORD_SCORER', 'Web-Scraper', 'web_crawl_enable_keyword_scorer', 'false'), False
@@ -5024,6 +5055,7 @@ def load_and_log_configs():
             'web_crawl_allowed_domains': web_crawl_allowed_domains,
             'web_crawl_blocked_domains': web_crawl_blocked_domains,
             'web_scraper_respect_robots': web_scraper_respect_robots,
+            'web_outbound_policy_mode': web_outbound_policy_mode_value,
             # Scorers
             'web_crawl_enable_keyword_scorer': web_crawl_enable_keyword,
             'web_crawl_keywords': web_crawl_keywords,
