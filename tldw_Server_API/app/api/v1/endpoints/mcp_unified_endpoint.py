@@ -1740,21 +1740,6 @@ async def check_mcp_connection(
     is reserved for a future enhancement that will parse the MCP server's
     tool listing response.
     """
-    from urllib.parse import urlparse
-
-    catalog_probe_url = _resolve_catalog_probe_url(req.url)
-    if catalog_probe_url is None:
-        return MCPConnectionTestResponse(
-            reachable=False,
-            error="URL must match a curated MCP catalog entry",
-        )
-
-    parsed = urlparse(catalog_probe_url)
-    if parsed.scheme not in ("http", "https"):
-        return MCPConnectionTestResponse(
-            reachable=False, error="Only http and https URLs are allowed"
-        )
-
     supported_auth_types = {"none", "bearer", "api_key"}
     if req.auth_type not in supported_auth_types:
         raise HTTPException(
@@ -1762,8 +1747,23 @@ async def check_mcp_connection(
             detail=f"Unsupported auth_type: {req.auth_type}",
         )
 
+    try:
+        normalized_url = _validate_public_mcp_url(req.url)
+    except ValueError as exc:
+        return MCPConnectionTestResponse(
+            reachable=False,
+            error=str(exc),
+        )
+
+    catalog_probe_url = _resolve_catalog_probe_url(normalized_url)
+    if catalog_probe_url is None:
+        return MCPConnectionTestResponse(
+            reachable=False,
+            error="URL must match a curated MCP catalog entry",
+        )
+
     # SSRF protection: reject private/reserved IP ranges.
-    hostname = parsed.hostname or ""
+    hostname = urlparse(catalog_probe_url).hostname or ""
     if not hostname or _is_private_ip(hostname):
         return MCPConnectionTestResponse(
             reachable=False, error="Cannot connect to private or reserved addresses"
