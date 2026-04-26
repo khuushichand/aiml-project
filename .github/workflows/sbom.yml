@@ -46,10 +46,11 @@ jobs:
             out_file="$PWD/sbom-python.cdx.json"
             echo "Generating Python SBOM from ${req}"
 
-            # Try modern CLI first: cyclonedx-py requirements -i <file>
+            # Try modern CLI first. The requirements file is positional;
+            # -i/--index-url is reserved for the package index URL.
             if command -v cyclonedx-py >/dev/null 2>&1; then
               echo "Using cyclonedx-py"
-              if (cd "$req_dir" && cyclonedx-py requirements -i "$req_file" -o "$out_file"); then
+              if (cd "$req_dir" && cyclonedx-py requirements "$req_file" -o "$out_file"); then
                 return 0
               fi
               echo "cyclonedx-py failed; will try fallbacks"
@@ -58,7 +59,7 @@ jobs:
             # Module invocation for modern CLI (avoid depending on CLI binary layout)
             if python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('cyclonedx_py') else 1)" >/dev/null 2>&1; then
               echo "Using python -m cyclonedx_py"
-              if (cd "$req_dir" && python -m cyclonedx_py requirements -i "$req_file" -o "$out_file"); then
+              if (cd "$req_dir" && python -m cyclonedx_py requirements "$req_file" -o "$out_file"); then
                 return 0
               fi
               echo "python -m cyclonedx_py failed; trying legacy CLI"
