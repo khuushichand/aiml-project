@@ -46,38 +46,6 @@ const KNOWN_MISSING_CLIENT_PATHS = new Map([
   [
     '/api/v1/media/statistics',
     'Legacy media statistics client surface; the current OSS backend does not publish this route.'
-  ],
-  [
-    '/api/v1/billing/plans',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/subscription',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/usage',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/invoices',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/subscription/cancel',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/subscription/resume',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/checkout',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
-  ],
-  [
-    '/api/v1/billing/portal',
-    'Public billing routes are intentionally absent from the OSS backend; see tldw_Server_API/tests/Billing/test_billing_public_api_removed.py.'
   ]
 ])
 const GENERATED_OPENAPI_SCRIPT = `
@@ -139,8 +107,11 @@ function loadSpecFromBackend() {
   const gitCommonDir = resolveGitCommonDir()
   const pythonCandidates = [
     gitCommonDir ? path.join(path.dirname(gitCommonDir), '.venv', 'bin', 'python') : null,
+    gitCommonDir ? path.join(path.dirname(gitCommonDir), '.venv', 'Scripts', 'python.exe') : null,
     path.join(workspaceRoot, '.venv', 'bin', 'python'),
+    path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe'),
     process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, 'bin', 'python') : null,
+    process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, 'Scripts', 'python.exe') : null,
     'python3',
     'python'
   ].filter(Boolean)
@@ -469,11 +440,14 @@ export function extractFallbackFieldNamesFromSource(src) {
   const astNames = extractFallbackFieldNamesFromTypeScript(src)
   if (astNames.length > 0) return astNames
 
-  const marker = 'export const MEDIA_ADD_SCHEMA_FALLBACK'
-  const start = src.indexOf(marker)
-  if (start === -1) return []
+  const marker = /export\s+const\s+MEDIA_ADD_SCHEMA_FALLBACK\s*[:=]/
+  const markerMatch = marker.exec(src)
+  if (!markerMatch) return []
 
-  const arrStart = src.indexOf('[', start)
+  const assignmentStart = src.indexOf('=', markerMatch.index)
+  if (assignmentStart === -1) return []
+
+  const arrStart = src.indexOf('[', assignmentStart)
   if (arrStart === -1) return []
 
   const arrEnd = findBalancedArrayLiteralEnd(src, arrStart)

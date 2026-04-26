@@ -134,6 +134,74 @@ def test_list_ocr_backends_enriches_chatllm_discovery(monkeypatch):
     assert payload["chatllm"]["backend_concurrency_cap"] == 2  # nosec B101
 
 
+def test_list_ocr_backends_enriches_hunyuan_family_discovery(monkeypatch):
+    from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
+
+    class _StubHunyuanBackend:
+        def describe(self):
+            return {
+                "mode": "remote",
+                "runtime_family": "llamacpp",
+                "configured_family": "auto",
+                "configured": True,
+                "supports_structured_output": True,
+                "supports_json": True,
+                "auto_eligible": False,
+                "auto_high_quality_eligible": True,
+                "backend_concurrency_cap": 2,
+                "prompt_preset": "json",
+                "native": {
+                    "mode": "transformers",
+                    "configured": False,
+                    "available": False,
+                    "model": "tencent/HunyuanOCR",
+                    "device": "cuda",
+                    "vllm_configured": False,
+                    "transformers_intended": False,
+                },
+                "llamacpp": {
+                    "mode": "remote",
+                    "configured_mode": "auto",
+                    "configured": True,
+                    "model": "ggml-org/HunyuanOCR-GGUF:Q8_0",
+                    "supports_structured_output": True,
+                    "supports_json": True,
+                    "auto_eligible": False,
+                    "auto_high_quality_eligible": True,
+                    "url_configured": True,
+                    "managed_configured": True,
+                    "managed_running": False,
+                    "allow_managed_start": True,
+                    "cli_configured": True,
+                    "backend_concurrency_cap": 2,
+                },
+            }
+
+    monkeypatch.setattr(
+        ocr_mod,
+        "_list_backends",
+        lambda: {"hunyuan": {"available": True}},
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends.hunyuan_ocr.HunyuanOCRBackend",
+        _StubHunyuanBackend,
+    )
+
+    payload = ocr_mod.list_ocr_backends()
+
+    assert payload["hunyuan"]["available"] is True  # nosec B101
+    assert payload["hunyuan"]["mode"] == "remote"  # nosec B101
+    assert payload["hunyuan"]["runtime_family"] == "llamacpp"  # nosec B101
+    assert payload["hunyuan"]["configured_family"] == "auto"  # nosec B101
+    assert payload["hunyuan"]["prompt_preset"] == "json"  # nosec B101
+    assert payload["hunyuan"]["backend_concurrency_cap"] == 2  # nosec B101
+    assert payload["hunyuan"]["native"]["mode"] == "transformers"  # nosec B101
+    assert payload["hunyuan"]["native"]["available"] is False  # nosec B101
+    assert payload["hunyuan"]["llamacpp"]["mode"] == "remote"  # nosec B101
+    assert payload["hunyuan"]["llamacpp"]["url_configured"] is True  # nosec B101
+    assert payload["hunyuan"]["llamacpp"]["backend_concurrency_cap"] == 2  # nosec B101
+
+
 def test_list_ocr_backends_records_llamacpp_discovery_errors(monkeypatch):
     from tldw_Server_API.app.api.v1.endpoints import ocr as ocr_mod
 

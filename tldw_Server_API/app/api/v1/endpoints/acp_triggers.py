@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
@@ -127,11 +128,11 @@ def _get_trigger_manager():
     try:
         secret_mgr = TriggerSecretManager()
     except (ImportError, ValueError) as exc:
-        from fastapi import HTTPException
+        logger.opt(exception=True).warning("Webhook trigger encryption is not configured")
         raise HTTPException(
             status_code=503,
-            detail=f"Webhook trigger encryption not configured: {exc}",
-        )
+            detail="Webhook trigger encryption is not configured",
+        ) from exc
     return ACPTriggerManager(db=db, secret_manager=secret_mgr)
 
 

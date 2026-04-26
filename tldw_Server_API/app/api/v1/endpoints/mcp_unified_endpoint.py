@@ -15,6 +15,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, Security, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -1698,6 +1699,36 @@ async def _probe_mcp_connection(url: str, headers: dict[str, str]) -> None:
     resp.raise_for_status()
 
 
+def _validate_public_mcp_url(raw_url: str) -> str:
+    """Return a normalized public HTTP(S) URL or raise ValueError."""
+    raw = str(raw_url or "").strip()
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Only http and https URLs are allowed")
+    if parsed.username or parsed.password:
+        raise ValueError("URL credentials are not allowed")
+    if parsed.fragment:
+        raise ValueError("URL fragments are not allowed")
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        raise ValueError("A hostname is required")
+    try:
+        host = hostname.encode("idna").decode("ascii")
+        port = parsed.port
+    except (UnicodeError, ValueError) as exc:
+        raise ValueError("Invalid URL host or port") from exc
+
+    if _is_private_ip(host):
+        raise ValueError("Cannot connect to private or reserved addresses")
+
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc = f"{netloc}:{port}"
+    path = parsed.path or "/"
+    return urlunparse((parsed.scheme, netloc, path, "", parsed.query, ""))
+
+
 @router.post("/catalog/test-connection", response_model=MCPConnectionTestResponse)
 async def check_mcp_connection(
     req: MCPConnectionTestRequest,
@@ -1709,21 +1740,6 @@ async def check_mcp_connection(
     is reserved for a future enhancement that will parse the MCP server's
     tool listing response.
     """
-    from urllib.parse import urlparse
-
-    catalog_probe_url = _resolve_catalog_probe_url(req.url)
-    if catalog_probe_url is None:
-        return MCPConnectionTestResponse(
-            reachable=False,
-            error="URL must match a curated MCP catalog entry",
-        )
-
-    parsed = urlparse(catalog_probe_url)
-    if parsed.scheme not in ("http", "https"):
-        return MCPConnectionTestResponse(
-            reachable=False, error="Only http and https URLs are allowed"
-        )
-
     supported_auth_types = {"none", "bearer", "api_key"}
     if req.auth_type not in supported_auth_types:
         raise HTTPException(
@@ -1731,8 +1747,23 @@ async def check_mcp_connection(
             detail=f"Unsupported auth_type: {req.auth_type}",
         )
 
+    try:
+        normalized_url = _validate_public_mcp_url(req.url)
+    except ValueError as exc:
+        return MCPConnectionTestResponse(
+            reachable=False,
+            error=str(exc),
+        )
+
+    catalog_probe_url = _resolve_catalog_probe_url(normalized_url)
+    if catalog_probe_url is None:
+        return MCPConnectionTestResponse(
+            reachable=False,
+            error="URL must match a curated MCP catalog entry",
+        )
+
     # SSRF protection: reject private/reserved IP ranges.
-    hostname = parsed.hostname or ""
+    hostname = urlparse(catalog_probe_url).hostname or ""
     if not hostname or _is_private_ip(hostname):
         return MCPConnectionTestResponse(
             reachable=False, error="Cannot connect to private or reserved addresses"
@@ -1750,8 +1781,9 @@ async def check_mcp_connection(
     except HTTPException:
         raise
     except Exception:
+        hostname = urlparse(catalog_probe_url).hostname or "<unknown>"
         logger.opt(exception=True).warning(
-            "MCP connection test failed for {}", req.url
+            "MCP connection test failed for host={}", hostname
         )
         return MCPConnectionTestResponse(reachable=False, error="Connection failed")
 

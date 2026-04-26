@@ -258,64 +258,48 @@ def _increment_persona_metric(metric_name: str, labels: dict[str, str]) -> None:
         increment_counter(metric_name, 1, labels=safe_labels)
 
 
-def _get_persona_max_tool_steps() -> int:
+def _persona_int_setting(key: str, default: int, min_val: int, max_val: int) -> int:
     try:
         from tldw_Server_API.app.core.config import settings as _app_settings
 
-        value = int(_app_settings.get("PERSONA_MAX_TOOL_STEPS", 3))
-    except Exception:
-        value = 3
-    return max(1, min(value, 20))
+        value = int(_app_settings.get(key, default))
+    except Exception:  # noqa: BLE001
+        value = default
+    return max(min_val, min(value, max_val))
+
+
+def _persona_float_setting(key: str, default: float, min_val: float, max_val: float) -> float:
+    try:
+        from tldw_Server_API.app.core.config import settings as _app_settings
+
+        value = float(_app_settings.get(key, default))
+    except Exception:  # noqa: BLE001
+        value = default
+    return max(min_val, min(value, max_val))
+
+
+def _get_persona_max_tool_steps() -> int:
+    return _persona_int_setting("PERSONA_MAX_TOOL_STEPS", 3, 1, 20)
 
 
 def _get_persona_memory_top_k() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_MEMORY_TOP_K", 3))
-    except Exception:
-        value = 3
-    return max(1, min(value, 10))
+    return _persona_int_setting("PERSONA_MEMORY_TOP_K", 3, 1, 10)
 
 
 def _get_persona_state_hint_max_chars() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_STATE_HINT_MAX_CHARS", 1024))
-    except Exception:
-        value = 1024
-    return max(128, min(value, 8192))
+    return _persona_int_setting("PERSONA_STATE_HINT_MAX_CHARS", 1024, 128, 8192)
 
 
 def _get_persona_state_hint_per_doc_max_chars() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_STATE_HINT_PER_DOC_MAX_CHARS", 384))
-    except Exception:
-        value = 384
-    return max(64, min(value, 2048))
+    return _persona_int_setting("PERSONA_STATE_HINT_PER_DOC_MAX_CHARS", 384, 64, 2048)
 
 
 def _get_persona_state_doc_max_chars() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_STATE_DOC_MAX_CHARS", 50_000))
-    except Exception:
-        value = 50_000
-    return max(256, min(value, 1_000_000))
+    return _persona_int_setting("PERSONA_STATE_DOC_MAX_CHARS", 50_000, 256, 1_000_000)
 
 
 def _get_persona_state_history_max_entries() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_STATE_HISTORY_MAX_ENTRIES", 200))
-    except Exception:
-        value = 200
-    return max(1, min(value, 2000))
+    return _persona_int_setting("PERSONA_STATE_HISTORY_MAX_ENTRIES", 200, 1, 2000)
 
 
 def _get_persona_allowed_audio_formats() -> set[str]:
@@ -323,75 +307,38 @@ def _get_persona_allowed_audio_formats() -> set[str]:
         from tldw_Server_API.app.core.config import settings as _app_settings
 
         raw = str(_app_settings.get("PERSONA_AUDIO_ALLOWED_FORMATS", "pcm16,wav,mp3,opus"))
-    except Exception:
+    except Exception:  # noqa: BLE001
         raw = "pcm16,wav,mp3,opus"
     parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
     return set(parts) if parts else {"pcm16"}
 
 
 def _get_persona_audio_chunk_max_bytes() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_AUDIO_CHUNK_MAX_BYTES", 1_048_576))
-    except Exception:
-        value = 1_048_576
-    return max(1024, min(value, 8_388_608))
+    return _persona_int_setting("PERSONA_AUDIO_CHUNK_MAX_BYTES", 1_048_576, 1024, 8_388_608)
 
 
 def _get_persona_audio_chunks_per_minute() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_AUDIO_CHUNKS_PER_MINUTE", 120))
-    except Exception:
-        value = 120
-    return max(1, min(value, 1200))
+    return _persona_int_setting("PERSONA_AUDIO_CHUNKS_PER_MINUTE", 120, 1, 1200)
 
 
 def _get_persona_tts_chunk_size_bytes() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_TTS_CHUNK_SIZE_BYTES", 8192))
-    except Exception:
-        value = 8192
-    return max(256, min(value, 65536))
+    return _persona_int_setting("PERSONA_TTS_CHUNK_SIZE_BYTES", 8192, 256, 65536)
 
 
 def _get_persona_tts_max_chunks() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_TTS_MAX_CHUNKS", 16))
-    except Exception:
-        value = 16
-    return max(1, min(value, 256))
+    return _persona_int_setting("PERSONA_TTS_MAX_CHUNKS", 16, 1, 256)
 
 
 def _get_persona_tts_max_total_bytes() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_TTS_MAX_TOTAL_BYTES", 131072))
-    except Exception:
-        value = 131072
-    return max(1024, min(value, 2_097_152))
+    return _persona_int_setting("PERSONA_TTS_MAX_TOTAL_BYTES", 131072, 1024, 2_097_152)
 
 
 def _get_persona_tts_max_in_flight_chunks() -> int:
-    try:
-        from tldw_Server_API.app.core.config import settings as _app_settings
-
-        value = int(_app_settings.get("PERSONA_TTS_MAX_IN_FLIGHT_CHUNKS", 4))
-    except Exception:
-        value = 4
-    return max(1, min(value, 32))
+    return _persona_int_setting("PERSONA_TTS_MAX_IN_FLIGHT_CHUNKS", 4, 1, 32)
 
 
 def _get_persona_ws_auth_revalidate_interval_s() -> float:
-    """
-    Periodic auth revalidation interval for long-lived persona WS sessions.
+    """Periodic auth revalidation interval for long-lived persona WS sessions.
 
     A value <= 0 disables the background watchdog.
     """
@@ -399,7 +346,7 @@ def _get_persona_ws_auth_revalidate_interval_s() -> float:
         from tldw_Server_API.app.core.config import settings as _app_settings
 
         value = float(_app_settings.get("PERSONA_WS_AUTH_REVALIDATE_INTERVAL_S", 15.0))
-    except Exception:
+    except Exception:  # noqa: BLE001
         value = 15.0
     if value <= 0:
         return 0.0

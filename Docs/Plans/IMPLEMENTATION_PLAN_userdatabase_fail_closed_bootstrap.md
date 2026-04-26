@@ -1,5 +1,7 @@
 # UserDatabase Fail-Closed Bootstrap Implementation
 
+See [UserDatabase Fail-Closed Bootstrap Design](../Design/UserDatabase_Fail_Closed_Bootstrap.md) for the design rationale and required failure semantics.
+
 ## Stage 1: Add Focused Regression Tests
 
 **Goal**: Add a dedicated pytest file covering fail-closed bootstrap behavior for schema normalization and RBAC seeding.
