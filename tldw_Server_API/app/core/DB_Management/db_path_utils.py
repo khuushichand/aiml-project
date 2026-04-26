@@ -118,11 +118,6 @@ def _ensure_dir(path: Path, *, label: str) -> None:
         raise StorageUnavailableError(f"Failed to create {label} directory") from e
 
 
-def _resolve_candidate_for_containment(candidate: Path) -> Path:
-    parent = candidate.parent.resolve(strict=False)
-    return parent / candidate.name
-
-
 def resolve_trusted_database_path(
     db_path: str | Path,
     *,
@@ -155,6 +150,7 @@ def resolve_trusted_database_path(
                 trusted_roots.append(resolved_root)
 
     if _is_test_context():
+        trusted_roots.append(Path(tempfile.gettempdir()).expanduser())
         trusted_roots.append(Path(tempfile.gettempdir()).resolve())
         trusted_roots.append(Path.cwd().resolve())
 
@@ -174,19 +170,16 @@ def resolve_trusted_database_path(
 
     if os.path.isabs(expanded_path):
         normalized_absolute = os.path.normpath(expanded_path)
-        try:
-            candidate_resolved = Path(normalized_absolute).resolve(strict=False)
-        except Exception as exc:
-            raise InvalidStoragePathError("invalid_path") from exc
 
         for root in unique_roots:
-            root_resolved = root.resolve(strict=False)
-            with_context = _resolve_candidate_for_containment(candidate_resolved)
             try:
-                with_context.relative_to(root_resolved)
-            except ValueError:
+                root_base = os.path.abspath(str(root))
+                relative_candidate = os.path.relpath(normalized_absolute, root_base)
+            except (OSError, ValueError):
                 continue
-            return candidate_resolved
+            safe_candidate = safe_join(str(root), relative_candidate)
+            if safe_candidate is not None:
+                return Path(safe_candidate)
 
         logger.warning("Rejected {} path outside trusted roots: {}", label, normalized_absolute)
         raise InvalidStoragePathError("invalid_path")

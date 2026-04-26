@@ -43,6 +43,7 @@ _HUNYUAN_LLAMACPP_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
 )
 _MANAGED_LIFECYCLE_LOCK = RLock()
 _MANAGED_PROCESS_KEY = "hunyuan_llamacpp"
+_CLI_OUTPUT_SNIPPET_LIMIT = 2000
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -343,6 +344,13 @@ def _ocr_via_managed(image_bytes: bytes, prompt: str) -> str:
     )
 
 
+def _trim_process_output(value: str | None, *, limit: int = _CLI_OUTPUT_SNIPPET_LIMIT) -> str:
+    output = str(value or "").strip()
+    if len(output) <= limit:
+        return output
+    return f"{output[:limit]}...<truncated>"
+
+
 def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
     profile = _profile_for_mode("cli")
     timeout_seconds = _env_int("HUNYUAN_LLAMACPP_TIMEOUT", 60)
@@ -376,6 +384,22 @@ def _ocr_via_cli(image_bytes: bytes, prompt: str) -> str:
             raise RuntimeError(
                 f"Hunyuan llama.cpp CLI OCR timed out after {timeout_seconds}s"
             ) from exc
+        if completed.returncode != 0:
+            stderr = _trim_process_output(completed.stderr)
+            stdout = _trim_process_output(completed.stdout)
+            logging.error(
+                "Hunyuan llama.cpp OCR CLI exited with code %s; stderr=%r",
+                completed.returncode,
+                stderr,
+            )
+            details = [
+                f"Hunyuan llama.cpp CLI OCR failed with exit code {completed.returncode}"
+            ]
+            if stderr:
+                details.append(f"stderr: {stderr}")
+            if stdout:
+                details.append(f"stdout: {stdout}")
+            raise RuntimeError("; ".join(details))
     return completed.stdout or ""
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 
 import pytest
 
@@ -83,3 +84,33 @@ def test_hunyuan_llamacpp_runtime_auto_mode_prefers_remote_before_managed_and_cl
     assert HunyuanLlamaCppRuntime.available() is True  # nosec B101
     assert description["mode"] == "remote"  # nosec B101
     assert description["configured_mode"] == "auto"  # nosec B101
+
+
+@pytest.mark.unit
+def test_hunyuan_llamacpp_cli_nonzero_exit_raises_diagnostic_error(monkeypatch):
+    from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.backends import (
+        hunyuan_llamacpp_runtime as runtime,
+    )
+
+    monkeypatch.setenv("HUNYUAN_LLAMACPP_MODEL_PATH", "/models/HunyuanOCR-GGUF-Q8_0.gguf")
+    monkeypatch.setenv(
+        "HUNYUAN_LLAMACPP_CLI_ARGV",
+        '["llama-ocr", "--model", "{model_path}", "--image", "{image_path}", "--prompt", "{prompt}"]',
+    )
+
+    def _fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            returncode=7,
+            stdout="partial OCR output",
+            stderr="fatal llama.cpp OCR error",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    with pytest.raises(RuntimeError, match="exit code 7") as exc_info:
+        runtime._ocr_via_cli(b"not really an image", "extract the text")
+
+    message = str(exc_info.value)
+    assert "fatal llama.cpp OCR error" in message  # nosec B101
+    assert "partial OCR output" in message  # nosec B101

@@ -85,12 +85,34 @@ jobs:
             return 1
           }
 
+          gen_from_pyproject() {
+            local pyproject="$1"
+            local req_file="$PWD/.sbom-pyproject-requirements.txt"
+            echo "Generating temporary requirements from ${pyproject}"
+            python - "$pyproject" "$req_file" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          pyproject_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+          dependencies = data.get("project", {}).get("dependencies", [])
+          if not dependencies:
+              raise SystemExit("No project.dependencies found in pyproject.toml")
+          output_path.write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+          PY
+            gen_from_requirements "$req_file"
+          }
+
           if [ -f tldw_Server_API/requirements.txt ]; then
             gen_from_requirements tldw_Server_API/requirements.txt
           elif [ -f requirements.txt ]; then
             gen_from_requirements requirements.txt
+          elif [ -f pyproject.toml ]; then
+            gen_from_pyproject pyproject.toml
           else
-            echo "No requirements file found; cannot generate SBOM" >&2
+            echo "No requirements file or pyproject.toml dependency list found; cannot generate SBOM" >&2
             exit 1
           fi
 

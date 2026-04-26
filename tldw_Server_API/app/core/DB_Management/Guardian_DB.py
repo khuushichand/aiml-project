@@ -18,7 +18,6 @@ Thread-safe with RLock + WAL mode. Foreign keys enabled.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
@@ -317,8 +316,6 @@ class GuardianDB:
                 resolve_trusted_database_path(db_path, label="guardian database")
             )
         self._lock = threading.RLock()
-        if self.db_path != ":memory:":
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._ensure_schema()
         self._migrate_schema()
 

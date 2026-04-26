@@ -74,8 +74,8 @@ Artifact profile defaults follow the checked-out branch:
 
 Exported install paths and zip names:
 
-- Production unpacked: `build/<browser>-mv3`
-- Development unpacked: `build/<browser>-mv3-dev`
+- Production unpacked: `build/chrome-mv3`, `build/edge-mv3`, or `build/firefox-mv2`
+- Development unpacked: `build/chrome-mv3-dev`, `build/edge-mv3-dev`, or `build/firefox-mv2-dev`
 - Production zip: `.output/tldw-assistant-...-<browser>.zip`
 - Development zip: `.output/tldw-assistant-...-<browser>-dev.zip`
 
