@@ -26,19 +26,6 @@ _MIGRATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ValueError,
     sqlite3.Error,
 )
-_SAFE_MIGRATION_LOG_LABELS = frozenset(
-    {
-        "auth",
-        "chacha",
-        "content",
-        "evaluations",
-        "media",
-        "notes",
-        "prompts",
-        "workflows",
-    }
-)
-
 
 @dataclass
 class TableMeta:
@@ -82,13 +69,6 @@ def _escape_backend_identifier(backend: DatabaseBackend, identifier: str) -> str
     return f'"{escaped}"'
 
 
-def _safe_migration_log_label(label: str) -> str:
-    normalized = str(label or "").strip().lower()
-    if normalized in _SAFE_MIGRATION_LOG_LABELS:
-        return normalized
-    return "database"
-
-
 def migrate_sqlite_to_postgres(
     sqlite_path: Path | str,
     postgres_config: DatabaseConfig,
@@ -108,20 +88,18 @@ def migrate_sqlite_to_postgres(
     if not sqlite_path.exists():
         raise FileNotFoundError(f'SQLite database not found: {sqlite_path}')
 
-    safe_label = _safe_migration_log_label(label)
-    logger.info("Starting migration of %s database", safe_label)
+    logger.info("Starting SQLite to PostgreSQL migration")
     sqlite_conn = sqlite3.connect(str(sqlite_path))
     sqlite_conn.row_factory = sqlite3.Row
     try:
         tables = _introspect_sqlite_schema(sqlite_conn, skip_tables)
         if not tables:
-            logger.warning("No tables discovered for %s migration; skipping", safe_label)
+            logger.warning("No tables discovered for SQLite to PostgreSQL migration; skipping")
             return
 
         insertion_order = _topological_sort(tables)
         logger.debug(
-            "Computed insertion order for %s migration (%d tables)",
-            safe_label,
+            "Computed insertion order for SQLite to PostgreSQL migration (%d tables)",
             len(insertion_order),
         )
 
@@ -140,7 +118,7 @@ def migrate_sqlite_to_postgres(
                 pass
     finally:
         sqlite_conn.close()
-    logger.info("Completed migration of %s database", safe_label)
+    logger.info("Completed SQLite to PostgreSQL migration")
 
 
 def migrate_workflows_sqlite_to_postgres(

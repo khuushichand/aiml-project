@@ -17,7 +17,7 @@ and this project adheres to Some kind of Versioning
 - **Browser Web Clipper** — Added the browser clipping workflow for capturing web content into tldw_server. (PR #1005)
 - **Study Suggestions Engine** — Added study suggestion generation and related handoff flows. (PR #1014)
 - **Sandbox and ACP Improvements** — Expanded sandbox handling and ACP integration hardening. (PR #1023)
-- **OCR Backend Expansion** — Added broader OCR backend support, including Hunyuan GGUF llama.cpp runtime work. (PR #1038)
+- **Hunyuan GGUF llama.cpp OCR Runtime** — Added runtime-family selection and llama.cpp-backed GGUF orchestration for Hunyuan OCR across remote, managed, and CLI modes so deployments can choose native compatibility or local GGUF execution without changing ingestion callers. (PR #1103)
 
 ### Changed
 

@@ -377,14 +377,21 @@ function extractFallbackFieldNames() {
   const astNames = extractFallbackFieldNamesFromTypeScript(src)
   if (astNames.length > 0) return astNames
 
-  const marker = 'export const MEDIA_ADD_SCHEMA_FALLBACK'
-  const start = src.indexOf(marker)
-  if (start === -1) {
-    console.error(`Could not locate "${marker}" in fallback-schemas.ts`)
+  const marker = /export\s+const\s+MEDIA_ADD_SCHEMA_FALLBACK\s*[:=]/
+  const markerMatch = marker.exec(src)
+  if (!markerMatch) {
+    console.error('Could not locate "export const MEDIA_ADD_SCHEMA_FALLBACK" in fallback-schemas.ts')
+    process.exit(1)
+  }
+  const start = markerMatch.index
+
+  const assignmentStart = src.indexOf('=', start)
+  if (assignmentStart === -1) {
+    console.error('Could not locate MEDIA_ADD_SCHEMA_FALLBACK assignment')
     process.exit(1)
   }
 
-  const arrStart = src.indexOf('[', start)
+  const arrStart = src.indexOf('[', assignmentStart)
   if (arrStart === -1) {
     console.error('Could not locate MEDIA_ADD_SCHEMA_FALLBACK array literal block')
     process.exit(1)

@@ -88,6 +88,7 @@ jobs:
           gen_from_pyproject() {
             local pyproject="$1"
             local req_file="$PWD/.sbom-pyproject-requirements.txt"
+            trap 'rm -f "$req_file"' RETURN
             echo "Generating temporary requirements from ${pyproject}"
             python - "$pyproject" "$req_file" <<'PY'
           import sys
