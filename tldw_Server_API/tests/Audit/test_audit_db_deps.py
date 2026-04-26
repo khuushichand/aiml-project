@@ -69,6 +69,25 @@ class _OwnerLoopStub:
         return True
 
 
+class _ThreadsafeSignalLoopStub:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def is_closed(self) -> bool:
+        return False
+
+    def call_soon_threadsafe(self, callback, *args) -> None:
+        self.calls.append((callback, args))
+
+
+class _ThreadsafeSignalEventStub:
+    def __init__(self) -> None:
+        self.set_calls = 0
+
+    def set(self) -> None:
+        self.set_calls += 1
+
+
 @pytest.mark.asyncio
 async def test_get_audit_service_for_user_accepts_string_id(monkeypatch):
     sentinel = object()
@@ -144,7 +163,7 @@ async def test_schedule_service_stop_clears_flag_on_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_shutdown_user_audit_service_uses_shared_cache_key(monkeypatch):
-    state = deps._LoopState(cache={})
+    state = deps._LoopState(cache={}, loop=asyncio.get_running_loop())
     svc = _StoppingService(asyncio.get_running_loop())
     state.cache[None] = svc
 
@@ -170,7 +189,7 @@ async def test_shutdown_all_audit_services_returns_summary_and_can_raise(monkeyp
         return deps._LoopState(cache={
             1: _StoppingService(loop),
             2: _DummyService(loop),
-        })
+        }, loop=loop)
 
     state = _make_state()
     monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
@@ -201,7 +220,7 @@ async def test_shutdown_all_audit_services_runs_stop_fan_out_concurrently(monkey
     state = deps._LoopState(cache={
         1: _BlockingStopService(loop, first_started, release),
         2: _BlockingStopService(loop, second_started, release),
-    })
+    }, loop=loop)
 
     monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
 
@@ -223,7 +242,7 @@ async def test_shutdown_all_audit_services_runs_stop_fan_out_concurrently(monkey
 
 @pytest.mark.asyncio
 async def test_get_or_create_does_not_recache_service_after_shutdown(monkeypatch):
-    state = deps._LoopState(cache={})
+    state = deps._LoopState(cache={}, loop=asyncio.get_running_loop())
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -250,6 +269,65 @@ async def test_get_or_create_does_not_recache_service_after_shutdown(monkeypatch
         await asyncio.wait_for(init_task, timeout=5)
 
     assert state.cache == {}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_user_audit_service_signals_cross_loop_waiters_threadsafe(monkeypatch):
+    signal_loop = _ThreadsafeSignalLoopStub()
+    signal_event = _ThreadsafeSignalEventStub()
+    state = deps._LoopState(cache={}, loop=signal_loop)
+    state.initializing_events[123] = signal_event
+
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    summary = await deps.shutdown_user_audit_service(123)
+
+    assert summary.requested == 0
+    assert signal_event.set_calls == 0
+    assert signal_loop.calls == [(signal_event.set, ())]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_audit_services_signals_cross_loop_waiters_threadsafe(monkeypatch):
+    signal_loop = _ThreadsafeSignalLoopStub()
+    signal_event = _ThreadsafeSignalEventStub()
+    state = deps._LoopState(cache={}, loop=signal_loop)
+    state.initializing_events[123] = signal_event
+
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    summary = await deps.shutdown_all_audit_services(raise_on_error=False)
+
+    assert summary.requested == 0
+    assert signal_event.set_calls == 0
+    assert signal_loop.calls == [(signal_event.set, ())]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_all_audit_services_blocks_new_initializations(monkeypatch):
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    state = deps._LoopState(cache={
+        1: _BlockingStopService(loop, started, release),
+    }, loop=loop)
+
+    monkeypatch.setattr(deps, "_resolve_audit_storage_mode", lambda: "per_user")
+    monkeypatch.setattr(deps, "_state_for_loop", lambda: state)
+    monkeypatch.setattr(deps, "_all_loop_states", lambda: [state])
+
+    shutdown_task = asyncio.create_task(deps.shutdown_all_audit_services(raise_on_error=False))
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    with pytest.raises(ServiceInitializationError, match="global shutdown"):
+        await deps._get_or_create_audit_service_for_key(2)
+
+    release.set()
+    summary = await asyncio.wait_for(shutdown_task, timeout=5)
+
+    assert summary.requested == 1
+    assert summary.stopped == 1
 
 
 @pytest.mark.asyncio

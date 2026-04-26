@@ -65,7 +65,7 @@ vi.mock("react-i18next", () => ({
     ) => {
       if (typeof fallbackOrOptions === "string") return fallbackOrOptions
       if (fallbackOrOptions && typeof fallbackOrOptions === "object") {
-        const template = fallbackOrOptions.defaultValue || key
+        const template = fallbackOrOptions.defaultValue ?? key
         return Object.entries(fallbackOrOptions).reduce((result, [name, value]) => {
           if (name === "defaultValue" || value == null) return result
           return result.replaceAll(`{{${name}}}`, String(value))

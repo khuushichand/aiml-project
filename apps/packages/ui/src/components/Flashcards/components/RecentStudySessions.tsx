@@ -34,11 +34,22 @@ export const RecentStudySessions: React.FC<RecentStudySessionsProps> = ({
     )
 
   const sessions = recentSessionsQuery.data ?? []
+  const errorMessage =
+    recentSessionsQuery.error instanceof Error
+      ? recentSessionsQuery.error.message
+      : "Failed to load recent study sessions."
 
   return (
     <Card size="small" title="Recent study sessions">
       {recentSessionsQuery.isLoading ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Loading recent study sessions..." />
+      ) : recentSessionsQuery.isError ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={errorMessage}
+        >
+          <Button onClick={() => void recentSessionsQuery.refetch()}>Retry</Button>
+        </Empty>
       ) : sessions.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No completed study sessions yet." />
       ) : (

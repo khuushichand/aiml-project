@@ -118,7 +118,26 @@ export class ChatPage {
       .poll(
         async () => {
           for (const candidate of pickerSurfaceCandidates) {
-            if (await candidate.isVisible().catch(() => false)) {
+            if (!(await candidate.isVisible().catch(() => false))) {
+              continue
+            }
+            const hasNamedOption =
+              (await candidate
+                .getByRole("option", { name })
+                .first()
+                .isVisible()
+                .catch(() => false)) ||
+              (await candidate
+                .getByRole("menuitem", { name })
+                .first()
+                .isVisible()
+                .catch(() => false)) ||
+              (await candidate
+                .getByText(name, { exact: true })
+                .first()
+                .isVisible()
+                .catch(() => false))
+            if (hasNamedOption) {
               pickerSurface = candidate
               return true
             }

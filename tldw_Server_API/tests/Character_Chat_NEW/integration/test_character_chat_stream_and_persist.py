@@ -329,6 +329,81 @@ def test_persist_streamed_message_retry_reuses_assistant_message_id_when_metadat
     assert [m["content"] for m in messages].count("metadata failure duplicate guard") == 1
 
 
+def test_persist_streamed_message_retry_reapplies_metadata_and_rating(
+    test_client: TestClient,
+    auth_headers,
+    character_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, chat_id = _create_character_and_chat(test_client, auth_headers)
+    real_add_message_metadata = character_db.add_message_metadata
+    monkeypatch.setattr(character_db, "add_message_metadata", lambda *args, **kwargs: False)
+
+    payload = {
+        "assistant_content": "retry should restore metadata",
+        "assistant_message_id": "assistant-retry-side-effects-1",
+        "mood_label": "focused",
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 7,
+            "total_tokens": 12,
+        },
+        "chat_rating": 4,
+    }
+
+    first = test_client.post(
+        f"/api/v1/chats/{chat_id}/completions/persist",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert first.status_code == 200
+
+    monkeypatch.setattr(character_db, "add_message_metadata", real_add_message_metadata)
+
+    second = test_client.post(
+        f"/api/v1/chats/{chat_id}/completions/persist",
+        json=payload,
+        headers=auth_headers,
+    )
+
+    assert second.status_code == 200
+
+    message_resp = test_client.get(
+        f"/api/v1/messages/{payload['assistant_message_id']}",
+        params={"include_metadata": "true"},
+        headers=auth_headers,
+    )
+    assert message_resp.status_code == 200
+    metadata_extra = message_resp.json().get("metadata_extra") or {}
+    assert metadata_extra.get("mood_label") == "focused"
+    assert metadata_extra.get("usage") == {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+    }
+
+    conversation = character_db.get_conversation_by_id(chat_id) or {}
+    assert conversation.get("rating") == 4
+
+
+def test_persist_streamed_message_rejects_non_object_usage(
+    test_client: TestClient,
+    auth_headers,
+) -> None:
+    _, chat_id = _create_character_and_chat(test_client, auth_headers)
+
+    response = test_client.post(
+        f"/api/v1/chats/{chat_id}/completions/persist",
+        json={
+            "assistant_content": "invalid usage payload",
+            "usage": ["not", "an", "object"],
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
 def test_persist_streamed_message_allows_duplicate_content_without_idempotency_key(
     test_client: TestClient,
     auth_headers,

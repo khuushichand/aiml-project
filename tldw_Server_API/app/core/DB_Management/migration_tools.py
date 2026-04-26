@@ -27,6 +27,7 @@ _MIGRATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     sqlite3.Error,
 )
 
+
 @dataclass
 class TableMeta:
     """Metadata describing a table within the source SQLite database."""
@@ -99,7 +100,7 @@ def migrate_sqlite_to_postgres(
 
         insertion_order = _topological_sort(tables)
         logger.debug(
-            "Computed insertion order for SQLite to PostgreSQL migration (%d tables)",
+            "Computed insertion order for SQLite to PostgreSQL migration (%s tables)",
             len(insertion_order),
         )
 

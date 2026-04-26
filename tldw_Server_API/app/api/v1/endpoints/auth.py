@@ -3533,9 +3533,11 @@ async def register(
                 )
                 api_key_value = key_result.get('key')
         except MandatoryAuditWriteError as exc:
+            rollback_ok = await registration_service.rollback_user_registration(int(user_info["user_id"]))
             logger.error(
-                "Mandatory audit write failed while auto-generating default API key for new user {}: {}",
+                "Mandatory audit write failed while auto-generating default API key for new user {} (rollback_ok={}): {}",
                 user_info["user_id"],
+                rollback_ok,
                 exc,
                 exc_info=exc,
             )

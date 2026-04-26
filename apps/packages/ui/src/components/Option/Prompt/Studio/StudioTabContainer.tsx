@@ -579,6 +579,10 @@ export const StudioTabContainer: React.FC = () => {
   })
 
   const renderStudioSubTab = () => {
+    if (activeSubTab !== "projects" && !selectedProjectId) {
+      return renderProjectGate()
+    }
+
     switch (activeSubTab) {
       case "projects":
         return <ProjectsTab />

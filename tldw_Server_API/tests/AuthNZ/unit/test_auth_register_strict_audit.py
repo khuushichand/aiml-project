@@ -11,6 +11,9 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import MandatoryAuditW
 
 
 class _FakeRegistrationService:
+    def __init__(self) -> None:
+        self.rollback_calls: list[int] = []
+
     async def register_user(self, **kwargs):
         return {
             "user_id": 77,
@@ -18,6 +21,10 @@ class _FakeRegistrationService:
             "email": kwargs["email"],
             "is_verified": True,
         }
+
+    async def rollback_user_registration(self, user_id: int) -> bool:
+        self.rollback_calls.append(user_id)
+        return True
 
 
 class _FailingAPIKeyManager:
@@ -30,6 +37,8 @@ class _FailingAPIKeyManager:
 async def test_register_returns_503_when_default_api_key_audit_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    registration_service = _FakeRegistrationService()
+
     async def _fake_get_api_key_manager():
         return _FailingAPIKeyManager()
 
@@ -60,7 +69,7 @@ async def test_register_returns_503_when_default_api_key_audit_fails(
             http_request=request,
             response=Response(),
             _diag=None,
-            registration_service=_FakeRegistrationService(),
+            registration_service=registration_service,
         )
 
     assert exc_info.value.status_code == 503
@@ -71,3 +80,4 @@ async def test_register_returns_503_when_default_api_key_audit_fails(
             "code": "audit_persistence_failure",
         }
     }
+    assert registration_service.rollback_calls == [77]

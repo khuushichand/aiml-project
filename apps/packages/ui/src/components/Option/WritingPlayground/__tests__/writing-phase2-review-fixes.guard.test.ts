@@ -31,9 +31,9 @@ describe("Writing Phase 2 review fixes", () => {
     expect(source).toContain("disabled={!newCharName.trim() || !isOnline}")
     expect(source).toContain("disabled={!newWorldName.trim() || !isOnline}")
     expect(source).toContain("disabled={!newPlotTitle.trim() || !isOnline}")
-    expect(source).toContain("onPressEnter={() => isOnline && newCharName.trim() && addCharMutation.mutate(newCharName.trim())}")
-    expect(source).toContain("onPressEnter={() => isOnline && newWorldName.trim() && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}")
-    expect(source).toContain("onPressEnter={() => isOnline && newPlotTitle.trim() && addPlotMutation.mutate(newPlotTitle.trim())}")
+    expect(source).toContain("onPressEnter={() => isOnline && newCharName.trim() && !addCharMutation.isPending && addCharMutation.mutate(newCharName.trim())}")
+    expect(source).toContain("onPressEnter={() => isOnline && newWorldName.trim() && !addWorldMutation.isPending && addWorldMutation.mutate({ name: newWorldName.trim(), kind: newWorldKind })}")
+    expect(source).toContain("onPressEnter={() => isOnline && newPlotTitle.trim() && !addPlotMutation.isPending && addPlotMutation.mutate(newPlotTitle.trim())}")
   })
 
   it("styles citation marks with theme variables instead of hardcoded blues", () => {

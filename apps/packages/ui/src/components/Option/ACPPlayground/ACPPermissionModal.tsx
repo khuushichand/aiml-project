@@ -27,7 +27,20 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
 
   const [batchApprove, setBatchApprove] = useState(false)
   const [showPolicyDetails, setShowPolicyDetails] = useState(false)
+  const [now, setNow] = useState(Date.now())
   const currentPermission = pendingPermissions[0]
+  const currentRequestId = currentPermission?.request_id ?? null
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    setBatchApprove(false)
+    setShowPolicyDetails(false)
+    setNow(Date.now())
+  }, [currentRequestId])
 
   if (!currentPermission) {
     return null
@@ -62,18 +75,6 @@ export const ACPPermissionModal: React.FC<ACPPermissionModalProps> = ({
         return null
     }
   }
-
-  // Live countdown timer
-  const [now, setNow] = useState(Date.now())
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
-    setNow(Date.now())
-  }, [currentPermission.request_id])
 
   const timeElapsed = now - currentPermission.requestedAt.getTime()
   const totalMs = currentPermission.timeout_seconds * 1000

@@ -183,4 +183,42 @@ describe("extension playwright globalSetup", () => {
       }
     )
   })
+
+  it("surfaces every failed build attempt when all build commands fail", async () => {
+    const execSync = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("npm missing")
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("bun missing")
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("wrapper failed")
+      })
+
+    vi.doMock("node:child_process", () => ({
+      execSync
+    }))
+
+    vi.spyOn(fs, "existsSync").mockReturnValue(false)
+    vi.spyOn(fs, "readdirSync").mockImplementation(() => [])
+
+    const globalSetup = (await import("./build-extension")).default
+
+    try {
+      await globalSetup()
+      throw new Error("expected globalSetup to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(AggregateError)
+      const aggregate = error as AggregateError
+      expect(aggregate.message).toBe("All extension build attempts failed.")
+      expect(aggregate.errors).toHaveLength(3)
+      expect(String(aggregate.errors[0])).toContain("npm run build:chrome:prod")
+      expect(String(aggregate.errors[1])).toContain("bun run build:chrome:prod")
+      expect(String(aggregate.errors[2])).toContain(
+        "node scripts/build-with-profile.mjs --browser=chrome"
+      )
+    }
+  })
 })

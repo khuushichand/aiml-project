@@ -110,6 +110,8 @@ describe('RouteRedirect telemetry', () => {
       });
     });
 
+    expect(mockPrefetch).toHaveBeenCalledWith('/speech');
+
     await waitFor(() => {
       expect(mockReplace).toHaveBeenCalledWith('/speech');
     });

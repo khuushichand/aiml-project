@@ -99,6 +99,11 @@ const CHAT_COMPLETION_ERROR_MESSAGE = "Chat completion failed."
 const CHAT_COMPLETION_ERRORS_MESSAGE =
   "One or more internal errors were suppressed."
 
+const toRecordOrNull = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+
 const isSavedDegradedCharacterPersistError = (error: unknown): boolean => {
   const candidate = error as
     | {
@@ -107,19 +112,9 @@ const isSavedDegradedCharacterPersistError = (error: unknown): boolean => {
       }
     | null
   const detail =
-    candidate?.detail &&
-    typeof candidate.detail === "object" &&
-    !Array.isArray(candidate.detail)
-      ? candidate.detail
-      : candidate?.details?.detail &&
-            typeof candidate.details.detail === "object" &&
-            !Array.isArray(candidate.details.detail)
-        ? candidate.details.detail
-        : candidate?.details &&
-              typeof candidate.details === "object" &&
-              !Array.isArray(candidate.details)
-          ? candidate.details
-          : null
+    toRecordOrNull(candidate?.detail)
+    ?? toRecordOrNull(candidate?.details?.detail)
+    ?? toRecordOrNull(candidate?.details)
   return detail?.code === "persist_validation_degraded" && detail?.saved === true
 }
 

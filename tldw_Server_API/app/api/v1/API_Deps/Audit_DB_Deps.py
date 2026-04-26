@@ -546,6 +546,7 @@ def _build_cache() -> Any:
 class _LoopState:
     """Per-event-loop cache and initialization state."""
     cache: Any
+    loop: Optional[asyncio.AbstractEventLoop] = None
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     init_lock: threading.Lock = field(default_factory=threading.Lock)
     initializing_users: set[Optional[Union[int, str]]] = field(default_factory=set)
@@ -555,6 +556,8 @@ class _LoopState:
 
 _STATE_LOCK = threading.Lock()
 _STATE_BY_LOOP: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopState]" = weakref.WeakKeyDictionary()
+_GLOBAL_AUDIT_SHUTDOWN_LOCK = threading.Lock()
+_GLOBAL_AUDIT_SHUTDOWN_COUNT = 0
 
 
 def _state_for_loop() -> _LoopState:
@@ -563,7 +566,7 @@ def _state_for_loop() -> _LoopState:
     with _STATE_LOCK:
         state = _STATE_BY_LOOP.get(loop)
         if state is None:
-            state = _LoopState(cache=_build_cache())
+            state = _LoopState(loop=loop, cache=_build_cache())
             _STATE_BY_LOOP[loop] = state
         return state
 
@@ -572,6 +575,55 @@ def _all_loop_states() -> list[_LoopState]:
     """Snapshot all known loop states."""
     with _STATE_LOCK:
         return list(_STATE_BY_LOOP.values())
+
+
+def _signal_initializing_event(state: _LoopState, event: asyncio.Event) -> None:
+    """Wake audit initialization waiters on the event loop that owns the event."""
+    owner_loop = state.loop
+    if owner_loop is None:
+        event.set()
+        return
+
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if owner_loop is current_loop:
+        event.set()
+        return
+
+    try:
+        if owner_loop.is_closed():
+            logger.debug("Skipping audit init waiter wake-up because owner loop is closed.")
+            return
+        owner_loop.call_soon_threadsafe(event.set)
+    except RuntimeError as exc:
+        logger.debug("Failed to signal audit init waiter on owner loop: {}", exc)
+
+
+def _begin_global_audit_shutdown() -> None:
+    global _GLOBAL_AUDIT_SHUTDOWN_COUNT
+    with _GLOBAL_AUDIT_SHUTDOWN_LOCK:
+        _GLOBAL_AUDIT_SHUTDOWN_COUNT += 1
+
+
+def _end_global_audit_shutdown() -> None:
+    global _GLOBAL_AUDIT_SHUTDOWN_COUNT
+    with _GLOBAL_AUDIT_SHUTDOWN_LOCK:
+        _GLOBAL_AUDIT_SHUTDOWN_COUNT = max(0, _GLOBAL_AUDIT_SHUTDOWN_COUNT - 1)
+
+
+def _is_global_audit_shutdown_in_progress() -> bool:
+    with _GLOBAL_AUDIT_SHUTDOWN_LOCK:
+        return _GLOBAL_AUDIT_SHUTDOWN_COUNT > 0
+
+
+def _raise_if_global_audit_shutdown_in_progress(user_id: Optional[Union[int, str]]) -> None:
+    if _is_global_audit_shutdown_in_progress():
+        msg = f"Audit service initialization aborted during global shutdown for user {user_id}"
+        logger.warning(msg)
+        raise ServiceInitializationError(msg)
 
 #######################################################################################################################
 
@@ -641,6 +693,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
     """Internal helper to get or create a cached audit service for a cache key."""
     storage_mode = _resolve_audit_storage_mode()
     cache_key = None if storage_mode == "shared" else user_id
+    _raise_if_global_audit_shutdown_in_progress(user_id)
     state = _state_for_loop()
     service_instance: Optional[UnifiedAuditService] = None
 
@@ -665,6 +718,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
 
     while True:
         with state.init_lock:
+            _raise_if_global_audit_shutdown_in_progress(user_id)
             if cache_key in state.shutting_down_keys:
                 msg = f"Audit service initialization aborted during shutdown for user {user_id}"
                 logger.warning(msg)
@@ -724,6 +778,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
 
             # Store in cache
             with state.init_lock:
+                _raise_if_global_audit_shutdown_in_progress(user_id)
                 if cache_key in state.shutting_down_keys:
                     msg = f"Audit service initialization aborted during shutdown for user {user_id}"
                     logger.warning(msg)
@@ -743,7 +798,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
                 state.initializing_users.discard(cache_key)
                 event = state.initializing_events.pop(cache_key, None)
                 if event:
-                    event.set()
+                    _signal_initializing_event(state, event)
                 should_clear_shutdown_key = (
                     cache_key in state.shutting_down_keys
                     and cache_key not in state.initializing_users
@@ -877,7 +932,7 @@ async def shutdown_user_audit_service(user_id: int) -> AuditShutdownSummary:
                     if event is not None:
                         waiters.append(event)
             for event in waiters:
-                event.set()
+                _signal_initializing_event(state, event)
 
             with state.cache_lock:
                 for cache_key in cache_keys:
@@ -940,6 +995,7 @@ async def shutdown_all_audit_services(*, raise_on_error: bool = True) -> AuditSh
     errors: list[str] = []
     first_exception: BaseException | None = None
 
+    _begin_global_audit_shutdown()
     states = list(_all_loop_states())
     per_state_shutdown_keys: list[tuple[_LoopState, set[Optional[Union[int, str]]]]] = []
     try:
@@ -963,7 +1019,7 @@ async def shutdown_all_audit_services(*, raise_on_error: bool = True) -> AuditSh
                     if event is not None:
                         waiters.append(event)
             for event in waiters:
-                event.set()
+                _signal_initializing_event(state, event)
             per_state_shutdown_keys.append((state, shutdown_keys))
 
         logger.info(f"Shutting down audit services for {total_instances} instances...")
@@ -1039,6 +1095,7 @@ async def shutdown_all_audit_services(*, raise_on_error: bool = True) -> AuditSh
                     if key not in state.initializing_users:
                         state.shutting_down_keys.discard(key)
                         state.initializing_events.pop(key, None)
+        _end_global_audit_shutdown()
 
 # Example of how to register for shutdown event in FastAPI:
 # from fastapi import FastAPI

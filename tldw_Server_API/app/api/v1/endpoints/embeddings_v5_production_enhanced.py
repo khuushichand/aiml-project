@@ -1161,7 +1161,6 @@ router = APIRouter(
 
 # Implemented provider set for 501 guard
 IMPLEMENTED_PROVIDERS = {"openai", "huggingface", "onnx", "local_api", "cohere", "google"}
-_EMBEDDING_CACHE_KEY_PBKDF2_ITERATIONS = 2048
 
 
 # Register cleanup on process exit
@@ -1205,6 +1204,10 @@ def count_tokens(text: str, model_name: str) -> int:
         logger.warning(f"Token counting failed: {e}, estimating")
         return len(text) // 4
 
+
+_EMBEDDING_CACHE_KEY_PBKDF2_ITERATIONS = 10_000
+
+
 def get_cache_key(
     text: str,
     provider: str,
@@ -1219,6 +1222,8 @@ def get_cache_key(
     if backend_identity:
         key_parts.append(backend_identity)
     key_string = "|".join(key_parts)
+    # Cache inputs may contain low-entropy secrets (for example pasted passwords), so
+    # derive the deterministic cache key with a password-safe KDF rather than a direct digest.
     return hashlib.pbkdf2_hmac(
         "sha256",
         key_string.encode("utf-8"),

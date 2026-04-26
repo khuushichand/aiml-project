@@ -59,8 +59,11 @@ const mapRankReason = (value: unknown): TopicBuilderRankReason => {
 }
 
 const readTopicLabel = (raw: Record<string, unknown>): string => {
-  const label = raw.display_label ?? raw.canonical_label
-  return normalizeLabel(String(label || ""))
+  const displayLabel = normalizeLabel(String(raw.display_label ?? ""))
+  if (displayLabel) {
+    return displayLabel
+  }
+  return normalizeLabel(String(raw.canonical_label ?? ""))
 }
 
 const readTopicId = (raw: Record<string, unknown>, index: number): string => {

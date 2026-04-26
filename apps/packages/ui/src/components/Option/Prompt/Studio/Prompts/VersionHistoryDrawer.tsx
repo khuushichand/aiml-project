@@ -70,7 +70,15 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
     }
 
     setSelectedVersionId((current) => {
-      if (current && sortedVersions.some((version) => version.id === current)) {
+      const existingSelection =
+        current !== null
+          ? sortedVersions.find((version) => version.id === current) ?? null
+          : null
+
+      if (
+        existingSelection &&
+        existingSelection.version_number !== currentVersion
+      ) {
         return current
       }
       const preferredVersion =
@@ -88,7 +96,8 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
 
   const {
     data: selectedVersionResponse,
-    status: selectedVersionStatus
+    status: selectedVersionStatus,
+    error: selectedVersionError
   } = useQuery({
     queryKey: ["prompt-studio", "prompt-version-preview", selectedVersionPromptId],
     queryFn: () => getPrompt(selectedVersionPromptId!),
@@ -361,6 +370,19 @@ export const VersionHistoryDrawer: React.FC<VersionHistoryDrawerProps> = ({
               {selectedVersionStatus === "pending" &&
                 selectedVersionPromptId !== null && (
                   <Skeleton paragraph={{ rows: 4 }} />
+                )}
+
+              {selectedVersionStatus === "error" &&
+                selectedVersionPromptId !== null && (
+                  <Empty
+                    description={
+                      selectedVersionError instanceof Error
+                        ? selectedVersionError.message
+                        : t("managePrompts.studio.prompts.previewErrorTitle", {
+                            defaultValue: "Unable to load selected version preview"
+                          })
+                    }
+                  />
                 )}
 
               {selectedVersionPrompt && currentPrompt && (

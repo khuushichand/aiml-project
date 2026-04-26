@@ -188,6 +188,75 @@ function loadSpecPaths(specJson) {
   return new Set(Object.keys(paths).map(normalizePath))
 }
 
+export function findBalancedArrayLiteralEnd(src, arrStart) {
+  let depth = 0
+  let quote = null
+  let inLineComment = false
+  let inBlockComment = false
+
+  for (let index = arrStart; index < src.length; index += 1) {
+    const char = src[index]
+    const next = src[index + 1]
+
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false
+      }
+      continue
+    }
+
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        inBlockComment = false
+        index += 1
+      }
+      continue
+    }
+
+    if (quote) {
+      if (char === '\\') {
+        index += 1
+        continue
+      }
+      if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === '/' && next === '/') {
+      inLineComment = true
+      index += 1
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      inBlockComment = true
+      index += 1
+      continue
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char
+      continue
+    }
+
+    if (char === '[') {
+      depth += 1
+      continue
+    }
+
+    if (char === ']') {
+      depth -= 1
+      if (depth === 0) {
+        return index
+      }
+    }
+  }
+
+  return -1
+}
+
 function extractClientPathsFromTypeScript(src) {
   let ts
   try {
@@ -367,6 +436,33 @@ function extractClientPaths() {
   return [...new Set(paths)]
 }
 
+export function extractFallbackFieldNamesFromSource(src) {
+  const astNames = extractFallbackFieldNamesFromTypeScript(src)
+  if (astNames.length > 0) return astNames
+
+  const marker = /export\s+const\s+MEDIA_ADD_SCHEMA_FALLBACK\s*[:=]/
+  const markerMatch = marker.exec(src)
+  if (!markerMatch) return []
+
+  const assignmentStart = src.indexOf('=', markerMatch.index)
+  if (assignmentStart === -1) return []
+
+  const arrStart = src.indexOf('[', assignmentStart)
+  if (arrStart === -1) return []
+
+  const arrEnd = findBalancedArrayLiteralEnd(src, arrStart)
+  if (arrEnd === -1) return []
+
+  const block = src.slice(arrStart, arrEnd + 1)
+  const names = []
+  const re = /name:\s*['"]([^'"]+)['"]/g
+  for (const match of block.matchAll(re)) {
+    names.push(match[1])
+  }
+
+  return names
+}
+
 function extractFallbackFieldNames() {
   if (!fs.existsSync(fallbackFile)) {
     console.error(`fallback-schemas.ts not found at ${fallbackFile}`)
@@ -374,53 +470,7 @@ function extractFallbackFieldNames() {
   }
 
   const src = fs.readFileSync(fallbackFile, 'utf8')
-  const astNames = extractFallbackFieldNamesFromTypeScript(src)
-  if (astNames.length > 0) return astNames
-
-  const marker = /export\s+const\s+MEDIA_ADD_SCHEMA_FALLBACK\s*[:=]/
-  const markerMatch = marker.exec(src)
-  if (!markerMatch) {
-    console.error('Could not locate "export const MEDIA_ADD_SCHEMA_FALLBACK" in fallback-schemas.ts')
-    process.exit(1)
-  }
-  const start = markerMatch.index
-
-  const assignmentStart = src.indexOf('=', start)
-  if (assignmentStart === -1) {
-    console.error('Could not locate MEDIA_ADD_SCHEMA_FALLBACK assignment')
-    process.exit(1)
-  }
-
-  const arrStart = src.indexOf('[', assignmentStart)
-  if (arrStart === -1) {
-    console.error('Could not locate MEDIA_ADD_SCHEMA_FALLBACK array literal block')
-    process.exit(1)
-  }
-
-  let depth = 0
-  let arrEnd = -1
-  for (let index = arrStart; index < src.length; index += 1) {
-    const char = src[index]
-    if (char === '[') depth += 1
-    if (char === ']') {
-      depth -= 1
-      if (depth === 0) {
-        arrEnd = index
-        break
-      }
-    }
-  }
-  if (arrEnd === -1) {
-    console.error('Could not locate MEDIA_ADD_SCHEMA_FALLBACK array literal block')
-    process.exit(1)
-  }
-
-  const block = src.slice(arrStart, arrEnd)
-  const names = []
-  const re = /name:\s*['"]([^'"]+)['"]/g
-  for (const match of block.matchAll(re)) {
-    names.push(match[1])
-  }
+  const names = extractFallbackFieldNamesFromSource(src)
 
   if (names.length === 0) {
     console.error('No MEDIA_ADD_SCHEMA_FALLBACK entries were parsed from fallback-schemas.ts')
@@ -519,4 +569,9 @@ function main() {
   verifyMediaAddFallback(specJson, sourceLabel)
 }
 
-main()
+const isEntrypoint =
+  process.argv[1] && path.resolve(process.argv[1]) === url.fileURLToPath(import.meta.url)
+
+if (isEntrypoint) {
+  main()
+}

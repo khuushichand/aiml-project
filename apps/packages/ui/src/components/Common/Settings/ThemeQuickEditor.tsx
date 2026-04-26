@@ -84,6 +84,10 @@ function buildFontFamily(primary: string): string {
   return `"${primary}", system-ui, sans-serif`
 }
 
+function buildGeneratedQuickThemeName(): string {
+  return `Quick Theme ${new Date().toISOString().replace("T", " ").replace("Z", "")}`
+}
+
 /**
  * Darken a hex color by a given percentage (0-100).
  * Simple RGB channel multiplication approach.
@@ -436,10 +440,13 @@ export function ThemeQuickEditor({
 
   // --- Apply (save) ---
   const handleApply = useCallback(() => {
+    const existingId = editingTheme?.id?.trim() ?? ""
+    const existingName = editingTheme?.name?.trim()
+    const resolvedName = existingName || buildGeneratedQuickThemeName()
     const theme: ThemeDefinition = {
       ...derivedTheme,
-      id: editingTheme?.id ?? generateThemeId("Quick Theme"),
-      name: editingTheme?.name ?? "Quick Theme",
+      id: existingId || generateThemeId(resolvedName),
+      name: resolvedName,
     }
     onSave(theme)
     onClose()

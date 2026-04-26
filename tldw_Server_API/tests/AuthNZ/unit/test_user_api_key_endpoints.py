@@ -46,7 +46,7 @@ def _principal() -> AuthPrincipal:
 
 
 @pytest.fixture
-def _patched_user_api_keys_deps(monkeypatch: pytest.MonkeyPatch):
+def _patched_user_api_keys_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_require_principal_active_verified(*_args, **_kwargs):
         return {
             "id": 1,

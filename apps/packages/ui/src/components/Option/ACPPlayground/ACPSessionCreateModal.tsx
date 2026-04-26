@@ -395,7 +395,7 @@ export const ACPSessionCreateModal: React.FC<ACPSessionCreateModalProps> = ({
 
       notification.error({
         message: t("common:error", "Error"),
-        description: error.message,
+        description: structuredError.message,
       })
     },
   })

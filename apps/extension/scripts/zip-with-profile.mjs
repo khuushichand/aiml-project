@@ -78,6 +78,19 @@ export function getZipArtifactSearchRoots(rootDir = projectRoot) {
   return [path.join(rootDir, ".output"), path.join(rootDir, "build")]
 }
 
+export function detectCreatedZipArtifact(searchRoots, beforeMtime) {
+  const after = searchRoots.flatMap((rootDir) => findZipArtifacts(rootDir))
+  return (
+    after.find((filePath) => !beforeMtime.has(filePath)) ||
+    after
+      .filter(
+        (filePath) =>
+          fs.statSync(filePath).mtimeMs > (beforeMtime.get(filePath) ?? -Infinity)
+      )
+      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0]
+  )
+}
+
 export function finalizeZipArtifact(createdZip, profile) {
   const desiredName = getExportedZipName(path.basename(createdZip), profile)
   const desiredPath = path.join(path.dirname(createdZip), desiredName)
@@ -102,8 +115,15 @@ export function zipWithProfile({
     override: env.TLDW_BUILD_PROFILE,
     branch: getCurrentGitBranch(cwd),
   })
-  const searchRoots = getZipArtifactSearchRoots(projectRoot)
-  const before = new Set(searchRoots.flatMap((rootDir) => findZipArtifacts(rootDir)))
+  const searchRoots = getZipArtifactSearchRoots(cwd)
+  const beforeMtime = new Map(
+    searchRoots.flatMap((rootDir) =>
+      findZipArtifacts(rootDir).map((filePath) => [
+        filePath,
+        fs.statSync(filePath).mtimeMs,
+      ])
+    )
+  )
   const wxtArgs = ["zip"]
 
   if (browserConfig.browserArg) {
@@ -119,14 +139,11 @@ export function zipWithProfile({
     stdio: "inherit",
   })
 
-  const after = searchRoots.flatMap((rootDir) => findZipArtifacts(rootDir))
-  const createdZip =
-    after.find((filePath) => !before.has(filePath)) ||
-    after.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0]
+  const createdZip = detectCreatedZipArtifact(searchRoots, beforeMtime)
 
   if (!createdZip) {
     throw new Error(
-      `No zip artifact found under ${outputRoot} or ${buildRoot}`
+      `No zip artifact found under ${searchRoots.join(" or ")}`
     )
   }
 

@@ -86,6 +86,16 @@ describe("WorkspaceStatusBar", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
   })
 
+  it("shows retry for authentication errors", () => {
+    connectionStoreState.state.phase = ConnectionPhase.ERROR
+    connectionStoreState.state.isConnected = false
+    connectionStoreState.state.errorKind = "error_auth"
+
+    render(<WorkspaceStatusBar />)
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  })
+
   it("does not show retry while the workspace is still being configured", () => {
     connectionStoreState.state.phase = ConnectionPhase.UNCONFIGURED
     connectionStoreState.state.isConnected = false

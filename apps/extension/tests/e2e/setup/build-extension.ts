@@ -103,7 +103,7 @@ export default async function globalSetup() {
     }
   ]
 
-  let lastError: unknown
+  const attemptFailures: Array<{ command: string; error: unknown }> = []
   for (const { command, env } of buildCommands) {
     try {
       execSync(command, {
@@ -111,15 +111,20 @@ export default async function globalSetup() {
         cwd: projectRoot,
         env
       })
-      lastError = undefined
+      attemptFailures.length = 0
       break
     } catch (error) {
-      lastError = error
+      attemptFailures.push({ command, error })
     }
   }
 
-  if (lastError) {
-    throw lastError
+  if (attemptFailures.length > 0) {
+    throw new AggregateError(
+      attemptFailures.map(({ command, error }) =>
+        new Error(`Build attempt failed: ${command}`, { cause: error as Error })
+      ),
+      'All extension build attempts failed.'
+    )
   }
 
   applyTestHostPermissions(projectRoot)

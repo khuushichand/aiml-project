@@ -121,3 +121,19 @@ class MCPCatalogEntry(BaseModel):
     category: str
     logo_key: str | None = None
     suggested_for: list[str] = Field(default_factory=list)
+
+
+__all__ = [
+    "ArchetypeBuddyDefaults",
+    "ArchetypeMCPConfig",
+    "ArchetypePersonaDefaults",
+    "ArchetypePolicyDefaults",
+    "ArchetypePreviewResponse",
+    "ArchetypePreviewSetupState",
+    "ArchetypeStarterCommand",
+    "ArchetypeSummary",
+    "ArchetypeTemplate",
+    "ArchetypeToolOverride",
+    "MCPCatalogEntry",
+    "MCPAuthType",
+]

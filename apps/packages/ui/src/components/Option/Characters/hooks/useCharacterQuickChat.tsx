@@ -278,12 +278,14 @@ export function useCharacterQuickChat(deps: UseCharacterQuickChatDeps) {
       sources: [],
       images: []
     }))
+    const normalizedAssistantId =
+      characterSelection.id == null ? null : String(characterSelection.id)
 
     setHistoryId(null)
     setServerChatId(quickChatSessionId)
-    setServerChatCharacterId(characterSelection.id ?? null)
+    setServerChatCharacterId(normalizedAssistantId)
     setServerChatAssistantKind("character")
-    setServerChatAssistantId(characterSelection.id ?? null)
+    setServerChatAssistantId(normalizedAssistantId)
     setServerChatMetaLoaded(false)
     setServerChatState("in-progress")
     setServerChatTopic(null)

@@ -4,6 +4,16 @@ import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { DictionariesManager } from "../Manager"
 
+async function openDictionaryOverflowMenuItem(
+  user: ReturnType<typeof userEvent.setup>,
+  itemLabel: string
+) {
+  const actionButton = screen.getByRole("button", {
+    name: `${itemLabel} for Activity Dictionary`
+  })
+  await user.click(actionButton)
+}
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({
@@ -427,15 +437,7 @@ describe("DictionariesManager chat integration stage-3", () => {
     const user = userEvent.setup()
     render(<DictionariesManager />)
 
-    const overflowButton = screen.getByRole("button", {
-      name: "More actions for Activity Dictionary"
-    })
-    overflowButton.focus()
-    await user.keyboard("{Enter}")
-    await waitFor(() => {
-      expect(screen.getByRole("menuitem", { name: "View statistics" })).toBeInTheDocument()
-    })
-    await user.click(screen.getByRole("menuitem", { name: "View statistics" }))
+    await openDictionaryOverflowMenuItem(user, "View statistics")
 
     await waitFor(() => {
       expect(tldwClientMock.dictionaryStatistics).toHaveBeenCalledWith(7)
@@ -513,17 +515,7 @@ describe("DictionariesManager chat integration stage-3", () => {
 
     render(<DictionariesManager />)
 
-    {
-      const overflowBtn = screen.getByRole("button", {
-        name: "More actions for Activity Dictionary",
-      })
-      overflowBtn.focus()
-      await user.keyboard("{Enter}")
-      await waitFor(() => {
-        expect(screen.getByRole("menuitem", { name: "View statistics" })).toBeInTheDocument()
-      })
-      await user.click(screen.getByRole("menuitem", { name: "View statistics" }))
-    }
+    await openDictionaryOverflowMenuItem(user, "View statistics")
 
     expect(
       await screen.findByText("Page 1 of 2", undefined, { timeout: 20000 })
@@ -616,17 +608,7 @@ describe("DictionariesManager chat integration stage-3", () => {
     const user = userEvent.setup()
     render(<DictionariesManager />)
 
-    {
-      const overflowBtn = screen.getByRole("button", {
-        name: "More actions for Activity Dictionary"
-      })
-      overflowBtn.focus()
-      await user.keyboard("{Enter}")
-      await waitFor(() => {
-        expect(screen.getByRole("menuitem", { name: "Version history" })).toBeInTheDocument()
-      })
-      await user.click(screen.getByRole("menuitem", { name: "Version history" }))
-    }
+    await openDictionaryOverflowMenuItem(user, "Version history")
 
     expect(
       await screen.findByText("Dictionary Version History - Activity Dictionary")

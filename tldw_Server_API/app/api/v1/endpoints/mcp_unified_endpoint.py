@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
 from tldw_Server_API.app.core.feature_flags import is_mcp_hub_policy_enforcement_enabled
 from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.services import admin_tool_catalog_service
@@ -1652,6 +1653,44 @@ def _is_private_ip(host: str) -> bool:
     return False
 
 
+def _canonicalize_catalog_probe_url(url: str) -> str | None:
+    from urllib.parse import urlsplit, urlunsplit
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+
+    scheme = (parsed.scheme or "").lower()
+    hostname = (parsed.hostname or "").lower()
+    if scheme not in ("http", "https") or not hostname or parsed.username or parsed.password:
+        return None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+
+    default_port = 443 if scheme == "https" else 80
+    netloc = hostname if port in (None, default_port) else f"{hostname}:{port}"
+    normalized_path = (parsed.path or "").rstrip("/")
+    return urlunsplit((scheme, netloc, normalized_path, "", ""))
+
+
+def _resolve_catalog_probe_url(url: str) -> str | None:
+    from tldw_Server_API.app.core.MCP_unified.catalog_loader import list_catalog_entries
+
+    candidate = _canonicalize_catalog_probe_url(url)
+    if candidate is None:
+        return None
+
+    for entry in list_catalog_entries():
+        allowed = _canonicalize_catalog_probe_url(entry.url_template)
+        if allowed and allowed == candidate:
+            return allowed
+    return None
+
+
 async def _probe_mcp_connection(url: str, headers: dict[str, str]) -> None:
     from tldw_Server_API.app.core.http_client import _get_httpx_async_client
 
@@ -1701,10 +1740,20 @@ async def check_mcp_connection(
     is reserved for a future enhancement that will parse the MCP server's
     tool listing response.
     """
-    try:
-        validated_url = _validate_public_mcp_url(req.url)
-    except ValueError as exc:
-        return MCPConnectionTestResponse(reachable=False, error=str(exc))
+    from urllib.parse import urlparse
+
+    catalog_probe_url = _resolve_catalog_probe_url(req.url)
+    if catalog_probe_url is None:
+        return MCPConnectionTestResponse(
+            reachable=False,
+            error="URL must match a curated MCP catalog entry",
+        )
+
+    parsed = urlparse(catalog_probe_url)
+    if parsed.scheme not in ("http", "https"):
+        return MCPConnectionTestResponse(
+            reachable=False, error="Only http and https URLs are allowed"
+        )
 
     supported_auth_types = {"none", "bearer", "api_key"}
     if req.auth_type not in supported_auth_types:
@@ -1713,18 +1762,26 @@ async def check_mcp_connection(
             detail=f"Unsupported auth_type: {req.auth_type}",
         )
 
+    # SSRF protection: reject private/reserved IP ranges.
+    hostname = parsed.hostname or ""
+    if not hostname or _is_private_ip(hostname):
+        return MCPConnectionTestResponse(
+            reachable=False, error="Cannot connect to private or reserved addresses"
+        )
+    assert_url_safe(catalog_probe_url)
+
     headers: dict[str, str] = {}
     if req.auth_type == "bearer" and req.secret:
         headers["Authorization"] = f"Bearer {req.secret}"
     elif req.auth_type == "api_key" and req.secret:
         headers[req.auth_key_name or "X-API-Key"] = req.secret
     try:
-        await _probe_mcp_connection(validated_url, headers)
+        await _probe_mcp_connection(catalog_probe_url, headers)
         return MCPConnectionTestResponse(reachable=True)
     except HTTPException:
         raise
     except Exception:
-        hostname = urlparse(validated_url).hostname or "<unknown>"
+        hostname = urlparse(catalog_probe_url).hostname or "<unknown>"
         logger.opt(exception=True).warning(
             "MCP connection test failed for host={}", hostname
         )

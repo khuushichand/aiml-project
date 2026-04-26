@@ -37,6 +37,8 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
 }) => {
   const { t } = useTranslation(["common", "option"])
   const advancedOptionsPanelId = React.useId()
+  const toggleOnLabel = t("common:on", "On")
+  const toggleOffLabel = t("common:off", "Off")
 
   return (
     <div className="border border-border rounded-lg p-4 bg-surface2/30 mt-4">
@@ -79,7 +81,15 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                 required
               />
             }
-            rules={[{ required: true, message: "Pattern is required" }]}
+            rules={[
+              {
+                required: true,
+                message: t(
+                  "option:dictionaries.validation.patternRequired",
+                  "Pattern is required."
+                )
+              }
+            ]}
             validateStatus={regexError || regexServerError ? "error" : undefined}
             help={regexError || regexServerError}
           >
@@ -102,7 +112,15 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                 required
               />
             }
-            rules={[{ required: true, message: "Replacement is required" }]}
+            rules={[
+              {
+                required: true,
+                message: t(
+                  "option:dictionaries.validation.replacementRequired",
+                  "Replacement is required."
+                )
+              }
+            ]}
           >
             <Input
               placeholder={t("option:dictionaries.replacementPlaceholder", "e.g., going to or color")}
@@ -137,8 +155,10 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
           {() =>
             form.getFieldValue("type") === "regex" ? (
               <div className="-mt-2 mb-3 rounded border border-border bg-surface px-3 py-2 text-xs text-text-muted">
-                Regex helper: `.*` = any text, `\b` = word boundary, `(group)` can be reused as
-                `$1` in replacement.
+                {t(
+                  "option:dictionaries.regexHelper",
+                  "Regex helper: `.*` = any text, `\\b` = word boundary, `(group)` can be reused as `$1` in replacement."
+                )}
               </div>
             ) : null
           }
@@ -148,14 +168,19 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
           <div className="flex items-start gap-2 p-2 mb-3 rounded bg-danger/10 text-danger text-xs">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
-              <div className="font-medium">Regex validation issue</div>
+              <div className="font-medium">
+                {t(
+                  "option:dictionaries.regexValidationIssue",
+                  "Regex validation issue"
+                )}
+              </div>
               <div className="text-danger/80">{regexError || regexServerError}</div>
             </div>
           </div>
         )}
 
-        {advancedMode && (
-          <div id={advancedOptionsPanelId}>
+        <div id={advancedOptionsPanelId} hidden={!advancedMode}>
+          {advancedMode && (
             <div className="grid gap-3 sm:grid-cols-2 mt-3 pt-3 border-t border-border">
               <Form.Item
                 name="probability"
@@ -174,7 +199,10 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                     type: "number",
                     min: 0,
                     max: 1,
-                    message: "Probability must be between 0 and 1."
+                    message: t(
+                      "option:dictionaries.probabilityRangeError",
+                      "Probability must be between 0 and 1."
+                    )
                   }
                 ]}
               >
@@ -199,7 +227,10 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                             Number(normalizeProbabilityValue(nextValue, 1).toFixed(2))
                           )
                         }}
-                        aria-label="Probability slider"
+                        aria-label={t(
+                          "option:dictionaries.probabilitySliderAria",
+                          "Probability slider"
+                        )}
                       />
                       <div className="text-xs text-text-muted">
                         {formatProbabilityFrequencyHint(probabilityValue)}
@@ -242,14 +273,27 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                   />
                 }
               >
-                <InputNumber min={0} style={{ width: "100%" }} placeholder="Unlimited" />
+                <InputNumber
+                  min={0}
+                  style={{ width: "100%" }}
+                  placeholder={t(
+                    "option:dictionaries.maxReplacementsPlaceholder",
+                    "Unlimited"
+                  )}
+                />
               </Form.Item>
               <Form.Item
                 name={["timed_effects", "sticky"]}
                 label={
                   <LabelWithHelp
-                    label="Sticky (seconds)"
-                    help="Keep this replacement active for additional messages after it fires. Use 0 to disable."
+                    label={t(
+                      "option:dictionaries.timedEffects.stickyLabel",
+                      "Sticky (seconds)"
+                    )}
+                    help={t(
+                      "option:dictionaries.timedEffects.stickyHelp",
+                      "Keep this replacement active for additional messages after it fires. Use 0 to disable."
+                    )}
                   />
                 }
                 initialValue={0}
@@ -260,8 +304,14 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                 name={["timed_effects", "cooldown"]}
                 label={
                   <LabelWithHelp
-                    label="Cooldown (seconds)"
-                    help="Minimum wait time before this entry can fire again. Use 0 to disable."
+                    label={t(
+                      "option:dictionaries.timedEffects.cooldownLabel",
+                      "Cooldown (seconds)"
+                    )}
+                    help={t(
+                      "option:dictionaries.timedEffects.cooldownHelp",
+                      "Minimum wait time before this entry can fire again. Use 0 to disable."
+                    )}
                   />
                 }
                 initialValue={0}
@@ -272,8 +322,14 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                 name={["timed_effects", "delay"]}
                 label={
                   <LabelWithHelp
-                    label="Delay (seconds)"
-                    help="Wait time before this entry becomes eligible to run. Use 0 to disable."
+                    label={t(
+                      "option:dictionaries.timedEffects.delayLabel",
+                      "Delay (seconds)"
+                    )}
+                    help={t(
+                      "option:dictionaries.timedEffects.delayHelp",
+                      "Wait time before this entry becomes eligible to run. Use 0 to disable."
+                    )}
                   />
                 }
                 initialValue={0}
@@ -287,7 +343,10 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                   valuePropName="checked"
                   initialValue={true}
                 >
-                  <Switch checkedChildren="On" unCheckedChildren="Off" />
+                  <Switch
+                    checkedChildren={toggleOnLabel}
+                    unCheckedChildren={toggleOffLabel}
+                  />
                 </Form.Item>
                 <Form.Item
                   name="case_sensitive"
@@ -303,14 +362,19 @@ export const DictionaryEntryCreateForm: React.FC<DictionaryEntryCreateFormProps>
                   valuePropName="checked"
                   initialValue={false}
                 >
-                  <Switch checkedChildren="On" unCheckedChildren="Off" />
+                  <Switch
+                    checkedChildren={toggleOnLabel}
+                    unCheckedChildren={toggleOffLabel}
+                  />
                 </Form.Item>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        <Tooltip title="Ctrl+Enter">
+        <Tooltip
+          title={t("option:dictionaries.addEntryShortcut", "Ctrl+Enter")}
+        >
           <Button
             type="primary"
             htmlType="submit"

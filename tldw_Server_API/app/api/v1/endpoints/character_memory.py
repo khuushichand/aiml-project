@@ -243,9 +243,11 @@ async def extract_character_memories_endpoint(
     request_user_id = current_user.id
     if not _ids_match(stored_client_id, request_user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your chat session")
-    conversation_character_id = str(conversation.get("character_id") or "").strip()
-    requested_character_id = str(card.get("id") or character_id).strip()
-    if conversation_character_id != requested_character_id:
+    conversation_character_id = conversation.get("character_id")
+    requested_character_id = card.get("id") or character_id
+    if conversation_character_id in (None, "") or not _ids_match(
+        conversation_character_id, requested_character_id,
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Chat session must belong to the requested character",

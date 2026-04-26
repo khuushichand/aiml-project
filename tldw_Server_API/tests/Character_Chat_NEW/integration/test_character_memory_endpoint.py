@@ -173,3 +173,44 @@ def test_extract_character_memories_rejects_chat_for_different_character(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Chat session must belong to the requested character"
+
+
+def test_extract_character_memories_allows_normalized_character_id_match(
+    test_client: TestClient,
+    auth_headers,
+    character_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allow extraction when the stored conversation character ID is zero-padded."""
+    character_id = _create_character(test_client, auth_headers, name="Normalized Memory Character")
+    chat_id = _create_conversation(
+        character_db,
+        character_id=character_id,
+        client_id="1",
+        title="Normalized Memory Chat",
+    )
+
+    original_get_conversation_by_id = character_db.get_conversation_by_id
+
+    def _get_padded_character_conversation(conversation_id: str) -> dict:
+        conversation = original_get_conversation_by_id(conversation_id)
+        assert conversation is not None
+        return {
+            **conversation,
+            "character_id": f"{character_id:03d}",
+        }
+
+    monkeypatch.setattr(character_db, "get_conversation_by_id", _get_padded_character_conversation)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Character_Chat.modules.character_memory_extraction.extract_character_memories",
+        lambda **_: SimpleNamespace(unique=[], total_parsed=0, duplicates_skipped=0),
+    )
+
+    response = test_client.post(
+        f"/api/v1/characters/{character_id}/memories/extract",
+        json={"chat_id": chat_id, "provider": "openai", "model": "test-model"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"extracted": 0, "skipped_duplicates": 0, "memories": []}

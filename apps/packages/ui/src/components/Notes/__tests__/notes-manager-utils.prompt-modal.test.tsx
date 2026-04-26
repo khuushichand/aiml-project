@@ -2,6 +2,10 @@ import React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { promptModal } from "../notes-manager-utils"
 
+type MockAntdInputProps = React.InputHTMLAttributes<HTMLInputElement> & {
+  onPressEnter?: (event: React.KeyboardEvent<HTMLInputElement>) => void
+}
+
 const { mockConfirm } = vi.hoisted(() => ({
   mockConfirm: vi.fn()
 }))
@@ -10,7 +14,7 @@ vi.mock("antd", () => ({
   Modal: {
     confirm: mockConfirm
   },
-  Input: (props: React.InputHTMLAttributes<HTMLInputElement>) =>
+  Input: (props: MockAntdInputProps) =>
     React.createElement("input", props)
 }))
 
@@ -19,7 +23,7 @@ const getPromptParts = () => {
   const content = config.content as React.ReactElement<{ children?: React.ReactNode }>
   const children = React.Children.toArray(content.props.children)
   const inputElement = children[children.length - 1] as React.ReactElement<
-    React.InputHTMLAttributes<HTMLInputElement>
+    MockAntdInputProps
   >
 
   return {

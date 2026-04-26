@@ -745,9 +745,9 @@ describe("background proxy fallback safety", () => {
 
     const fetchCalls = fetchSpy.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>
     const requestInit = fetchCalls[0]?.[1]
-    const requestHeaders = (requestInit?.headers || {}) as Record<string, string>
+    const requestHeaders = new Headers(requestInit?.headers)
     expect(fetchSpy).toHaveBeenCalledTimes(1)
-    expect(requestHeaders["X-API-KEY"]).toBe("test-key-not-placeholder")
+    expect(requestHeaders.get("X-API-KEY")).toBe("test-key-not-placeholder")
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 
@@ -800,10 +800,10 @@ describe("background proxy fallback safety", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const [url, init] = fetchSpy.mock.calls[0] as [RequestInfo | URL, RequestInit?]
-    const requestHeaders = (init?.headers || {}) as Record<string, string>
+    const requestHeaders = new Headers(init?.headers)
     expect(url).toBe("/api/proxy/chat/completions")
-    expect(requestHeaders.Authorization).toBeUndefined()
-    expect(requestHeaders["X-TLDW-Org-Id"]).toBe("17")
+    expect(requestHeaders.get("Authorization")).toBeNull()
+    expect(requestHeaders.get("X-TLDW-Org-Id")).toBe("17")
     expect(chunks.some((chunk) => chunk.includes('"event":"run_started"'))).toBe(true)
   })
 
@@ -835,9 +835,7 @@ describe("background proxy fallback safety", () => {
     })
     const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      const authHeader = String(
-        ((init?.headers || {}) as Record<string, string>).Authorization || ""
-      )
+      const authHeader = new Headers(init?.headers).get("Authorization") ?? ""
       if (url === "https://api.example.test/api/v1/auth/refresh") {
         return new Response(
           JSON.stringify({
@@ -1002,9 +1000,7 @@ describe("background proxy fallback safety", () => {
           }
         )
       }
-      const authHeader = String(
-        ((init?.headers || {}) as Record<string, string>).Authorization || ""
-      )
+      const authHeader = new Headers(init?.headers).get("Authorization") ?? ""
       if (authHeader === "Bearer expired-access") {
         return new Response("Could not validate credentials", {
           status: 401,

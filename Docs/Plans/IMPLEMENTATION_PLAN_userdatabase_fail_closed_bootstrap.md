@@ -1,4 +1,4 @@
-# Implementation Plan: userdatabase_fail_closed_bootstrap
+# UserDatabase Fail-Closed Bootstrap Implementation
 
 See [UserDatabase Fail-Closed Bootstrap Design](../Design/UserDatabase_Fail_Closed_Bootstrap.md) for the design rationale and required failure semantics.
 
