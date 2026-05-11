@@ -1,3 +1,6 @@
+## Contributor
+- USN: 1MS24CS082
+
 <div align="center">
   <h1>tldw Server</h1>
   <p>Too Long; Didn't Watch - API-first media analysis and research platform</p>
